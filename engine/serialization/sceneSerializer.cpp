@@ -175,7 +175,7 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
 
         file << "[entity]\n";
 
-        // Name (always saved so it round-trips)
+        // Name (always saved so it round-trips
         std::string entityName = (i < scene.EntityNames.size()) ? scene.EntityNames[i] : "Entity";
         file << "name  = " << entityName << "\n";
 
