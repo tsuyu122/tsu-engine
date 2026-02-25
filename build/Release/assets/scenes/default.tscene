@@ -1,0 +1,80 @@
+# tsuEngine Scene File
+# A camera do editor e interna — nao aparece aqui.
+#
+# Tipos de mesh: cube | pyramid | cylinder | sphere | capsule
+# rigidbody = true  → ativa física
+# collider  = box | sphere | capsule | pyramid  (auto se omitido)
+# kinematic = true  → não é afetado por forças mas colide
+# gravity   = true | false
+
+# ========================
+# CAMERA DE JOGO
+# ========================
+[entity]
+type     = game_camera
+position = 0 2 8
+fov      = 75
+yaw      = -90
+pitch    = -10
+
+# ========================
+# CHAO — kinematic, sem gravidade
+# ========================
+[entity]
+type      = cube
+position  = 0 -1 0
+scale     = 12 0.2 12
+color     = #444444
+rigidbody = true
+kinematic = true
+gravity   = false
+
+# ========================
+# CUBO branco
+# ========================
+[entity]
+type      = cube
+position  = 0 0 0
+scale     = 1 1 1
+color     = #FFFFFF
+rigidbody = true
+kinematic = true
+gravity   = false
+
+# ========================
+# PIRAMIDE laranja
+# ========================
+[entity]
+type      = pyramid
+position  = 2.5 0 0
+scale     = 1 1 1
+color     = #FF8800
+rigidbody = true
+kinematic = true
+gravity   = false
+
+# ========================
+# CAPSULA azul
+# ========================
+[entity]
+type      = capsule
+position  = -2.5 0 0
+scale     = 1 1 1
+color     = #0088FF
+rigidbody = true
+kinematic = true
+gravity   = false
+
+# ========================
+# BOLA de referencia — cai com gravidade
+# ========================
+[entity]
+type      = sphere
+position  = 0 4 0
+scale     = 0.6 0.6 0.6
+color     = #FF3333
+rigidbody = true
+kinematic = false
+gravity   = true
+collider  = sphere
+mass      = 1.0

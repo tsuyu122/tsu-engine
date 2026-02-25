@@ -1,0 +1,13 @@
+C:/Users/hm/Desktop/tsuEngine/build/CMakeFiles/glad.dir
+C:/Users/hm/Desktop/tsuEngine/build/CMakeFiles/imgui.dir
+C:/Users/hm/Desktop/tsuEngine/build/CMakeFiles/TsuEngine.dir
+C:/Users/hm/Desktop/tsuEngine/build/CMakeFiles/INSTALL.dir
+C:/Users/hm/Desktop/tsuEngine/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/hm/Desktop/tsuEngine/build/CMakeFiles/ZERO_CHECK.dir
+C:/Users/hm/Desktop/tsuEngine/build/external/glfw/CMakeFiles/uninstall.dir
+C:/Users/hm/Desktop/tsuEngine/build/external/glfw/CMakeFiles/INSTALL.dir
+C:/Users/hm/Desktop/tsuEngine/build/external/glfw/CMakeFiles/ALL_BUILD.dir
+C:/Users/hm/Desktop/tsuEngine/build/external/glfw/src/CMakeFiles/glfw.dir
+C:/Users/hm/Desktop/tsuEngine/build/external/glfw/src/CMakeFiles/update_mappings.dir
+C:/Users/hm/Desktop/tsuEngine/build/external/glfw/src/CMakeFiles/INSTALL.dir
+C:/Users/hm/Desktop/tsuEngine/build/external/glfw/docs/CMakeFiles/INSTALL.dir

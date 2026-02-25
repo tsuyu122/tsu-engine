@@ -1,80 +1,54 @@
 # tsuEngine Scene File
-# A camera do editor e interna — nao aparece aqui.
+# Linhas com # sao comentarios
 #
-# Tipos de mesh: cube | pyramid | cylinder | sphere | capsule
-# rigidbody = true  → ativa física
-# collider  = box | sphere | capsule | pyramid  (auto se omitido)
-# kinematic = true  → não é afetado por forças mas colide
-# gravity   = true | false
+# Tipos: camera | cube | pyramid | cylinder
+# Cores: #RRGGBB
+# Escala 1 = 1 metro
 
 # ========================
-# CAMERA DE JOGO
+# CAMERA DO EDITOR
 # ========================
 [entity]
-type     = game_camera
-position = 0 2 8
-fov      = 75
-yaw      = -90
-pitch    = -10
+type     = camera
+position = 0 1 6
+primary  = true
 
 # ========================
-# CHAO — kinematic, sem gravidade
+# CUBO branco no centro
 # ========================
 [entity]
-type      = cube
-position  = 0 -1 0
-scale     = 12 0.2 12
-color     = #444444
-rigidbody = true
-kinematic = true
-gravity   = false
+type     = cube
+position = 0 0 0
+rotation = 0 0 0
+scale    = 1 1 1
+color    = #FFFFFF
 
 # ========================
-# CUBO branco
+# PIRAMIDE laranja a direita
 # ========================
 [entity]
-type      = cube
-position  = 0 0 0
-scale     = 1 1 1
-color     = #FFFFFF
-rigidbody = true
-kinematic = true
-gravity   = false
+type     = pyramid
+position = 2.5 0 0
+rotation = 0 0 0
+scale    = 1 1 1
+color    = #FF8800
 
 # ========================
-# PIRAMIDE laranja
+# CILINDRO azul a esquerda
 # ========================
 [entity]
-type      = pyramid
-position  = 2.5 0 0
-scale     = 1 1 1
-color     = #FF8800
-rigidbody = true
-kinematic = true
-gravity   = false
+type     = cylinder
+position = -2.5 0 0
+rotation = 0 0 0
+scale    = 1 1 1
+color    = #0088FF
 
 # ========================
-# CAPSULA azul
+# CHAO (cubo achatado)
 # ========================
 [entity]
-type      = capsule
-position  = -2.5 0 0
-scale     = 1 1 1
-color     = #0088FF
-rigidbody = true
-kinematic = true
-gravity   = false
-
-# ========================
-# BOLA de referencia — cai com gravidade
-# ========================
-[entity]
-type      = sphere
-position  = 0 4 0
-scale     = 0.6 0.6 0.6
-color     = #FF3333
-rigidbody = true
-kinematic = false
-gravity   = true
-collider  = sphere
-mass      = 1.0
+type     = cube
+position = 0 -1 0
+rotation = 0 0 0
+scale    = 10 0.1 10
+color    = #444444

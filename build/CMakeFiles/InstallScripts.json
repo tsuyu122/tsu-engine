@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"C:/Users/hm/Desktop/tsuEngine/build/cmake_install.cmake",
+		"C:/Users/hm/Desktop/tsuEngine/build/external/glfw/cmake_install.cmake",
+		"C:/Users/hm/Desktop/tsuEngine/build/external/glfw/src/cmake_install.cmake",
+		"C:/Users/hm/Desktop/tsuEngine/build/external/glfw/docs/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

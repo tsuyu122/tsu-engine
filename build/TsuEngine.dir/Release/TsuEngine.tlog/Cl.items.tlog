@@ -1,0 +1,15 @@
+C:\Users\hm\Desktop\tsuEngine\Engine\core\application.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\application.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\core\window.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\window.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\editor\editorCamera.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\editorCamera.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\editor\editorGizmo.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\editorGizmo.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\input\inputManager.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\inputManager.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\physics\physicsSystem.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\physicsSystem.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\renderer\mesh.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\mesh.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\renderer\renderer.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\renderer.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\scene\entity.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\entity.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\scene\scene.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\scene.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\serialization\sceneSerializer.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\sceneSerializer.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\ui\hierarchyPanel.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\hierarchyPanel.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\ui\inspectorPanel.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\inspectorPanel.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\ui\uiManager.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\uiManager.obj
+C:\Users\hm\Desktop\tsuEngine\Sandbox\main.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\main.obj

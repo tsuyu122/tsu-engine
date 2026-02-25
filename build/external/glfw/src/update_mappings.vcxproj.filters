@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\CMakeFiles\7c48ff1f4379b681eda29af2d4f630bf\update_mappings.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\external\glfw\src\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\hm\Desktop\tsuEngine\external\glfw\src\mappings.h.in">
+      <Filter>Header Files</Filter>
+    </None>
+    <None Include="C:\Users\hm\Desktop\tsuEngine\external\glfw\CMake\GenerateMappings.cmake" />
+    <None Include="C:\Users\hm\Desktop\tsuEngine\build\external\glfw\src\CMakeFiles\update_mappings" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{639F05B3-1635-3844-8414-870AE640D5C0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{DBAE66B8-4CB2-3350-89A3-57B91F4243F5}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
