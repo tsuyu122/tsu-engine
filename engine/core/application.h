@@ -38,7 +38,7 @@ private:
 
     // Snapshot das posições/velocidades para restaurar ao sair do game
     struct EntitySnapshot {
-        glm::vec3 position, velocity;
+        glm::vec3 position, velocity, rotation, angularVelocity;
     };
     std::vector<EntitySnapshot> m_Snapshot;
 };

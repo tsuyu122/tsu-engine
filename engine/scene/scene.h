@@ -37,6 +37,15 @@ struct RigidBodyComponent
     float         ColliderRadius  = 0.5f;
     float         ColliderHeight  = 1.0f;
     glm::vec3     ColliderOffset  = { 0.0f, 0.0f, 0.0f };
+    bool          ShowCollider    = false;   // draws green wireframe in editor
+
+    // --- RigidBody full simulation mode ---
+    // Requires HasGravityModule for gravity. Adds rotation from impacts.
+    bool          HasRigidBodyMode = false;
+    glm::vec3     AngularVelocity  = { 0.0f, 0.0f, 0.0f }; // degrees / second
+    float         AngularDamping   = 0.0f;    // 0 = no damping, 1 = instant stop
+    float         Restitution      = 0.25f;   // bounce coefficient 0=no bounce 1=perfect
+    float         FrictionCoef     = 0.15f;   // lateral friction on impact
 };
 
 // ================================================================
@@ -94,6 +103,19 @@ struct SceneGroup
 };
 
 // ================================================================
+// Material asset (stored in the scene asset list)
+// ================================================================
+
+struct MaterialAsset
+{
+    std::string Name = "Material";
+    int         Folder = -1; // index into scene-level folders, -1 = root
+    glm::vec3   Color = {1.0f, 1.0f, 1.0f};
+    std::string TexturePath; // optional, resolver/loader not implemented yet
+    unsigned int TextureID = 0; // GL texture handle if loaded
+};
+
+// ================================================================
 // Scene
 // ================================================================
 
@@ -112,12 +134,21 @@ public:
     std::vector<int>                   EntityGroups;   // group index, -1 = no group
     std::vector<int>                   EntityParents;  // entity parent index, -1 = none
     std::vector<std::vector<int>>      EntityChildren; // entity-children per entity
+    std::vector<int>                   EntityMaterial; // per-entity material index (-1 = none)
+    std::vector<glm::vec3>             EntityColors;   // per-entity color override (used when no material)
 
     // --- Hierarchy display order ---
     std::vector<int>                   RootOrder;      // root-level entity display order
 
     // --- Groups (folders) ---
     std::vector<SceneGroup>            Groups;
+    // --- Assets ---
+    std::vector<std::string>           Folders;        // flat list of folder names
+    std::vector<int>                   FolderParents;  // parent folder index per folder (-1 = root)
+    std::vector<MaterialAsset>         Materials;      // material assets
+    std::vector<std::string>           Textures;       // imported texture file paths
+    std::vector<unsigned int>          TextureIDs;     // GL texture IDs (parallel to Textures)
+    std::vector<int>                   TextureFolders; // folder index per texture (-1 = root)
 
     // --- Entity API ---
     Entity CreateEntity(const std::string& name = "Entity");
@@ -126,6 +157,8 @@ public:
 
     // Move entity to be a child of another entity (-1 = unparent)
     void   SetEntityParent(int childIdx, int parentIdx);
+    // Delete an entity by index (fixes all references)
+    void   DeleteEntity(int idx);
     // Move entity into a group (converts world position to local)
     void   SetEntityGroup(int entityIdx, int newGroup);
     // Remove entity from any group (converts to world position)

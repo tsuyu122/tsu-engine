@@ -6,8 +6,19 @@
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
+#include <string>
+#include <vector>
 
 namespace tsu {
+
+// Buffer de arquivos arrastados de fora do editor (GLFW drop callback)
+static std::vector<std::string> s_DroppedFiles;
+
+static void OnGLFWDrop(GLFWwindow*, int count, const char** paths)
+{
+    for (int i = 0; i < count; ++i)
+        s_DroppedFiles.emplace_back(paths[i]);
+}
 
 Application::Application()
     : m_Window(1280, 720, "tsuEngine")
@@ -19,15 +30,20 @@ void Application::SaveEditorState()
     m_Snapshot.clear();
     for (size_t i=0; i<m_Scene.Transforms.size(); i++)
         m_Snapshot.push_back({m_Scene.Transforms[i].Position,
-                               m_Scene.RigidBodies[i].Velocity});
+                               m_Scene.RigidBodies[i].Velocity,
+                               m_Scene.Transforms[i].Rotation,
+                               m_Scene.RigidBodies[i].AngularVelocity});
 }
 
 void Application::RestoreEditorState()
 {
     for (size_t i=0; i<m_Snapshot.size() && i<m_Scene.Transforms.size(); i++)
     {
-        m_Scene.Transforms[i].Position  = m_Snapshot[i].position;
-        m_Scene.RigidBodies[i].Velocity = m_Snapshot[i].velocity;
+        m_Scene.Transforms[i].Position          = m_Snapshot[i].position;
+        m_Scene.RigidBodies[i].Velocity         = m_Snapshot[i].velocity;
+        m_Scene.Transforms[i].Rotation          = m_Snapshot[i].rotation;
+        m_Scene.RigidBodies[i].AngularVelocity  = m_Snapshot[i].angularVelocity;
+        m_Scene.RigidBodies[i].IsGrounded       = false;
     }
 }
 
@@ -203,6 +219,9 @@ void Application::Run()
     Renderer::Init();
     m_UIManager.Init(m_Window.GetNativeWindow());
 
+    // Registrar callback de drag & drop de arquivos externos (texturas)
+    glfwSetDropCallback(m_Window.GetNativeWindow(), OnGLFWDrop);
+
     while (!m_Window.ShouldClose())
     {
         float time      = (float)glfwGetTime();
@@ -213,6 +232,7 @@ void Application::Run()
         InputManager::Update(m_Window.GetNativeWindow());
         HandleToolbarInput();
 
+        // s_DroppedFiles é processado em UIManager::Render (que conhece a pasta atual)
         m_UIManager.BeginFrame();
         Renderer::BeginFrame();
 
@@ -255,7 +275,7 @@ void Application::Run()
         // UI panels (only in editor mode)
         if (m_Mode == EngineMode::Editor)
         {
-            m_UIManager.Render(m_Scene, m_SelectedEntity, winW, winH);
+            m_UIManager.Render(m_Scene, m_SelectedEntity, winW, winH, s_DroppedFiles);
 
             // Scroll-speed HUD – show for 2 s after Shift+Scroll changes speed
             if (m_EditorCamera.GetScrollSpeedDisplayTimer() > 0.0f)

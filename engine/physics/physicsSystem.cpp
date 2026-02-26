@@ -1,138 +1,231 @@
 #include "physics/physicsSystem.h"
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <cfloat>
 
 namespace tsu {
 
 // ----------------------------------------------------------------
-// Helpers
+// BuildOBB — extrai posição, rotação e escala da world matrix
 // ----------------------------------------------------------------
 
-glm::vec3 PhysicsSystem::GetColliderWorldPos(const Scene& scene, uint32_t id)
-{
-    // Use world position (handles group parents) + collider offset
-    return scene.GetEntityWorldPos((int)id) + scene.RigidBodies[id].ColliderOffset;
-}
-
-glm::vec3 PhysicsSystem::GetColliderWorldSize(const Scene& scene, uint32_t id)
+OBB PhysicsSystem::BuildOBB(const Scene& scene, uint32_t id)
 {
     const auto& rb = scene.RigidBodies[id];
-    const auto& t  = scene.Transforms[id];
-    return rb.ColliderSize * t.Scale;
-}
+    glm::mat4 wm = scene.GetEntityWorldMatrix((int)id);
 
-// ----------------------------------------------------------------
-// Detecção Box vs Box (AABB)
-// ----------------------------------------------------------------
-
-bool PhysicsSystem::CheckBoxBox(
-    const glm::vec3& posA, const glm::vec3& sizeA,
-    const glm::vec3& posB, const glm::vec3& sizeB,
-    glm::vec3& outNormal, float& outDepth)
-{
-    glm::vec3 halfA = sizeA * 0.5f;
-    glm::vec3 halfB = sizeB * 0.5f;
-
-    glm::vec3 diff = posB - posA;
-    glm::vec3 overlap;
-    overlap.x = (halfA.x + halfB.x) - std::abs(diff.x);
-    overlap.y = (halfA.y + halfB.y) - std::abs(diff.y);
-    overlap.z = (halfA.z + halfB.z) - std::abs(diff.z);
-
-    if (overlap.x <= 0 || overlap.y <= 0 || overlap.z <= 0)
-        return false;
-
-    // Eixo de menor penetração — normal aponta de B para A
-    if (overlap.x < overlap.y && overlap.x < overlap.z)
-    {
-        outDepth  = overlap.x;
-        outNormal = glm::vec3(diff.x < 0 ? 1.0f : -1.0f, 0, 0);
-    }
-    else if (overlap.y < overlap.z)
-    {
-        outDepth  = overlap.y;
-        outNormal = glm::vec3(0, diff.y < 0 ? 1.0f : -1.0f, 0);
-    }
-    else
-    {
-        outDepth  = overlap.z;
-        outNormal = glm::vec3(0, 0, diff.z < 0 ? 1.0f : -1.0f);
-    }
-    return true;
-}
-
-// ----------------------------------------------------------------
-// Sphere vs Pyramid  (proper 5-plane test in local pyramid space)
-// Pyramid: apex at (0, 0.5, 0), base at y=-0.5, half-base = 0.5
-// ColliderSize is applied as a scale
-// ----------------------------------------------------------------
-
-bool PhysicsSystem::CheckSpherePyramid(
-    const glm::vec3& sphereWorldPos, float radius,
-    const glm::vec3& pyrWorldPos,    const glm::vec3& pyrScale,
-    glm::vec3& outNormal, float& outDepth)
-{
-    // Transform sphere center into un-scaled pyramid local space
-    glm::vec3 local = (sphereWorldPos - pyrWorldPos) / pyrScale;
-
-    // Pyramid spans y: [-0.5, 0.5], at height y the half-side = (0.5 - y) * 0.5
-    // Quick reject
-    if (local.y > 0.5f + radius / pyrScale.y) return false;
-    if (local.y < -0.5f - radius / pyrScale.y) return false;
-
-    // 5 planes in local space (normal, d where plane: dot(n,p) >= d)
-    struct Plane { glm::vec3 n; float d; };
-    // Precomputed normals for unit pyramid (apex=0,0.5,0 base corners at +-0.5,-0.5,+-0.5)
-    static const Plane planes[5] = {
-        { glm::normalize(glm::vec3( 0,  0.5f,  1.0f)),  0.0f },  // front
-        { glm::normalize(glm::vec3( 0,  0.5f, -1.0f)),  0.0f },  // back
-        { glm::normalize(glm::vec3( 1.0f, 0.5f, 0)),    0.0f },  // right
-        { glm::normalize(glm::vec3(-1.0f, 0.5f, 0)),    0.0f },  // left
-        { glm::vec3(0, -1, 0),                          0.5f  },  // bottom
+    glm::vec3 worldScale = {
+        glm::length(glm::vec3(wm[0])),
+        glm::length(glm::vec3(wm[1])),
+        glm::length(glm::vec3(wm[2]))
     };
 
-    float minPen = 1e30f;
-    glm::vec3 bestN(0,1,0);
+    OBB obb;
+    obb.axes[0] = glm::normalize(glm::vec3(wm[0]));
+    obb.axes[1] = glm::normalize(glm::vec3(wm[1]));
+    obb.axes[2] = glm::normalize(glm::vec3(wm[2]));
 
-    for (auto& pl : planes)
-    {
-        // Effective radius in plane normal direction (accounting for scale)
-        glm::vec3 nWorld = glm::normalize(pl.n / pyrScale);
-        float     effR   = radius / glm::length(pl.n / pyrScale);
-        float     dist   = glm::dot(pl.n, local) - pl.d;
-        float     pen    = effR - dist;
-        if (pen <= 0.0f) return false;  // outside this plane -> no collision
-        if (pen < minPen) { minPen = pen; bestN = nWorld; }
+    glm::vec3 entityPos = glm::vec3(wm[3]);
+    obb.center = entityPos
+        + obb.axes[0] * rb.ColliderOffset.x
+        + obb.axes[1] * rb.ColliderOffset.y
+        + obb.axes[2] * rb.ColliderOffset.z;
+
+    obb.half = rb.ColliderSize * worldScale * 0.5f;
+
+    return obb;
+}
+
+// ----------------------------------------------------------------
+// CheckOBBOBB — SAT com 15 eixos separadores
+// Normal aponta de B para A (empurra A para longe de B)
+// ----------------------------------------------------------------
+
+bool PhysicsSystem::CheckOBBOBB(
+    const OBB& A, const OBB& B,
+    glm::vec3& outNormal, float& outDepth)
+{
+    glm::mat3 R, AbsR;
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++) {
+            R[i][j]    = glm::dot(A.axes[i], B.axes[j]);
+            AbsR[i][j] = std::abs(R[i][j]) + 1e-6f;
+        }
+
+    glm::vec3 T_world = B.center - A.center;
+    glm::vec3 T = { glm::dot(T_world, A.axes[0]),
+                    glm::dot(T_world, A.axes[1]),
+                    glm::dot(T_world, A.axes[2]) };
+
+    float minDepth = FLT_MAX;
+    glm::vec3 bestAxis(0, 1, 0);
+    bool flipNormal = false;
+
+    auto test = [&](glm::vec3 axis, float rA, float rB, float dist) -> bool {
+        float len2 = glm::dot(axis, axis);
+        if (len2 < 1e-10f) return true;
+        float invLen = 1.0f / std::sqrt(len2);
+        axis *= invLen; rA *= invLen; rB *= invLen; dist *= invLen;
+        float overlap = rA + rB - std::abs(dist);
+        if (overlap <= 0.0f) return false;
+        if (overlap < minDepth) {
+            minDepth    = overlap;
+            bestAxis    = axis;
+            flipNormal  = (dist < 0.0f);
+        }
+        return true;
+    };
+
+    // Eixos de A
+    for (int i = 0; i < 3; i++) {
+        float rB = B.half[0]*AbsR[i][0] + B.half[1]*AbsR[i][1] + B.half[2]*AbsR[i][2];
+        if (!test(A.axes[i], A.half[i], rB, T[i])) return false;
+    }
+    // Eixos de B
+    for (int i = 0; i < 3; i++) {
+        float rA = A.half[0]*AbsR[0][i] + A.half[1]*AbsR[1][i] + A.half[2]*AbsR[2][i];
+        float d  = T[0]*R[0][i] + T[1]*R[1][i] + T[2]*R[2][i];
+        if (!test(B.axes[i], rA, B.half[i], d)) return false;
+    }
+    // 9 eixos cruzados A[i] × B[j]
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            glm::vec3 cross = glm::cross(A.axes[i], B.axes[j]);
+            int i1 = (i+1)%3, i2 = (i+2)%3;
+            int j1 = (j+1)%3, j2 = (j+2)%3;
+            float rA = A.half[i1]*AbsR[i2][j] + A.half[i2]*AbsR[i1][j];
+            float rB = B.half[j1]*AbsR[i][j2] + B.half[j2]*AbsR[i][j1];
+            float d  = T[i2]*R[i1][j] - T[i1]*R[i2][j];
+            if (!test(cross, rA, rB, d)) return false;
+        }
     }
 
-    outDepth  = minPen;
-    // Normal points from pyramid to sphere
-    outNormal = glm::dot(bestN, sphereWorldPos - pyrWorldPos) >= 0
-                ? bestN : -bestN;
+    outDepth  = minDepth;
+    outNormal = flipNormal ? -bestAxis : bestAxis;
+    if (glm::dot(outNormal, A.center - B.center) < 0.0f)
+        outNormal = -outNormal;
     return true;
 }
 
 // ----------------------------------------------------------------
-// Box vs Pyramid — approximate as AABB but shrink based on height
+// CheckSphereOBB — esfera vs OBB orientada
 // ----------------------------------------------------------------
 
-bool PhysicsSystem::CheckBoxPyramid(
-    const glm::vec3& boxPos,  const glm::vec3& boxSize,
-    const glm::vec3& pyrPos,  const glm::vec3& pyrScale,
+bool PhysicsSystem::CheckSphereOBB(
+    const glm::vec3& spherePos, float radius,
+    const OBB& box,
     glm::vec3& outNormal, float& outDepth)
 {
-    // Use the box center to approximate with sphere-pyramid for the center,
-    // then fall back to a tight AABB if that fails
-    float r = glm::length(boxSize) * 0.5f;
-    if (CheckSpherePyramid(boxPos, r, pyrPos, pyrScale, outNormal, outDepth))
-        return true;
-    // Fallback: AABB
-    return CheckBoxBox(boxPos, boxSize, pyrPos, pyrScale, outNormal, outDepth);
+    glm::vec3 d = spherePos - box.center;
+    glm::vec3 local = {
+        glm::dot(d, box.axes[0]),
+        glm::dot(d, box.axes[1]),
+        glm::dot(d, box.axes[2])
+    };
+    glm::vec3 closest = {
+        std::max(-box.half.x, std::min(local.x, box.half.x)),
+        std::max(-box.half.y, std::min(local.y, box.half.y)),
+        std::max(-box.half.z, std::min(local.z, box.half.z))
+    };
+    glm::vec3 closestWorld = box.center
+        + box.axes[0]*closest.x + box.axes[1]*closest.y + box.axes[2]*closest.z;
+
+    glm::vec3 delta = spherePos - closestWorld;
+    float dist = glm::length(delta);
+    if (dist >= radius) return false;
+
+    outDepth  = radius - dist;
+    outNormal = dist > 1e-4f ? glm::normalize(delta) : box.axes[1];
+    return true;
 }
 
 // ----------------------------------------------------------------
-// Sphere vs Sphere
+// CheckCapsuleOBB — cápsula vs OBB (iterative closest point)
+// ----------------------------------------------------------------
+
+bool PhysicsSystem::CheckCapsuleOBB(
+    const glm::vec3& capPos, float radius, float height,
+    const glm::vec3& capAxisWorld,
+    const OBB& box,
+    glm::vec3& outNormal, float& outDepth)
+{
+    float halfH = std::max(height * 0.5f - radius, 0.0f);
+    glm::vec3 capTop = capPos + capAxisWorld * halfH;
+    glm::vec3 capBot = capPos - capAxisWorld * halfH;
+    glm::vec3 seg = capTop - capBot;
+    float segLen2 = glm::dot(seg, seg);
+
+    // Find the closest point on the OBB to the capsule segment, and vice versa.
+    // Iterate: project OBB closest point onto segment, then segment point onto OBB.
+    glm::vec3 bestOnSeg = capPos;
+    glm::vec3 bestOnBox = box.center;
+    float bestDist2 = FLT_MAX;
+
+    // Sample several points along the segment + iterate for convergence
+    for (int s = 0; s <= 4; s++) {
+        float t = s / 4.0f;
+        glm::vec3 segPt = capBot + seg * t;
+
+        // Find closest point on OBB to this segment point
+        for (int iter = 0; iter < 3; iter++) {
+            // Closest on OBB to segPt
+            glm::vec3 d = segPt - box.center;
+            glm::vec3 local = {
+                glm::dot(d, box.axes[0]),
+                glm::dot(d, box.axes[1]),
+                glm::dot(d, box.axes[2])
+            };
+            glm::vec3 clamped = {
+                std::max(-box.half.x, std::min(local.x, box.half.x)),
+                std::max(-box.half.y, std::min(local.y, box.half.y)),
+                std::max(-box.half.z, std::min(local.z, box.half.z))
+            };
+            glm::vec3 boxPt = box.center
+                + box.axes[0]*clamped.x + box.axes[1]*clamped.y + box.axes[2]*clamped.z;
+
+            // Project boxPt back onto segment
+            float tSeg = (segLen2 > 1e-8f)
+                ? glm::clamp(glm::dot(boxPt - capBot, seg) / segLen2, 0.0f, 1.0f)
+                : 0.5f;
+            segPt = capBot + seg * tSeg;
+        }
+
+        // Final closest on OBB
+        glm::vec3 d = segPt - box.center;
+        glm::vec3 local = {
+            glm::dot(d, box.axes[0]),
+            glm::dot(d, box.axes[1]),
+            glm::dot(d, box.axes[2])
+        };
+        glm::vec3 clamped = {
+            std::max(-box.half.x, std::min(local.x, box.half.x)),
+            std::max(-box.half.y, std::min(local.y, box.half.y)),
+            std::max(-box.half.z, std::min(local.z, box.half.z))
+        };
+        glm::vec3 boxPt = box.center
+            + box.axes[0]*clamped.x + box.axes[1]*clamped.y + box.axes[2]*clamped.z;
+
+        float dist2 = glm::dot(segPt - boxPt, segPt - boxPt);
+        if (dist2 < bestDist2) {
+            bestDist2 = dist2;
+            bestOnSeg = segPt;
+            bestOnBox = boxPt;
+        }
+    }
+
+    float dist = std::sqrt(bestDist2);
+    if (dist >= radius) return false;
+
+    outDepth = radius - dist;
+    glm::vec3 delta = bestOnSeg - bestOnBox;
+    outNormal = dist > 1e-4f ? glm::normalize(delta) : box.axes[1];
+    return true;
+}
+
+// ----------------------------------------------------------------
+// CheckSphereSphere
 // ----------------------------------------------------------------
 
 bool PhysicsSystem::CheckSphereSphere(
@@ -143,75 +236,485 @@ bool PhysicsSystem::CheckSphereSphere(
     float dist = glm::length(posB - posA);
     float sum  = rA + rB;
     if (dist >= sum) return false;
-
     outDepth  = sum - dist;
-    // Normal aponta de B para A
-    outNormal = dist > 0.0001f ? glm::normalize(posA - posB) : glm::vec3(0, 1, 0);
+    outNormal = dist > 1e-4f ? glm::normalize(posA - posB) : glm::vec3(0, 1, 0);
     return true;
 }
 
 // ----------------------------------------------------------------
-// Sphere vs Box
+// CheckCapsuleSphere — closest point on capsule segment to sphere
 // ----------------------------------------------------------------
 
-bool PhysicsSystem::CheckSphereBox(
-    const glm::vec3& spherePos, float radius,
-    const glm::vec3& boxPos,    const glm::vec3& boxSize,
+bool PhysicsSystem::CheckCapsuleSphere(
+    const glm::vec3& capPos, float capRadius, float capHeight,
+    const glm::vec3& capAxisWorld,
+    const glm::vec3& spherePos, float sphereRadius,
     glm::vec3& outNormal, float& outDepth)
 {
-    glm::vec3 half  = boxSize * 0.5f;
-    glm::vec3 local = spherePos - boxPos;
+    float halfH = std::max(capHeight * 0.5f - capRadius, 0.0f);
+    glm::vec3 capA = capPos + capAxisWorld * halfH;
+    glm::vec3 capB = capPos - capAxisWorld * halfH;
+    glm::vec3 seg  = capA - capB;
+    float segLen2  = glm::dot(seg, seg);
+    float t = (segLen2 > 1e-8f)
+        ? glm::clamp(glm::dot(spherePos - capB, seg) / segLen2, 0.0f, 1.0f)
+        : 0.5f;
+    glm::vec3 closest = capB + seg * t;
+    return CheckSphereSphere(closest, capRadius, spherePos, sphereRadius, outNormal, outDepth);
+}
 
-    // Ponto mais próximo no box à esfera
-    glm::vec3 closest;
-    closest.x = std::max(-half.x, std::min(local.x, half.x));
-    closest.y = std::max(-half.y, std::min(local.y, half.y));
-    closest.z = std::max(-half.z, std::min(local.z, half.z));
+// ----------------------------------------------------------------
+// CheckCapsuleCapsule — closest points between two segments
+// ----------------------------------------------------------------
 
-    glm::vec3 delta = local - closest;
-    float dist = glm::length(delta);
+static void ClosestPointsBetweenSegments(
+    const glm::vec3& p1, const glm::vec3& q1,
+    const glm::vec3& p2, const glm::vec3& q2,
+    glm::vec3& c1, glm::vec3& c2)
+{
+    glm::vec3 d1 = q1 - p1, d2 = q2 - p2, r = p1 - p2;
+    float a = glm::dot(d1, d1), e = glm::dot(d2, d2), f = glm::dot(d2, r);
 
+    if (a <= 1e-8f && e <= 1e-8f) { c1 = p1; c2 = p2; return; }
+    float s, t;
+    if (a <= 1e-8f) { s = 0; t = glm::clamp(f / e, 0.0f, 1.0f); }
+    else {
+        float c = glm::dot(d1, r);
+        if (e <= 1e-8f) { t = 0; s = glm::clamp(-c / a, 0.0f, 1.0f); }
+        else {
+            float b = glm::dot(d1, d2);
+            float denom = a * e - b * b;
+            s = denom > 1e-8f ? glm::clamp((b * f - c * e) / denom, 0.0f, 1.0f) : 0.0f;
+            t = (b * s + f) / e;
+            if (t < 0) { t = 0; s = glm::clamp(-c / a, 0.0f, 1.0f); }
+            else if (t > 1) { t = 1; s = glm::clamp((b - c) / a, 0.0f, 1.0f); }
+        }
+    }
+    c1 = p1 + d1 * s;
+    c2 = p2 + d2 * t;
+}
+
+bool PhysicsSystem::CheckCapsuleCapsule(
+    const glm::vec3& capPosA, float rA, float hA, const glm::vec3& axisA,
+    const glm::vec3& capPosB, float rB, float hB, const glm::vec3& axisB,
+    glm::vec3& outNormal, float& outDepth)
+{
+    float halfHA = std::max(hA * 0.5f - rA, 0.0f);
+    float halfHB = std::max(hB * 0.5f - rB, 0.0f);
+    glm::vec3 a1 = capPosA + axisA * halfHA, a2 = capPosA - axisA * halfHA;
+    glm::vec3 b1 = capPosB + axisB * halfHB, b2 = capPosB - axisB * halfHB;
+
+    glm::vec3 c1, c2;
+    ClosestPointsBetweenSegments(a1, a2, b1, b2, c1, c2);
+    return CheckSphereSphere(c1, rA, c2, rB, outNormal, outDepth);
+}
+
+// ----------------------------------------------------------------
+// BuildPyramidVerts — 5 vértices world-space: v0..v3 = base, v4 = apex
+// ----------------------------------------------------------------
+
+void PhysicsSystem::BuildPyramidVerts(const Scene& scene, uint32_t id, glm::vec3 outVerts[5])
+{
+    const auto& rb = scene.RigidBodies[id];
+    glm::mat4 wm = scene.GetEntityWorldMatrix((int)id);
+
+    glm::vec3 worldScale = {
+        glm::length(glm::vec3(wm[0])),
+        glm::length(glm::vec3(wm[1])),
+        glm::length(glm::vec3(wm[2]))
+    };
+    glm::vec3 ax0 = glm::normalize(glm::vec3(wm[0]));
+    glm::vec3 ax1 = glm::normalize(glm::vec3(wm[1]));
+    glm::vec3 ax2 = glm::normalize(glm::vec3(wm[2]));
+
+    glm::vec3 center = glm::vec3(wm[3])
+        + ax0 * rb.ColliderOffset.x
+        + ax1 * rb.ColliderOffset.y
+        + ax2 * rb.ColliderOffset.z;
+
+    glm::vec3 half = rb.ColliderSize * worldScale * 0.5f;
+
+    // Base vertices (y = -halfY)
+    outVerts[0] = center - ax0*half.x - ax1*half.y - ax2*half.z;
+    outVerts[1] = center + ax0*half.x - ax1*half.y - ax2*half.z;
+    outVerts[2] = center + ax0*half.x - ax1*half.y + ax2*half.z;
+    outVerts[3] = center - ax0*half.x - ax1*half.y + ax2*half.z;
+    // Apex (y = +halfY)
+    outVerts[4] = center + ax1*half.y;
+}
+
+// ----------------------------------------------------------------
+// ClosestPointOnTriangle — standard Voronoi region method
+// ----------------------------------------------------------------
+
+static glm::vec3 ClosestPointOnTriangle(const glm::vec3& p,
+    const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
+{
+    glm::vec3 ab = b - a, ac = c - a, ap = p - a;
+    float d1 = glm::dot(ab, ap), d2 = glm::dot(ac, ap);
+    if (d1 <= 0.0f && d2 <= 0.0f) return a;
+
+    glm::vec3 bp = p - b;
+    float d3 = glm::dot(ab, bp), d4 = glm::dot(ac, bp);
+    if (d3 >= 0.0f && d4 <= d3) return b;
+
+    float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
+        float v = d1 / (d1 - d3);
+        return a + ab * v;
+    }
+
+    glm::vec3 cp = p - c;
+    float d5 = glm::dot(ab, cp), d6 = glm::dot(ac, cp);
+    if (d6 >= 0.0f && d5 <= d6) return c;
+
+    float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
+        float w = d2 / (d2 - d6);
+        return a + ac * w;
+    }
+
+    float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) {
+        float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return b + (c - b) * w;
+    }
+
+    float denom = 1.0f / (va + vb + vc);
+    float v = vb * denom, w = vc * denom;
+    return a + ab * v + ac * w;
+}
+
+// ----------------------------------------------------------------
+// CheckPyramidOBB — SAT com normais das faces da pirâmide
+// Pirâmide: v0..v3 base, v4 apex. Faces: base + 4 triângulos laterais.
+// ----------------------------------------------------------------
+
+bool PhysicsSystem::CheckPyramidOBB(
+    const glm::vec3 pyrVerts[5],
+    const OBB& box,
+    glm::vec3& outNormal, float& outDepth)
+{
+    // Compute pyramid face normals
+    glm::vec3 pyrNormals[5];
+    // Base face: (v0,v1,v2,v3) — outward normal pointing down
+    pyrNormals[0] = glm::normalize(glm::cross(pyrVerts[1] - pyrVerts[0], pyrVerts[3] - pyrVerts[0]));
+    // 4 lateral faces
+    pyrNormals[1] = glm::normalize(glm::cross(pyrVerts[1] - pyrVerts[0], pyrVerts[4] - pyrVerts[0]));
+    pyrNormals[2] = glm::normalize(glm::cross(pyrVerts[2] - pyrVerts[1], pyrVerts[4] - pyrVerts[1]));
+    pyrNormals[3] = glm::normalize(glm::cross(pyrVerts[3] - pyrVerts[2], pyrVerts[4] - pyrVerts[2]));
+    pyrNormals[4] = glm::normalize(glm::cross(pyrVerts[0] - pyrVerts[3], pyrVerts[4] - pyrVerts[3]));
+
+    // Unique pyramid edge directions (2 base + 4 lateral = 6)
+    glm::vec3 pyrEdges[6];
+    pyrEdges[0] = pyrVerts[1] - pyrVerts[0]; // base X
+    pyrEdges[1] = pyrVerts[3] - pyrVerts[0]; // base Z
+    pyrEdges[2] = pyrVerts[4] - pyrVerts[0]; // lateral 0
+    pyrEdges[3] = pyrVerts[4] - pyrVerts[1]; // lateral 1
+    pyrEdges[4] = pyrVerts[4] - pyrVerts[2]; // lateral 2
+    pyrEdges[5] = pyrVerts[4] - pyrVerts[3]; // lateral 3
+
+    // Pyramid centroid for normal direction
+    glm::vec3 pyrCenter = (pyrVerts[0] + pyrVerts[1] + pyrVerts[2] + pyrVerts[3] + pyrVerts[4]) * 0.2f;
+
+    float minDepth = FLT_MAX;
+    glm::vec3 bestAxis(0, 1, 0);
+
+    auto testAxis = [&](glm::vec3 axis) -> bool {
+        float len2 = glm::dot(axis, axis);
+        if (len2 < 1e-10f) return true;
+        axis /= std::sqrt(len2);
+
+        // Project pyramid (5 verts)
+        float pyrMin = FLT_MAX, pyrMax = -FLT_MAX;
+        for (int i = 0; i < 5; i++) {
+            float p = glm::dot(pyrVerts[i], axis);
+            pyrMin = std::min(pyrMin, p);
+            pyrMax = std::max(pyrMax, p);
+        }
+
+        // Project OBB
+        float obbC = glm::dot(box.center, axis);
+        float obbE = std::abs(glm::dot(box.axes[0], axis)) * box.half[0]
+                   + std::abs(glm::dot(box.axes[1], axis)) * box.half[1]
+                   + std::abs(glm::dot(box.axes[2], axis)) * box.half[2];
+
+        float overlap = std::min(pyrMax, obbC + obbE) - std::max(pyrMin, obbC - obbE);
+        if (overlap <= 0.0f) return false;
+        if (overlap < minDepth) {
+            minDepth = overlap;
+            bestAxis = axis;
+            // Normal points from OBB to pyramid
+            if (glm::dot(pyrCenter - box.center, bestAxis) < 0.0f)
+                bestAxis = -bestAxis;
+        }
+        return true;
+    };
+
+    // Test 5 pyramid face normals
+    for (int i = 0; i < 5; i++)
+        if (!testAxis(pyrNormals[i])) return false;
+
+    // Test 3 OBB face normals
+    for (int i = 0; i < 3; i++)
+        if (!testAxis(box.axes[i])) return false;
+
+    // Test 6×3 = 18 edge cross products
+    for (int i = 0; i < 6; i++)
+        for (int j = 0; j < 3; j++)
+            if (!testAxis(glm::cross(pyrEdges[i], box.axes[j]))) return false;
+
+    outDepth  = minDepth;
+    outNormal = bestAxis;
+    return true;
+}
+
+// ----------------------------------------------------------------
+// CheckSpherePyramid — closest point on pyramid surface to sphere
+// ----------------------------------------------------------------
+
+bool PhysicsSystem::CheckSpherePyramid(
+    const glm::vec3& spherePos, float radius,
+    const glm::vec3 pyrVerts[5],
+    glm::vec3& outNormal, float& outDepth)
+{
+    // 6 triangles: 4 lateral + 2 from base quad split
+    const int faces[6][3] = {
+        {0,1,4}, {1,2,4}, {2,3,4}, {3,0,4},  // lateral
+        {0,1,2}, {0,2,3}                       // base quad
+    };
+
+    float minDist2 = FLT_MAX;
+    glm::vec3 closestPt(0.0f);
+
+    for (int f = 0; f < 6; f++) {
+        glm::vec3 cp = ClosestPointOnTriangle(spherePos,
+            pyrVerts[faces[f][0]], pyrVerts[faces[f][1]], pyrVerts[faces[f][2]]);
+        float d2 = glm::dot(spherePos - cp, spherePos - cp);
+        if (d2 < minDist2) { minDist2 = d2; closestPt = cp; }
+    }
+
+    float dist = std::sqrt(minDist2);
     if (dist >= radius) return false;
 
+    glm::vec3 delta = spherePos - closestPt;
     outDepth  = radius - dist;
-    outNormal = dist > 0.0001f ? glm::normalize(delta) : glm::vec3(0, 1, 0);
+    outNormal = dist > 1e-4f ? glm::normalize(delta) : glm::vec3(0, 1, 0);
     return true;
 }
 
 // ----------------------------------------------------------------
-// Capsule vs Box — aproxima cápsula como uma esfera no ponto mais
-// próximo do eixo vertical ao box
+// CheckCapsulePyramid — closest on capsule segment → sphere-pyramid
 // ----------------------------------------------------------------
 
-bool PhysicsSystem::CheckCapsuleBox(
+bool PhysicsSystem::CheckCapsulePyramid(
     const glm::vec3& capPos, float radius, float height,
-    const glm::vec3& boxPos, const glm::vec3& boxSize,
+    const glm::vec3& capAxisWorld,
+    const glm::vec3 pyrVerts[5],
     glm::vec3& outNormal, float& outDepth)
 {
-    float halfH = height * 0.5f - radius;
-    halfH = std::max(halfH, 0.0f);
+    // Sample multiple points along the capsule segment, keep deepest hit
+    float halfH = std::max(height * 0.5f - radius, 0.0f);
+    glm::vec3 capTop = capPos + capAxisWorld * halfH;
+    glm::vec3 capBot = capPos - capAxisWorld * halfH;
 
-    // Ponto no eixo da cápsula mais próximo do centro do box
-    glm::vec3 boxLocal = boxPos - capPos;
-    float t = std::max(-halfH, std::min(boxLocal.y, halfH));
-    glm::vec3 closest = capPos + glm::vec3(0, t, 0);
+    bool anyHit = false;
+    float bestDepth = 0.0f;
+    glm::vec3 bestNormal(0, 1, 0);
 
-    return CheckSphereBox(closest, radius, boxPos, boxSize, outNormal, outDepth);
+    // 5 sample points along segment
+    for (int s = 0; s <= 4; s++) {
+        float t = s / 4.0f;
+        glm::vec3 pt = capBot + (capTop - capBot) * t;
+        glm::vec3 n; float d;
+        if (CheckSpherePyramid(pt, radius, pyrVerts, n, d)) {
+            if (!anyHit || d > bestDepth) {
+                bestDepth = d;
+                bestNormal = n;
+                anyHit = true;
+            }
+        }
+    }
+
+    if (anyHit) { outDepth = bestDepth; outNormal = bestNormal; }
+    return anyHit;
 }
 
 // ----------------------------------------------------------------
-// Update principal
+// CheckPyramidPyramid — SAT entre duas pirâmides
 // ----------------------------------------------------------------
+
+bool PhysicsSystem::CheckPyramidPyramid(
+    const glm::vec3 vertsA[5], const glm::vec3 vertsB[5],
+    glm::vec3& outNormal, float& outDepth)
+{
+    // Build face normals for both pyramids
+    auto buildNormals = [](const glm::vec3 v[5], glm::vec3 n[5]) {
+        n[0] = glm::normalize(glm::cross(v[1] - v[0], v[3] - v[0]));
+        n[1] = glm::normalize(glm::cross(v[1] - v[0], v[4] - v[0]));
+        n[2] = glm::normalize(glm::cross(v[2] - v[1], v[4] - v[1]));
+        n[3] = glm::normalize(glm::cross(v[3] - v[2], v[4] - v[2]));
+        n[4] = glm::normalize(glm::cross(v[0] - v[3], v[4] - v[3]));
+    };
+    auto buildEdges = [](const glm::vec3 v[5], glm::vec3 e[6]) {
+        e[0] = v[1] - v[0]; e[1] = v[3] - v[0];
+        e[2] = v[4] - v[0]; e[3] = v[4] - v[1];
+        e[4] = v[4] - v[2]; e[5] = v[4] - v[3];
+    };
+
+    glm::vec3 nA[5], nB[5], eA[6], eB[6];
+    buildNormals(vertsA, nA); buildNormals(vertsB, nB);
+    buildEdges(vertsA, eA);   buildEdges(vertsB, eB);
+
+    glm::vec3 centA = (vertsA[0]+vertsA[1]+vertsA[2]+vertsA[3]+vertsA[4])*0.2f;
+    glm::vec3 centB = (vertsB[0]+vertsB[1]+vertsB[2]+vertsB[3]+vertsB[4])*0.2f;
+
+    float minDepth = FLT_MAX;
+    glm::vec3 bestAxis(0,1,0);
+
+    auto testAxis = [&](glm::vec3 axis) -> bool {
+        float len2 = glm::dot(axis, axis);
+        if (len2 < 1e-10f) return true;
+        axis /= std::sqrt(len2);
+        float aMin=FLT_MAX, aMax=-FLT_MAX, bMin=FLT_MAX, bMax=-FLT_MAX;
+        for (int i=0;i<5;i++) {
+            float pa=glm::dot(vertsA[i],axis); aMin=std::min(aMin,pa); aMax=std::max(aMax,pa);
+            float pb=glm::dot(vertsB[i],axis); bMin=std::min(bMin,pb); bMax=std::max(bMax,pb);
+        }
+        float overlap = std::min(aMax,bMax) - std::max(aMin,bMin);
+        if (overlap<=0.0f) return false;
+        if (overlap<minDepth) {
+            minDepth=overlap; bestAxis=axis;
+            if (glm::dot(centA-centB,bestAxis)<0.0f) bestAxis=-bestAxis;
+        }
+        return true;
+    };
+
+    for (int i=0;i<5;i++) if(!testAxis(nA[i])) return false;
+    for (int i=0;i<5;i++) if(!testAxis(nB[i])) return false;
+    for (int i=0;i<6;i++) for(int j=0;j<6;j++)
+        if(!testAxis(glm::cross(eA[i],eB[j]))) return false;
+
+    outDepth=minDepth; outNormal=bestAxis;
+    return true;
+}
+
+// ----------------------------------------------------------------
+// Helpers para resolução de RigidBody completo
+// ----------------------------------------------------------------
+
+// Inverso dos momentos principais de inércia de uma caixa (diagonal)
+static glm::vec3 BoxInertiaDiagInv(float mass, const glm::vec3& half)
+{
+    return glm::vec3(
+        3.0f / std::max(mass * (half.y*half.y + half.z*half.z), 0.01f),
+        3.0f / std::max(mass * (half.x*half.x + half.z*half.z), 0.01f),
+        3.0f / std::max(mass * (half.x*half.x + half.y*half.y), 0.01f)
+    );
+}
+
+// Inverso dos momentos de inércia de uma esfera sólida: I = (2/5)*m*r²
+static glm::vec3 SphereInertiaDiagInv(float mass, float radius)
+{
+    float I = 0.4f * mass * radius * radius;
+    float inv = 1.0f / std::max(I, 0.01f);
+    return glm::vec3(inv);
+}
+
+// Inverso dos momentos de inércia de uma cápsula (aprox. cilindro sólido)
+// Eixo Y = eixo do cilindro
+static glm::vec3 CapsuleInertiaDiagInv(float mass, float radius, float height)
+{
+    float r2 = radius * radius;
+    float Iaxial = mass * r2 * 0.5f;
+    float Iperp  = mass * (3.0f * r2 + height * height) / 12.0f;
+    return glm::vec3(
+        1.0f / std::max(Iperp,  0.01f),
+        1.0f / std::max(Iaxial, 0.01f),
+        1.0f / std::max(Iperp,  0.01f)
+    );
+}
+
+// Inverso dos momentos de inércia de uma pirâmide sólida (base quadrada)
+// CM a H/4 da base. Iy = m*a²/10, Ix=Iz = m*(a²/20 + 3h²/80)
+static glm::vec3 PyramidInertiaDiagInv(float mass, const glm::vec3& half)
+{
+    float a2 = (2.0f*half.x) * (2.0f*half.z); // base area proxy
+    float h2 = (2.0f*half.y) * (2.0f*half.y);
+    float Iy = mass * a2 / 10.0f;
+    float Ixz = mass * (a2 / 20.0f + 3.0f * h2 / 80.0f);
+    return glm::vec3(
+        1.0f / std::max(Ixz, 0.01f),
+        1.0f / std::max(Iy,  0.01f),
+        1.0f / std::max(Ixz, 0.01f)
+    );
+}
+
+// Aplica I^{-1} diagonal (em espaço local do OBB) a um vetor world-space
+static glm::vec3 ApplyIInvWorld(const OBB& obb, const glm::vec3& Iinv, const glm::vec3& v)
+{
+    glm::vec3 local = {
+        glm::dot(v, obb.axes[0]),
+        glm::dot(v, obb.axes[1]),
+        glm::dot(v, obb.axes[2])
+    };
+    local *= Iinv;
+    return obb.axes[0]*local.x + obb.axes[1]*local.y + obb.axes[2]*local.z;
+}
+
+// Centroide dos vértices mais extremos da OBB na direção `dir`.
+// Trata contato em canto (1 vértice), aresta (2) e face (4) corretamente:
+// ao fazer a média dos vértices empatados o componente "ao longo da aresta"
+// cancela, evitando torques espúrios em eixos que não participam da colisão.
+static glm::vec3 OBBContactCentroid(const OBB& obb, const glm::vec3& dir)
+{
+    float tol = 1e-3f * (obb.half.x + obb.half.y + obb.half.z);
+
+    // 1ª passagem: projeção MÁXIMA (vértice mais extremo na direção `dir`)
+    float maxProj = -FLT_MAX;
+    for (int mask = 0; mask < 8; mask++) {
+        float sx = (mask & 1) ? 1.0f : -1.0f;
+        float sy = (mask & 2) ? 1.0f : -1.0f;
+        float sz = (mask & 4) ? 1.0f : -1.0f;
+        glm::vec3 c = obb.center
+            + obb.axes[0] * obb.half[0] * sx
+            + obb.axes[1] * obb.half[1] * sy
+            + obb.axes[2] * obb.half[2] * sz;
+        maxProj = std::max(maxProj, glm::dot(c, dir));
+    }
+
+    // 2ª passagem: média de todos os vértices dentro da tolerância
+    glm::vec3 sum(0.0f);
+    int count = 0;
+    for (int mask = 0; mask < 8; mask++) {
+        float sx = (mask & 1) ? 1.0f : -1.0f;
+        float sy = (mask & 2) ? 1.0f : -1.0f;
+        float sz = (mask & 4) ? 1.0f : -1.0f;
+        glm::vec3 c = obb.center
+            + obb.axes[0] * obb.half[0] * sx
+            + obb.axes[1] * obb.half[1] * sy
+            + obb.axes[2] * obb.half[2] * sz;
+        if (glm::dot(c, dir) >= maxProj - tol) {
+            sum += c;
+            count++;
+        }
+    }
+    return sum / (float)count;
+}
 
 void PhysicsSystem::Update(Scene& scene, float dt)
 {
     const float MAX_FALL_SPEED = -50.0f;
 
-    // --- Gravity + integration ---
     for (size_t i = 0; i < scene.RigidBodies.size(); i++)
     {
         auto& rb = scene.RigidBodies[i];
-        if (!rb.HasGravityModule) continue;
+
+        if (i < scene.GameCameras.size() && scene.GameCameras[i].Active)
+            continue;
+
+        bool isPhysics = rb.HasGravityModule || rb.HasRigidBodyMode;
+        if (!isPhysics) continue;
         if (rb.IsKinematic) continue;
 
         if (rb.UseGravity)
@@ -225,16 +728,194 @@ void PhysicsSystem::Update(Scene& scene, float dt)
 
         scene.Transforms[i].Position += rb.Velocity * dt;
 
+        if (rb.HasRigidBodyMode)
+        {
+            scene.Transforms[i].Rotation += rb.AngularVelocity * dt;
+            rb.AngularVelocity *= (1.0f - rb.AngularDamping);
+        }
+
         rb.IsGrounded = false;
     }
 
-    // --- Collision resolution (3 iterations for stability) ---
-    for (int iter = 0; iter < 3; ++iter)
+    for (int iter = 0; iter < 4; ++iter)
         ResolveCollisions(scene);
+
+    // Torque direto de gravidade para RigidBody em contato com o chão.
+    // Executado após ResolveCollisions para usar IsGrounded recém atualizado,
+    // garantindo resposta angular imediata já na primeira frame de contato.
+    // τ = arm × N_contact, onde N_contact ≈ (0, mass*|g|, 0) equilibra a gravidade.
+    // Para inclinação < 45° o torque é restaurador (volta a ficar plano);
+    // para inclinação > 45° o torque é derrubador (tomba).
+    // Esfera NÃO entra neste loop (simetricamente rotatória — não tomba).
+    for (size_t i = 0; i < scene.RigidBodies.size(); i++)
+    {
+        auto& rb = scene.RigidBodies[i];
+        if (!rb.HasRigidBodyMode || !rb.HasColliderModule) continue;
+        if (rb.IsKinematic || !rb.UseGravity || !rb.IsGrounded) continue;
+
+        // Esferas não tombam — são rotacionalmente simétricas
+        if (rb.Collider == ColliderType::Sphere) continue;
+
+        OBB obb = BuildOBB(scene, (uint32_t)i);
+
+        glm::vec3 contact;
+        if (rb.Collider == ColliderType::Pyramid)
+        {
+            // Usar vértices reais da pirâmide para encontrar ponto de contato
+            glm::vec3 pyrV[5];
+            BuildPyramidVerts(scene, (uint32_t)i, pyrV);
+            float tol = 1e-3f * (obb.half.x + obb.half.y + obb.half.z);
+            glm::vec3 downDir(0.0f, -1.0f, 0.0f);
+            float maxP = -FLT_MAX;
+            for (int k = 0; k < 5; k++)
+                maxP = std::max(maxP, glm::dot(pyrV[k], downDir));
+            glm::vec3 sum(0); int cnt = 0;
+            for (int k = 0; k < 5; k++) {
+                if (glm::dot(pyrV[k], downDir) >= maxP - tol) { sum += pyrV[k]; cnt++; }
+            }
+            contact = sum / (float)cnt;
+        }
+        else if (rb.Collider == ColliderType::Capsule)
+        {
+            // Capsule: find lowest surface point considering rotation
+            glm::mat4 wm = scene.GetEntityWorldMatrix((int)i);
+            glm::vec3 ax0 = glm::normalize(glm::vec3(wm[0]));
+            glm::vec3 capAxis = glm::normalize(glm::vec3(wm[1]));
+            glm::vec3 ax2 = glm::normalize(glm::vec3(wm[2]));
+            float radius = rb.ColliderRadius * glm::length(glm::vec3(wm[0]));
+            float height = rb.ColliderHeight * glm::length(glm::vec3(wm[1]));
+            float halfH = std::max(height * 0.5f - radius, 0.0f);
+            // Rotate ColliderOffset like BuildOBB does
+            glm::vec3 pos = glm::vec3(wm[3])
+                + ax0 * rb.ColliderOffset.x
+                + capAxis * rb.ColliderOffset.y
+                + ax2 * rb.ColliderOffset.z;
+            glm::vec3 top = pos + capAxis * halfH;
+            glm::vec3 bot = pos - capAxis * halfH;
+            // Pick lowest hemisphere center, or center if nearly horizontal
+            float dY = top.y - bot.y;
+            glm::vec3 lowestCenter;
+            if (std::abs(dY) < 1e-3f)
+                lowestCenter = pos; // horizontal — contact centroid at center
+            else
+                lowestCenter = (bot.y < top.y) ? bot : top;
+            contact = lowestCenter + glm::vec3(0.0f, -radius, 0.0f);
+        }
+        else
+        {
+            // Box: vértice(s) mais baixo(s) do OBB
+            contact = OBBContactCentroid(obb, glm::vec3(0.0f, -1.0f, 0.0f));
+        }
+
+        // Use actual center of mass (pyramid CM is at H/4 from base, not H/2)
+        glm::vec3 cm = obb.center;
+        if (rb.Collider == ColliderType::Pyramid)
+            cm = obb.center - obb.axes[1] * (obb.half.y * 0.5f);
+        glm::vec3 arm = contact - cm; // CM → contato
+
+        // Se braço é quase vertical → já está plano → desacelera e para
+        float armHorizSq = arm.x*arm.x + arm.z*arm.z;
+        if (armHorizSq < 0.0001f)
+        {
+            rb.AngularVelocity *= 0.8f;
+            if (glm::length(rb.AngularVelocity) < 0.5f)
+                rb.AngularVelocity = glm::vec3(0);
+            rb.Velocity.x = 0.0f;
+            rb.Velocity.z = 0.0f;
+            continue;
+        }
+
+        // Torque: τ = arm × N_contact, N = (0, +mg, 0)
+        glm::vec3 tau = glm::cross(arm, glm::vec3(0.0f, rb.Mass * std::abs(Gravity), 0.0f));
+
+        // Braço em espaço local do OBB (para Steiner)
+        glm::vec3 armL = {
+            glm::dot(arm, obb.axes[0]),
+            glm::dot(arm, obb.axes[1]),
+            glm::dot(arm, obb.axes[2])
+        };
+
+        // Inércia do CM (diagonal) — per-shape
+        glm::vec3 IcmInv;
+        glm::vec3 Icm;
+        if (rb.Collider == ColliderType::Pyramid) {
+            IcmInv = PyramidInertiaDiagInv(rb.Mass, obb.half);
+            Icm = glm::vec3(1.0f / std::max(IcmInv.x, 0.01f),
+                            1.0f / std::max(IcmInv.y, 0.01f),
+                            1.0f / std::max(IcmInv.z, 0.01f));
+        } else if (rb.Collider == ColliderType::Capsule) {
+            IcmInv = CapsuleInertiaDiagInv(rb.Mass, rb.ColliderRadius, rb.ColliderHeight);
+            Icm = glm::vec3(1.0f / std::max(IcmInv.x, 0.01f),
+                            1.0f / std::max(IcmInv.y, 0.01f),
+                            1.0f / std::max(IcmInv.z, 0.01f));
+        } else {
+            Icm = glm::vec3(
+                std::max(rb.Mass * (obb.half.y*obb.half.y + obb.half.z*obb.half.z) / 3.0f, 0.01f),
+                std::max(rb.Mass * (obb.half.x*obb.half.x + obb.half.z*obb.half.z) / 3.0f, 0.01f),
+                std::max(rb.Mass * (obb.half.x*obb.half.x + obb.half.y*obb.half.y) / 3.0f, 0.01f)
+            );
+        }
+
+        // Steiner: I_pivô = I_cm + m * |arm_perp|²
+        glm::vec3 Ipivot = {
+            Icm.x + rb.Mass * (armL.y*armL.y + armL.z*armL.z),
+            Icm.y + rb.Mass * (armL.x*armL.x + armL.z*armL.z),
+            Icm.z + rb.Mass * (armL.x*armL.x + armL.y*armL.y)
+        };
+        glm::vec3 IpivotInv = {
+            1.0f / std::max(Ipivot.x, 0.01f),
+            1.0f / std::max(Ipivot.y, 0.01f),
+            1.0f / std::max(Ipivot.z, 0.01f)
+        };
+
+        // Aceleração angular (rad/s²) usando inércia do pivô
+        glm::vec3 dOmegaRad = ApplyIInvWorld(obb, IpivotInv, tau) * dt;
+
+        // Clamp angular acceleration to prevent explosion from vertex jumps
+        float dOmegaLen = glm::length(dOmegaRad);
+        float maxDOmega = glm::radians(360.0f) * dt; // max 360°/s² acceleration
+        if (dOmegaLen > maxDOmega)
+            dOmegaRad *= maxDOmega / dOmegaLen;
+
+        rb.AngularVelocity += glm::degrees(dOmegaRad);
+
+        float spd = glm::length(rb.AngularVelocity);
+        if (spd > 720.0f) rb.AngularVelocity *= 720.0f / spd;
+
+        // CONSTRAINT DE PÊNDULO: v_cm = ω_total × (-arm)
+        // Clamp resulting velocity to prevent explosions at steep angles
+        // where small rotation changes cause large arm jumps.
+        glm::vec3 omegaRad = glm::radians(rb.AngularVelocity);
+        glm::vec3 vPendulum = glm::cross(omegaRad, -arm);
+
+        // Limit pendulum velocity to a physically reasonable maximum
+        float armLen = glm::length(arm);
+        float maxPendulumSpeed = std::max(armLen * glm::radians(720.0f), 15.0f);
+        float pendSpeed = glm::length(vPendulum);
+        if (pendSpeed > maxPendulumSpeed)
+            vPendulum *= maxPendulumSpeed / pendSpeed;
+
+        rb.Velocity = vPendulum;
+    }
+
+    // Cancela velocidade residual de gravidade para objetos parados no chão.
+    // NÃO aplica a objetos tipping (ω significativo) — esses precisam de
+    // velocidade vertical para orbitar o ponto de contato.
+    for (size_t i = 0; i < scene.RigidBodies.size(); i++)
+    {
+        auto& rb = scene.RigidBodies[i];
+        if (rb.IsKinematic) continue;
+        if (!rb.HasGravityModule && !rb.HasRigidBodyMode) continue;
+        if (rb.IsGrounded && rb.Velocity.y < 0.1f)
+        {
+            bool tipping = rb.HasRigidBodyMode && glm::length(rb.AngularVelocity) > 1.0f;
+            if (!tipping) rb.Velocity.y = 0.0f;
+        }
+    }
 }
 
 // ----------------------------------------------------------------
-// Resolução de colisões
+// ResolveCollisions — OBB para box/pyramid, sphere/capsule correto
 // ----------------------------------------------------------------
 
 void PhysicsSystem::ResolveCollisions(Scene& scene)
@@ -250,161 +931,317 @@ void PhysicsSystem::ResolveCollisions(Scene& scene)
         {
             auto& rbB = scene.RigidBodies[j];
             if (!rbB.HasColliderModule) continue;
-
-            // Two kinematics do not interact
             if (rbA.IsKinematic && rbB.IsKinematic) continue;
 
-            bool aKin = rbA.IsKinematic;
-            bool bKin = rbB.IsKinematic;
+            bool aKin = rbA.IsKinematic || (!rbA.HasGravityModule && !rbA.HasRigidBodyMode);
+            bool bKin = rbB.IsKinematic || (!rbB.HasGravityModule && !rbB.HasRigidBodyMode);
 
-            glm::vec3 posA = GetColliderWorldPos(scene, (uint32_t)i);
-            glm::vec3 posB = GetColliderWorldPos(scene, (uint32_t)j);
-
-            glm::vec3 normal(0);
-            float depth = 0;
-            bool hit = false;
-
-            // Despacho de colisão por tipo
             ColliderType tA = rbA.Collider;
             ColliderType tB = rbB.Collider;
 
-            if (tA == ColliderType::Box)
-            {
-                glm::vec3 sA = GetColliderWorldSize(scene, (uint32_t)i);
-                if (tB == ColliderType::Box)
-                {
-                    glm::vec3 sB = GetColliderWorldSize(scene, (uint32_t)j);
-                    hit = CheckBoxBox(posA, sA, posB, sB, normal, depth);
-                }
-                else if (tB == ColliderType::Pyramid)
-                {
-                    glm::vec3 sB = GetColliderWorldSize(scene, (uint32_t)j);
-                    hit = CheckBoxPyramid(posA, sA, posB, sB, normal, depth);
-                }
-                else if (tB == ColliderType::Sphere)
-                {
-                    float rB = rbB.ColliderRadius * scene.Transforms[j].Scale.x;
-                    hit = CheckSphereBox(posB, rB, posA, sA, normal, depth);
-                    normal = -normal;
-                }
-                else if (tB == ColliderType::Capsule)
-                {
-                    float rB = rbB.ColliderRadius * scene.Transforms[j].Scale.x;
-                    float hB = rbB.ColliderHeight * scene.Transforms[j].Scale.y;
-                    hit = CheckCapsuleBox(posB, rB, hB, posA, sA, normal, depth);
-                    normal = -normal;
-                }
-            }
-            else if (tA == ColliderType::Pyramid)
-            {
-                glm::vec3 sA = GetColliderWorldSize(scene, (uint32_t)i);
-                if (tB == ColliderType::Box)
-                {
-                    glm::vec3 sB = GetColliderWorldSize(scene, (uint32_t)j);
-                    hit = CheckBoxPyramid(posB, sB, posA, sA, normal, depth);
-                    normal = -normal;
-                }
-                else if (tB == ColliderType::Pyramid)
-                {
-                    glm::vec3 sB = GetColliderWorldSize(scene, (uint32_t)j);
-                    hit = CheckBoxBox(posA, sA, posB, sB, normal, depth); // approx
-                }
-                else if (tB == ColliderType::Sphere)
-                {
-                    float rB = rbB.ColliderRadius * scene.Transforms[j].Scale.x;
-                    hit = CheckSpherePyramid(posB, rB, posA, sA, normal, depth);
-                    normal = -normal;
-                }
-                else if (tB == ColliderType::Capsule)
-                {
-                    float rB = rbB.ColliderRadius * scene.Transforms[j].Scale.x;
-                    hit = CheckSpherePyramid(posB, rB, posA, sA, normal, depth);
-                    normal = -normal;
-                }
-            }
-            else if (tA == ColliderType::Sphere)
-            {
-                float rA = rbA.ColliderRadius * scene.Transforms[i].Scale.x;
-                if (tB == ColliderType::Sphere)
-                {
-                    float rB = rbB.ColliderRadius * scene.Transforms[j].Scale.x;
-                    hit = CheckSphereSphere(posA, rA, posB, rB, normal, depth);
-                }
-                else if (tB == ColliderType::Box)
-                {
-                    glm::vec3 sB = GetColliderWorldSize(scene, (uint32_t)j);
-                    hit = CheckSphereBox(posA, rA, posB, sB, normal, depth);
-                }
-                else if (tB == ColliderType::Pyramid)
-                {
-                    glm::vec3 sB = GetColliderWorldSize(scene, (uint32_t)j);
-                    hit = CheckSpherePyramid(posA, rA, posB, sB, normal, depth);
-                }
-                else if (tB == ColliderType::Capsule)
-                {
-                    float rB = rbB.ColliderRadius * scene.Transforms[j].Scale.x;
-                    hit = CheckSphereSphere(posA, rA, posB, rB, normal, depth);
-                }
-            }
-            else if (tA == ColliderType::Capsule)
-            {
-                float rA = rbA.ColliderRadius * scene.Transforms[i].Scale.x;
-                float hA = rbA.ColliderHeight * scene.Transforms[i].Scale.y;
-                if (tB == ColliderType::Box)
-                {
-                    glm::vec3 sB = GetColliderWorldSize(scene, (uint32_t)j);
-                    hit = CheckCapsuleBox(posA, rA, hA, posB, sB, normal, depth);
-                }
-                else if (tB == ColliderType::Pyramid)
-                {
-                    glm::vec3 sB = GetColliderWorldSize(scene, (uint32_t)j);
-                    hit = CheckSpherePyramid(posA, rA, posB, sB, normal, depth); // approx
-                }
-                else if (tB == ColliderType::Sphere)
-                {
-                    float rB = rbB.ColliderRadius * scene.Transforms[j].Scale.x;
-                    hit = CheckSphereSphere(posA, rA, posB, rB, normal, depth);
-                }
-                else if (tB == ColliderType::Capsule)
-                {
-                    float rB = rbB.ColliderRadius * scene.Transforms[j].Scale.x;
-                    hit = CheckSphereSphere(posA, rA, posB, rB, normal, depth);
-                }
-            }
+            bool aIsBox = (tA == ColliderType::Box);
+            bool bIsBox = (tB == ColliderType::Box);
+            bool aIsPyr = (tA == ColliderType::Pyramid);
+            bool bIsPyr = (tB == ColliderType::Pyramid);
+
+            OBB obbA, obbB;
+            if (aIsBox) obbA = BuildOBB(scene, (uint32_t)i);
+            if (bIsBox) obbB = BuildOBB(scene, (uint32_t)j);
+
+            glm::vec3 pyrVertsA[5], pyrVertsB[5];
+            if (aIsPyr) BuildPyramidVerts(scene, (uint32_t)i, pyrVertsA);
+            if (bIsPyr) BuildPyramidVerts(scene, (uint32_t)j, pyrVertsB);
+
+            glm::mat4 wmA = scene.GetEntityWorldMatrix((int)i);
+            glm::mat4 wmB = scene.GetEntityWorldMatrix((int)j);
+            glm::vec3 scaleA = { glm::length(glm::vec3(wmA[0])), glm::length(glm::vec3(wmA[1])), glm::length(glm::vec3(wmA[2])) };
+            glm::vec3 scaleB = { glm::length(glm::vec3(wmB[0])), glm::length(glm::vec3(wmB[1])), glm::length(glm::vec3(wmB[2])) };
+            glm::vec3 posA = glm::vec3(wmA[3]) + rbA.ColliderOffset;
+            glm::vec3 posB = glm::vec3(wmB[3]) + rbB.ColliderOffset;
+            float rA = rbA.ColliderRadius * scaleA.x;
+            float rB = rbB.ColliderRadius * scaleB.x;
+            float hA = rbA.ColliderHeight * scaleA.y;
+            float hB = rbB.ColliderHeight * scaleB.y;
+            glm::vec3 capAxisA = glm::normalize(glm::vec3(wmA[1]));
+            glm::vec3 capAxisB = glm::normalize(glm::vec3(wmB[1]));
+
+            glm::vec3 normal(0);
+            float     depth = 0;
+            bool      hit   = false;
+
+            // --- Box vs Box ---
+            if (aIsBox && bIsBox)
+                hit = CheckOBBOBB(obbA, obbB, normal, depth);
+
+            // --- Box vs Pyramid ---
+            else if (aIsBox && bIsPyr)
+                { hit = CheckPyramidOBB(pyrVertsB, obbA, normal, depth); normal = -normal; }
+            else if (aIsPyr && bIsBox)
+                hit = CheckPyramidOBB(pyrVertsA, obbB, normal, depth);
+
+            // --- Box vs Sphere ---
+            else if (aIsBox && tB == ColliderType::Sphere)
+                { hit = CheckSphereOBB(posB, rB, obbA, normal, depth); normal = -normal; }
+            else if (tA == ColliderType::Sphere && bIsBox)
+                hit = CheckSphereOBB(posA, rA, obbB, normal, depth);
+
+            // --- Box vs Capsule ---
+            else if (aIsBox && tB == ColliderType::Capsule)
+                { hit = CheckCapsuleOBB(posB, rB, hB, capAxisB, obbA, normal, depth); normal = -normal; }
+            else if (tA == ColliderType::Capsule && bIsBox)
+                hit = CheckCapsuleOBB(posA, rA, hA, capAxisA, obbB, normal, depth);
+
+            // --- Pyramid vs Pyramid ---
+            else if (aIsPyr && bIsPyr)
+                hit = CheckPyramidPyramid(pyrVertsA, pyrVertsB, normal, depth);
+
+            // --- Pyramid vs Sphere ---
+            else if (aIsPyr && tB == ColliderType::Sphere)
+                { hit = CheckSpherePyramid(posB, rB, pyrVertsA, normal, depth); normal = -normal; }
+            else if (tA == ColliderType::Sphere && bIsPyr)
+                hit = CheckSpherePyramid(posA, rA, pyrVertsB, normal, depth);
+
+            // --- Pyramid vs Capsule ---
+            else if (aIsPyr && tB == ColliderType::Capsule)
+                { hit = CheckCapsulePyramid(posB, rB, hB, capAxisB, pyrVertsA, normal, depth); normal = -normal; }
+            else if (tA == ColliderType::Capsule && bIsPyr)
+                hit = CheckCapsulePyramid(posA, rA, hA, capAxisA, pyrVertsB, normal, depth);
+
+            // --- Sphere vs Sphere ---
+            else if (tA == ColliderType::Sphere && tB == ColliderType::Sphere)
+                hit = CheckSphereSphere(posA, rA, posB, rB, normal, depth);
+
+            // --- Capsule vs Sphere ---
+            else if (tA == ColliderType::Capsule && tB == ColliderType::Sphere)
+                hit = CheckCapsuleSphere(posA, rA, hA, capAxisA, posB, rB, normal, depth);
+            else if (tA == ColliderType::Sphere && tB == ColliderType::Capsule)
+                { hit = CheckCapsuleSphere(posB, rB, hB, capAxisB, posA, rA, normal, depth); normal = -normal; }
+
+            // --- Capsule vs Capsule ---
+            else if (tA == ColliderType::Capsule && tB == ColliderType::Capsule)
+                hit = CheckCapsuleCapsule(posA, rA, hA, capAxisA, posB, rB, hB, capAxisB, normal, depth);
 
             if (!hit) continue;
 
-            // Separar entidades — normal aponta de B (j) para A (i)
+            // --- Separação posicional: Baumgarte com slop ---
+            constexpr float SLOP      = 0.005f;
+            constexpr float BAUMGARTE = 0.6f;
+            float corr = std::max(depth - SLOP, 0.0f) * BAUMGARTE;
+
             if (!aKin && !bKin)
-            {
-                scene.Transforms[i].Position += normal * (depth * 0.5f);
-                scene.Transforms[j].Position -= normal * (depth * 0.5f);
-            }
+            { scene.Transforms[i].Position += normal*(corr*0.5f); scene.Transforms[j].Position -= normal*(corr*0.5f); }
             else if (!aKin)
+                scene.Transforms[i].Position += normal * corr;
+            else if (!bKin)
+                scene.Transforms[j].Position -= normal * corr;
+
+            // --- Resolução de velocidade ---
+            bool anyRB = rbA.HasRigidBodyMode || rbB.HasRigidBodyMode;
+
+            if (anyRB)
             {
-                scene.Transforms[i].Position += normal * depth;
+                float e = 0.0f;
+                if (!aKin && rbA.HasRigidBodyMode) e = std::max(e, rbA.Restitution);
+                if (!bKin && rbB.HasRigidBodyMode) e = std::max(e, rbB.Restitution);
+
+                float mAinv = aKin ? 0.0f : 1.0f / rbA.Mass;
+                float mBinv = bKin ? 0.0f : 1.0f / rbB.Mass;
+
+                // Build representative OBB for inertia / contact-arm computation
+                OBB dummyA, dummyB;
+                if (aIsBox)       dummyA = obbA;
+                else if (aIsPyr)  { dummyA = BuildOBB(scene, (uint32_t)i); } // OBB approx for inertia frame
+                else {
+                    dummyA.center = posA;
+                    dummyA.axes[0] = glm::normalize(glm::vec3(wmA[0]));
+                    dummyA.axes[1] = glm::normalize(glm::vec3(wmA[1]));
+                    dummyA.axes[2] = glm::normalize(glm::vec3(wmA[2]));
+                    dummyA.half = (tA == ColliderType::Capsule)
+                        ? glm::vec3(rA, hA * 0.5f, rA)
+                        : glm::vec3(rA);
+                }
+                if (bIsBox)       dummyB = obbB;
+                else if (bIsPyr)  { dummyB = BuildOBB(scene, (uint32_t)j); }
+                else {
+                    dummyB.center = posB;
+                    dummyB.axes[0] = glm::normalize(glm::vec3(wmB[0]));
+                    dummyB.axes[1] = glm::normalize(glm::vec3(wmB[1]));
+                    dummyB.axes[2] = glm::normalize(glm::vec3(wmB[2]));
+                    dummyB.half = (tB == ColliderType::Capsule)
+                        ? glm::vec3(rB, hB * 0.5f, rB)
+                        : glm::vec3(rB);
+                }
+
+                // Contact arm — shape-aware
+                auto contactArm = [&](bool isKin, ColliderType ct, const OBB& obb,
+                                      const glm::vec3* pyrV, const glm::vec3& pos,
+                                      float rad, float h, const glm::vec3& capAxis,
+                                      const glm::vec3& n) -> glm::vec3
+                {
+                    if (isKin) return glm::vec3(0);
+                    if (ct == ColliderType::Box)
+                        return OBBContactCentroid(obb, n) - obb.center;
+                    if (ct == ColliderType::Pyramid && pyrV) {
+                        // Centroid of pyramid vertices most extreme in direction n
+                        float tol = 1e-3f * (obb.half.x + obb.half.y + obb.half.z);
+                        float maxP = -FLT_MAX;
+                        for (int k = 0; k < 5; k++)
+                            maxP = std::max(maxP, glm::dot(pyrV[k], n));
+                        glm::vec3 sum(0); int cnt = 0;
+                        for (int k = 0; k < 5; k++) {
+                            if (glm::dot(pyrV[k], n) >= maxP - tol) { sum += pyrV[k]; cnt++; }
+                        }
+                        glm::vec3 centroid = sum / (float)cnt;
+                        // Pyramid CM at H/4 from base (not geometric center)
+                        glm::vec3 pyrCM = obb.center - obb.axes[1] * (obb.half.y * 0.5f);
+                        return centroid - pyrCM;
+                    }
+                    if (ct == ColliderType::Sphere)
+                        return n * (-rad); // contact at surface in collision direction
+                    if (ct == ColliderType::Capsule) {
+                        // Closest point on capsule surface in direction n
+                        float halfH = std::max(h * 0.5f - rad, 0.0f);
+                        glm::vec3 top = pos + capAxis * halfH;
+                        glm::vec3 bot = pos - capAxis * halfH;
+                        glm::vec3 bestPt = (glm::dot(bot, n) > glm::dot(top, n)) ? bot : top;
+                        return (bestPt + n * (-rad)) - pos;
+                    }
+                    return glm::vec3(0);
+                };
+
+                glm::vec3 armA = contactArm(aKin, tA, dummyA, aIsPyr ? pyrVertsA : nullptr, posA, rA, hA, capAxisA, -normal);
+                glm::vec3 armB = contactArm(bKin, tB, dummyB, bIsPyr ? pyrVertsB : nullptr, posB, rB, hB, capAxisB,  normal);
+
+                // Tensor de inércia inverso — per-shape
+                auto getIInv = [](bool isKin, bool hasRB, ColliderType ct, float mass,
+                                  const glm::vec3& half, float rad, float h) -> glm::vec3
+                {
+                    if (isKin || !hasRB) return glm::vec3(0);
+                    switch (ct) {
+                        case ColliderType::Box:     return BoxInertiaDiagInv(mass, half);
+                        case ColliderType::Pyramid: return PyramidInertiaDiagInv(mass, half);
+                        case ColliderType::Sphere:  return SphereInertiaDiagInv(mass, rad);
+                        case ColliderType::Capsule: return CapsuleInertiaDiagInv(mass, rad, h);
+                        default: return glm::vec3(0);
+                    }
+                };
+
+                glm::vec3 IinvA = getIInv(aKin, rbA.HasRigidBodyMode, tA, rbA.Mass, dummyA.half, rA, hA);
+                glm::vec3 IinvB = getIInv(bKin, rbB.HasRigidBodyMode, tB, rbB.Mass, dummyB.half, rB, hB);
+
+                // Velocidades angulares em rad/s
+                glm::vec3 omegaA = (!aKin && rbA.HasRigidBodyMode) ? glm::radians(rbA.AngularVelocity) : glm::vec3(0);
+                glm::vec3 omegaB = (!bKin && rbB.HasRigidBodyMode) ? glm::radians(rbB.AngularVelocity) : glm::vec3(0);
+
+                glm::vec3 vA = aKin ? glm::vec3(0) : rbA.Velocity;
+                glm::vec3 vB = bKin ? glm::vec3(0) : rbB.Velocity;
+
+                // Velocidade relativa no ponto de contato (inclui componente angular)
+                glm::vec3 vA_c = vA + glm::cross(omegaA, armA);
+                glm::vec3 vB_c = vB + glm::cross(omegaB, armB);
+                float vRel = glm::dot(vA_c - vB_c, normal);
+
+                if (-vRel < 1.0f) e = 0.0f;
+
+                if (vRel < 0.0f && (mAinv + mBinv) > 0.0f)
+                {
+                    // Denominador inclui termos angulares: dot(n, (I^-1*(r×n))×r)
+                    float angTermA = (!aKin && rbA.HasRigidBodyMode) ?
+                        glm::dot(glm::cross(ApplyIInvWorld(dummyA, IinvA, glm::cross(armA, normal)), armA), normal) : 0.0f;
+                    float angTermB = (!bKin && rbB.HasRigidBodyMode) ?
+                        glm::dot(glm::cross(ApplyIInvWorld(dummyB, IinvB, glm::cross(armB, normal)), armB), normal) : 0.0f;
+
+                    float denom = mAinv + mBinv + angTermA + angTermB;
+
+                    if (denom > 1e-6f)
+                    {
+                        float jSc = -(1.0f + e) * vRel / denom;
+                        glm::vec3 impulse = jSc * normal;
+
+                        if (!aKin) rbA.Velocity += impulse * mAinv;
+                        if (!bKin) rbB.Velocity -= impulse * mBinv;
+
+                        // Impulso angular: delta_omega = I^-1 * (r × impulso)
+                        if (!aKin && rbA.HasRigidBodyMode)
+                        {
+                            rbA.AngularVelocity += glm::degrees(ApplyIInvWorld(dummyA, IinvA, glm::cross(armA, impulse)));
+                            float spd = glm::length(rbA.AngularVelocity);
+                            if (spd > 720.0f) rbA.AngularVelocity *= 720.0f / spd;
+                        }
+                        if (!bKin && rbB.HasRigidBodyMode)
+                        {
+                            rbB.AngularVelocity += glm::degrees(ApplyIInvWorld(dummyB, IinvB, glm::cross(armB, -impulse)));
+                            float spd = glm::length(rbB.AngularVelocity);
+                            if (spd > 720.0f) rbB.AngularVelocity *= 720.0f / spd;
+                        }
+
+                        // --- Atrito (modelo de Coulomb) ---
+                        // Recomputa velocidade relativa pós-impulso normal
+                        glm::vec3 omegaA2 = (!aKin && rbA.HasRigidBodyMode) ? glm::radians(rbA.AngularVelocity) : glm::vec3(0);
+                        glm::vec3 omegaB2 = (!bKin && rbB.HasRigidBodyMode) ? glm::radians(rbB.AngularVelocity) : glm::vec3(0);
+                        glm::vec3 vRel2   = (aKin ? glm::vec3(0) : rbA.Velocity + glm::cross(omegaA2, armA))
+                                          - (bKin ? glm::vec3(0) : rbB.Velocity + glm::cross(omegaB2, armB));
+
+                        glm::vec3 vTang    = vRel2 - glm::dot(vRel2, normal) * normal;
+                        float     vTangLen = glm::length(vTang);
+
+                        float fricCoef = 0.0f;
+                        if (!aKin && rbA.HasRigidBodyMode) fricCoef = std::max(fricCoef, rbA.FrictionCoef);
+                        if (!bKin && rbB.HasRigidBodyMode) fricCoef = std::max(fricCoef, rbB.FrictionCoef);
+
+                        if (vTangLen > 1e-4f && fricCoef > 0.0f)
+                        {
+                            glm::vec3 tangent = vTang / vTangLen;
+
+                            float tAngTermA = (!aKin && rbA.HasRigidBodyMode) ?
+                                glm::dot(glm::cross(ApplyIInvWorld(dummyA, IinvA, glm::cross(armA, tangent)), armA), tangent) : 0.0f;
+                            float tAngTermB = (!bKin && rbB.HasRigidBodyMode) ?
+                                glm::dot(glm::cross(ApplyIInvWorld(dummyB, IinvB, glm::cross(armB, tangent)), armB), tangent) : 0.0f;
+
+                            float tDenom = mAinv + mBinv + tAngTermA + tAngTermB;
+                            if (tDenom > 1e-6f)
+                            {
+                                float jFric = glm::clamp(-vTangLen / tDenom,
+                                                         -fricCoef * jSc,
+                                                          fricCoef * jSc);
+                                glm::vec3 fricImpulse = jFric * tangent;
+
+                                if (!aKin) rbA.Velocity += fricImpulse * mAinv;
+                                if (!bKin) rbB.Velocity -= fricImpulse * mBinv;
+
+                                if (!aKin && rbA.HasRigidBodyMode)
+                                {
+                                    rbA.AngularVelocity += glm::degrees(ApplyIInvWorld(dummyA, IinvA, glm::cross(armA, fricImpulse)));
+                                    float spd = glm::length(rbA.AngularVelocity);
+                                    if (spd > 720.0f) rbA.AngularVelocity *= 720.0f / spd;
+                                }
+                                if (!bKin && rbB.HasRigidBodyMode)
+                                {
+                                    rbB.AngularVelocity += glm::degrees(ApplyIInvWorld(dummyB, IinvB, glm::cross(armB, -fricImpulse)));
+                                    float spd = glm::length(rbB.AngularVelocity);
+                                    if (spd > 720.0f) rbB.AngularVelocity *= 720.0f / spd;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!aKin && normal.y >  0.5f) rbA.IsGrounded = true;
+                if (!bKin && normal.y < -0.5f) rbB.IsGrounded = true;
             }
             else
             {
-                scene.Transforms[j].Position -= normal * depth;
-            }
-
-            // Resolver velocidades — A para em -normal, B para em +normal
-            auto resolveVelocity = [&](RigidBodyComponent& rbDyn, float sign)
-            {
-                float vAlong = glm::dot(rbDyn.Velocity, normal) * sign;
-                if (vAlong < 0.0f)
+                auto resolveVelocity = [&](RigidBodyComponent& rb, float sign)
                 {
-                    const float bounce = 0.1f;
-                    rbDyn.Velocity -= normal * sign * vAlong * (1.0f + bounce);
-                }
-                // Marca grounded se a normal empurra pra cima
-                if (normal.y * sign > 0.5f)
-                    rbDyn.IsGrounded = true;
-            };
-
-            if (!aKin) resolveVelocity(rbA,  1.0f);
-            if (!bKin) resolveVelocity(rbB, -1.0f);
+                    float vAlong = glm::dot(rb.Velocity, normal) * sign;
+                    if (vAlong < 0.0f)
+                        rb.Velocity -= normal * sign * vAlong;
+                    if (normal.y * sign > 0.5f)
+                        rb.IsGrounded = true;
+                };
+                if (!aKin) resolveVelocity(rbA,  1.0f);
+                if (!bKin) resolveVelocity(rbB, -1.0f);
+            }
         }
     }
 }

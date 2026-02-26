@@ -180,7 +180,7 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
         ImGui::EndDragDropSource();
     }
 
-    // ---- Drop target: entity-on-entity = make child (no group) ----
+    // ---- Drop target: entity-on-entity = make child; material = assign material ----
     if (ImGui::BeginDragDropTarget())
     {
         if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ENTITY"))
@@ -188,6 +188,12 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
             int srcIdx = *(const int*)p->Data;
             if (srcIdx != entityIdx)
                 scene.SetEntityParent(srcIdx, entityIdx);
+        }
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("MATERIAL_IDX"))
+        {
+            int matIdx = *(const int*)p->Data;
+            if (entityIdx < (int)scene.EntityMaterial.size())
+                scene.EntityMaterial[entityIdx] = matIdx;
         }
         ImGui::EndDragDropTarget();
     }
@@ -212,6 +218,16 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
                     scene.SetEntityGroup(entityIdx, (int)g);
             }
             ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Apagar Entidade"))
+        {
+            if (selectedEntity == entityIdx) selectedEntity = -1;
+            else if (selectedEntity > entityIdx) selectedEntity--;
+            scene.DeleteEntity(entityIdx);
+            ImGui::EndPopup();
+            if (open && !isLeaf) ImGui::TreePop();
+            return;
         }
         ImGui::EndPopup();
     }

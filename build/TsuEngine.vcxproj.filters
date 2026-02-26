@@ -25,6 +25,9 @@
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\renderer\renderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\renderer\textureLoader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\scene\entity.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

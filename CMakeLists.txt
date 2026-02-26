@@ -41,6 +41,7 @@ include_directories(
     external/glfw/include
     external/glad/include
     external/glm
+    external/stb
     .
     Engine
     ${imgui_SOURCE_DIR}
@@ -56,6 +57,7 @@ add_executable(TsuEngine
     Engine/physics/physicsSystem.cpp
     Engine/renderer/mesh.cpp
     Engine/renderer/renderer.cpp
+    Engine/renderer/textureLoader.cpp
     Engine/scene/entity.cpp
     Engine/scene/scene.cpp
     Engine/serialization/sceneSerializer.cpp

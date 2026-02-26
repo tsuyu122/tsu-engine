@@ -38,6 +38,9 @@ private:
                           const glm::mat4& proj, unsigned int shader);
     static void DrawGizmos(Scene& scene, const glm::mat4& view,
                            const glm::mat4& proj);
+    // Wireframe verde dos coliders (ShowCollider = true)
+    static void DrawColliderGizmos(Scene& scene, const glm::mat4& view,
+                                   const glm::mat4& proj);
     static void InitGizmoMeshes();
 
     // Meshes de gizmo (criados uma vez no Init)

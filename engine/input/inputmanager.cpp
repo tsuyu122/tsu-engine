@@ -1,5 +1,6 @@
 #include "input/inputManager.h"
 #include <GLFW/glfw3.h>
+#include <imgui_impl_glfw.h>
 #include <cstring>
 
 namespace tsu {
@@ -21,9 +22,11 @@ float  InputManager::s_ScrollDeltaThisFrame = 0.0f;
 
 static float g_ScrollAccum = 0.0f;   // file-local accumulator fed by callback
 
-static void ScrollCallback(GLFWwindow*, double /*xoff*/, double yoff)
+static void ScrollCallback(GLFWwindow* w, double xoff, double yoff)
 {
     g_ScrollAccum += (float)yoff;
+    // Forward to ImGui so inspector/panels can scroll with mouse wheel
+    ImGui_ImplGlfw_ScrollCallback(w, xoff, yoff);
 }
 
 void InputManager::Update(GLFWwindow* window)

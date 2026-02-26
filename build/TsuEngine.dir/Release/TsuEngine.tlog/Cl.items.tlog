@@ -6,6 +6,7 @@ C:\Users\hm\Desktop\tsuEngine\Engine\input\inputManager.cpp;C:\Users\hm\Desktop\
 C:\Users\hm\Desktop\tsuEngine\Engine\physics\physicsSystem.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\physicsSystem.obj
 C:\Users\hm\Desktop\tsuEngine\Engine\renderer\mesh.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\mesh.obj
 C:\Users\hm\Desktop\tsuEngine\Engine\renderer\renderer.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\renderer.obj
+C:\Users\hm\Desktop\tsuEngine\Engine\renderer\textureLoader.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\textureLoader.obj
 C:\Users\hm\Desktop\tsuEngine\Engine\scene\entity.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\entity.obj
 C:\Users\hm\Desktop\tsuEngine\Engine\scene\scene.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\scene.obj
 C:\Users\hm\Desktop\tsuEngine\Engine\serialization\sceneSerializer.cpp;C:\Users\hm\Desktop\tsuEngine\build\TsuEngine.dir\Release\sceneSerializer.obj

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <unordered_map>
 
 namespace tsu {
 
@@ -92,6 +93,62 @@ static bool DrawCompHeader(const char* label, const char* uid,
 }
 
 // ----------------------------------------------------------------
+// Material module UI (obrigatório, sempre após Transform)
+// ----------------------------------------------------------------
+
+static void DrawMaterialModule(Scene& scene, int idx)
+{
+    ImGui::Spacing();
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap))
+    {
+        int matIdx = (idx < (int)scene.EntityMaterial.size()) ? scene.EntityMaterial[idx] : -1;
+
+        // Cor: se nenhum material atribuído, edita EntityColors (local do objeto)
+        bool hasMat = (matIdx >= 0 && matIdx < (int)scene.Materials.size());
+        glm::vec3 color = hasMat ? scene.Materials[matIdx].Color
+                                 : (idx < (int)scene.EntityColors.size() ? scene.EntityColors[idx] : glm::vec3(1.0f));
+        ImGui::Text("Cor:");
+        if (ImGui::ColorEdit3("##matcolor", &color.x))
+        {
+            if (hasMat)
+                scene.Materials[matIdx].Color = color;
+            else if (idx < (int)scene.EntityColors.size())
+                scene.EntityColors[idx] = color;
+        }
+
+        // Dropdown de material — largura total do painel
+        ImGui::Text("Material:");
+        ImGui::SetNextItemWidth(-1.0f);
+        const char* preview = hasMat ? scene.Materials[matIdx].Name.c_str() : "<Nenhum>";
+        if (ImGui::BeginCombo("##matsel", preview, ImGuiComboFlags_PopupAlignLeft))
+        {
+            if (ImGui::Selectable("<Nenhum>", matIdx == -1))
+                scene.EntityMaterial[idx] = -1;
+            for (int i = 0; i < (int)scene.Materials.size(); ++i)
+            {
+                bool sel = (matIdx == i);
+                if (ImGui::Selectable(scene.Materials[i].Name.c_str(), sel))
+                    scene.EntityMaterial[idx] = i;
+                if (sel) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        // Drop target no combo: arrastar material do asset browser
+        if (ImGui::BeginDragDropTarget())
+        {
+            if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("MATERIAL_IDX"))
+            {
+                int newMat = *(const int*)p->Data;
+                if (idx < (int)scene.EntityMaterial.size())
+                    scene.EntityMaterial[idx] = newMat;
+            }
+            ImGui::EndDragDropTarget();
+        }
+    }
+}
+
+// ----------------------------------------------------------------
 // GetOrBuildOrder – sync stored order with active components
 // ----------------------------------------------------------------
 
@@ -101,9 +158,10 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
 
     auto isActive = [&](int comp) -> bool {
         switch (comp) {
-            case COMP_CAMERA:   return scene.GameCameras[idx].Active;
-            case COMP_GRAVITY:  return scene.RigidBodies[idx].HasGravityModule;
-            case COMP_COLLIDER: return scene.RigidBodies[idx].HasColliderModule;
+            case COMP_CAMERA:      return scene.GameCameras[idx].Active;
+            case COMP_GRAVITY:     return scene.RigidBodies[idx].HasGravityModule;
+            case COMP_COLLIDER:    return scene.RigidBodies[idx].HasColliderModule;
+            case COMP_RIGIDBODY:   return scene.RigidBodies[idx].HasRigidBodyMode;
             default: return false;
         }
     };
@@ -121,6 +179,7 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
     addMissing(COMP_CAMERA);
     addMissing(COMP_GRAVITY);
     addMissing(COMP_COLLIDER);
+    addMissing(COMP_RIGIDBODY);
 
     return stored;
 }
@@ -128,6 +187,49 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
 // ----------------------------------------------------------------
 // Transform section (always shown, no remove)
 // ----------------------------------------------------------------
+
+// Helper: labeled DragFloat3 with colored X/Y/Z sub-labels
+static bool TableDragFloat3XYZ(const char* label, float* v, float speed,
+                                float vmin = 0.0f, float vmax = 0.0f)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::TableSetColumnIndex(1);
+
+    bool changed = false;
+    float avail = ImGui::GetContentRegionAvail().x;
+    float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+    float fieldW = (avail - spacing * 2.0f - 30.0f) / 3.0f; // 30 = 3*10 for labels
+
+    ImGui::PushID(label);
+
+    // X
+    ImGui::TextColored(ImVec4(0.9f,0.25f,0.25f,1), "X");
+    ImGui::SameLine(0, 2);
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::DragFloat("##x", &v[0], speed, vmin, vmax)) changed = true;
+
+    ImGui::SameLine(0, spacing);
+
+    // Y
+    ImGui::TextColored(ImVec4(0.4f,0.8f,0.2f,1), "Y");
+    ImGui::SameLine(0, 2);
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::DragFloat("##y", &v[1], speed, vmin, vmax)) changed = true;
+
+    ImGui::SameLine(0, spacing);
+
+    // Z
+    ImGui::TextColored(ImVec4(0.3f,0.5f,0.95f,1), "Z");
+    ImGui::SameLine(0, 2);
+    ImGui::SetNextItemWidth(fieldW);
+    if (ImGui::DragFloat("##z", &v[2], speed, vmin, vmax)) changed = true;
+
+    ImGui::PopID();
+    return changed;
+}
 
 void InspectorPanel::DrawTransformSection(TransformComponent& t, const char* label)
 {
@@ -138,15 +240,15 @@ void InspectorPanel::DrawTransformSection(TransformComponent& t, const char* lab
     ImGui::TableSetupColumn("val", ImGuiTableColumnFlags_WidthStretch);
 
     float pos[3] = { t.Position.x, t.Position.y, t.Position.z };
-    if (TableDragFloat3("Position", pos, 0.05f))
+    if (TableDragFloat3XYZ("Position", pos, 0.05f))
         t.Position = { pos[0], pos[1], pos[2] };
 
     float rot[3] = { t.Rotation.x, t.Rotation.y, t.Rotation.z };
-    if (TableDragFloat3("Rotation", rot, 0.5f))
+    if (TableDragFloat3XYZ("Rotation", rot, 0.5f))
         t.Rotation = { rot[0], rot[1], rot[2] };
 
     float scl[3] = { t.Scale.x, t.Scale.y, t.Scale.z };
-    if (TableDragFloat3("Scale", scl, 0.01f, 0.001f, 100.0f))
+    if (TableDragFloat3XYZ("Scale", scl, 0.01f, 0.001f, 100.0f))
         t.Scale = { scl[0], scl[1], scl[2] };
 
     ImGui::EndTable();
@@ -170,8 +272,9 @@ bool InspectorPanel::DrawCameraSection(GameCameraComponent& gc,
     TableDragFloat1("FOV",   &gc.FOV,   0.5f, 10.0f, 170.0f);
     TableDragFloat1("Near",  &gc.Near,  0.01f, 0.001f, 10.0f);
     TableDragFloat1("Far",   &gc.Far,   1.0f, 1.0f, 10000.0f);
-    TableDragFloat1("Yaw",   &gc.Yaw,   0.5f);
-    TableDragFloat1("Pitch", &gc.Pitch, 0.5f, -89.0f, 89.0f);
+    bool yawChanged = TableDragFloat1("Yaw",   &gc.Yaw,   0.5f);
+    bool pitchChanged = TableDragFloat1("Pitch", &gc.Pitch, 0.5f, -89.0f, 89.0f);
+    if (yawChanged || pitchChanged) gc.UpdateVectors();
     ImGui::EndTable();
     return true;
 }
@@ -248,6 +351,39 @@ bool InspectorPanel::DrawColliderSection(Scene& scene, int entityIdx,
         rb.ColliderOffset = { off[0], off[1], off[2] };
 
     ImGui::EndTable();
+
+    // Liga/desliga visualização do wireframe verde
+    ImGui::Checkbox("Show Collider", &rb.ShowCollider);
+
+    return true;
+}
+
+// ----------------------------------------------------------------
+// RigidBody module (rotação + impulso + restitução)
+// ----------------------------------------------------------------
+
+bool InspectorPanel::DrawRigidBodySection(RigidBodyComponent& rb,
+                                           int orderIdx, std::vector<int>& order)
+{
+    bool removed = false;
+    bool open    = DrawCompHeader("RigidBody", "rb", orderIdx, order, removed);
+    if (removed) { rb.HasRigidBodyMode = false; rb.AngularVelocity = {0,0,0}; return false; }
+    if (!open)   return true;
+
+    if (!ImGui::BeginTable("##rb", 2)) return true;
+    ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 75.0f);
+    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+    TableDragFloat1("Restitution",  &rb.Restitution,   0.01f, 0.0f, 1.0f);
+    TableDragFloat1("Friction",     &rb.FrictionCoef,  0.01f, 0.0f, 2.0f);
+    TableDragFloat1("AngDamping",   &rb.AngularDamping,0.001f,0.0f, 1.0f);
+    ImGui::EndTable();
+
+    ImGui::TextDisabled("AngVel: %.1f  %.1f  %.1f",
+        rb.AngularVelocity.x, rb.AngularVelocity.y, rb.AngularVelocity.z);
+
+    if (ImGui::Button("Reset AngVel"))
+        rb.AngularVelocity = {0,0,0};
+
     return true;
 }
 
@@ -282,6 +418,11 @@ void InspectorPanel::DrawAddComponentMenu(Scene& scene, int entityIdx,
         if (!rb.HasColliderModule)
         {
             if (ImGui::MenuItem("Collider")) { rb.HasColliderModule = true; order.push_back(COMP_COLLIDER); }
+            any = true;
+        }
+        if (!rb.HasRigidBodyMode)
+        {
+            if (ImGui::MenuItem("RigidBody")) { rb.HasRigidBodyMode = true; order.push_back(COMP_RIGIDBODY); }
             any = true;
         }
         if (!any) ImGui::TextDisabled("No more components available.");
@@ -406,8 +547,121 @@ void InspectorPanel::DrawGroupSection(SceneGroup& group, int groupIdx)
 // Main Render
 // ----------------------------------------------------------------
 
+// ----------------------------------------------------------------
+// Material asset editor (shown when a material is selected in Assets)
+// ----------------------------------------------------------------
+
+void InspectorPanel::DrawMaterialEditor(Scene& scene, int matIdx)
+{
+    if (matIdx < 0 || matIdx >= (int)scene.Materials.size()) return;
+    auto& mat = scene.Materials[matIdx];
+
+    ImGui::TextColored(ImVec4(1,0.8f,0.3f,1), "Material");
+    ImGui::Separator();
+
+    // Nome
+    static char nameBuf[128];
+    strncpy(nameBuf, mat.Name.c_str(), 127);
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputText("##matname", nameBuf, 128, ImGuiInputTextFlags_EnterReturnsTrue))
+        mat.Name = nameBuf;
+
+    ImGui::Spacing();
+    // Cor
+    ImGui::Text("Cor:");
+    ImGui::ColorEdit3("##matedcolor", &mat.Color.x);
+
+    ImGui::Spacing();
+    // Helper: procura TextureID no scene pelo path
+    auto lookupTexID = [&](const std::string& path) -> unsigned int {
+        auto it = std::find(scene.Textures.begin(), scene.Textures.end(), path);
+        if (it == scene.Textures.end()) return 0u;
+        int idx = (int)(it - scene.Textures.begin());
+        return (idx < (int)scene.TextureIDs.size()) ? scene.TextureIDs[idx] : 0u;
+    };
+    // Sincroniza TextureID caso o path já tenha sido setado (e.g., load de cena)
+    if (!mat.TexturePath.empty() && mat.TextureID == 0)
+        mat.TextureID = lookupTexID(mat.TexturePath);
+
+    ImGui::Text("Textura:");
+
+    const float sqSz  = 64.0f;
+    float       btnW2 = ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0f + 6.0f;
+
+    // Quadrado de preview (drag-drop target)
+    ImGui::InvisibleButton("##texslot", {sqSz, sqSz});
+    {
+        ImVec2 sqMin = ImGui::GetItemRectMin();
+        ImVec2 sqMax = ImGui::GetItemRectMax();
+        auto*  dl    = ImGui::GetWindowDrawList();
+        if (mat.TextureID > 0)
+            // UV {0,1}->{1,0}: flip V because texture was loaded with flip=true (GL convention)
+            dl->AddImage((ImTextureID)(intptr_t)mat.TextureID, sqMin, sqMax, {0,1}, {1,0});
+        else {
+            dl->AddRectFilled(sqMin, sqMax,
+                IM_COL32((int)(mat.Color.r*255),(int)(mat.Color.g*255),(int)(mat.Color.b*255),255), 4.f);
+            dl->AddRect      (sqMin, sqMax, IM_COL32(100,100,100,180), 4.f);
+        }
+    }
+    if (ImGui::BeginDragDropTarget()) {
+        if (auto* pl = ImGui::AcceptDragDropPayload("TEXTURE_PATH")) {
+            mat.TexturePath = std::string((const char*)pl->Data, pl->DataSize - 1);
+            mat.TextureID   = lookupTexID(mat.TexturePath);
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    // Label + botões ao lado do quadrado
+    ImGui::SameLine();
+    ImGui::BeginGroup();
+    if (!mat.TexturePath.empty()) {
+        size_t sl = mat.TexturePath.find_last_of("/\\");
+        std::string fn = (sl != std::string::npos) ? mat.TexturePath.substr(sl+1) : mat.TexturePath;
+        if (fn.size() > 18) fn = fn.substr(0,17) + "\xe2\x80\xa6";
+        ImGui::TextUnformatted(fn.c_str());
+    } else {
+        ImGui::TextDisabled("(nenhuma)");
+    }
+    if (ImGui::Button("...", {btnW2, 0})) ImGui::OpenPopup("##texturepicker");
+    if (!mat.TexturePath.empty()) {
+        ImGui::SameLine();
+        if (ImGui::Button("X", {0,0})) { mat.TexturePath.clear(); mat.TextureID = 0; }
+    }
+    ImGui::EndGroup();
+
+    if (ImGui::BeginPopup("##texturepicker")) {
+        ImGui::Text("Selecionar textura:");
+        ImGui::Separator();
+        if (scene.Textures.empty()) {
+            ImGui::TextDisabled("(nenhuma textura importada)");
+        } else {
+            for (int ti2 = 0; ti2 < (int)scene.Textures.size(); ++ti2) {
+                const auto& tp = scene.Textures[ti2];
+                size_t sl2 = tp.find_last_of("/\\");
+                std::string fn2 = (sl2 != std::string::npos) ? tp.substr(sl2+1) : tp;
+                unsigned int tid = (ti2 < (int)scene.TextureIDs.size()) ? scene.TextureIDs[ti2] : 0u;
+                if (tid > 0) { ImGui::Image((ImTextureID)(intptr_t)tid, {24,24}); ImGui::SameLine(); }
+                if (ImGui::Selectable(fn2.c_str(), mat.TexturePath == tp)) {
+                    mat.TexturePath = tp;
+                    mat.TextureID   = tid;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+        }
+        if (!mat.TexturePath.empty()) {
+            ImGui::Separator();
+            if (ImGui::Selectable("(Nenhuma)")) { mat.TexturePath.clear(); mat.TextureID = 0; ImGui::CloseCurrentPopup(); }
+        }
+        ImGui::EndPopup();
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("GL Texture ID: %u", mat.TextureID);
+}
+
 void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
-                             int winX, int winY, int panelW, int panelH)
+                             int winX, int winY, int panelW, int panelH,
+                             int selectedMaterial)
 {
     ImGui::SetNextWindowPos(ImVec2((float)winX, (float)winY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2((float)panelW, (float)panelH), ImGuiCond_Always);
@@ -419,6 +673,14 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                           ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     ImGui::Begin("Inspector", nullptr, wf);
+
+    // Material selecionado no Asset Browser -- mostra editor de material
+    if (selectedEntity < 0 && selectedGroup < 0 && selectedMaterial >= 0)
+    {
+        DrawMaterialEditor(scene, selectedMaterial);
+        ImGui::End();
+        return;
+    }
 
     if (selectedEntity < 0 && selectedGroup < 0)
     {
@@ -459,6 +721,12 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     // --- Transform always first ---
     DrawTransformSection(scene.Transforms[selectedEntity]);
 
+
+    // --- Material module obrigatório sempre após Transform (exceto para GameCamera) ---
+    bool isCamera = (selectedEntity >= 0 && selectedEntity < (int)scene.GameCameras.size() && scene.GameCameras[selectedEntity].Active);
+    if (!isCamera)
+        DrawMaterialModule(scene, selectedEntity);
+
     // --- Other components in user-defined order ---
     std::vector<int>& order = GetOrBuildOrder(scene, selectedEntity);
 
@@ -476,12 +744,11 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
             case COMP_COLLIDER:
                 kept = DrawColliderSection(scene, selectedEntity, i, order);
                 break;
+            case COMP_RIGIDBODY:
+                kept = DrawRigidBodySection(scene.RigidBodies[selectedEntity], i, order);
+                break;
         }
-        // If removed, the element was erased internally (via GetOrBuildOrder sync next
-        // frame), but we still need to skip the increment to handle the new element at i.
-        // Since we set the flag false and the erase happens via GetOrBuildOrder on next
-        // frame, we just advance normally — the removed state is already set on the
-        // component.
+        // ...existing code...
         if (!kept)
         {
             // Remove from order immediately so the list stays correct this frame

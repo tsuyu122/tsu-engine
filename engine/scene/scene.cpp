@@ -15,6 +15,8 @@ Entity Scene::CreateEntity(const std::string& name)
     GameCameras.emplace_back();
     EntityNames.push_back(name);
     EntityGroups.push_back(-1);
+    EntityMaterial.push_back(-1);
+    EntityColors.push_back(glm::vec3(1.0f, 1.0f, 1.0f));
     EntityParents.push_back(-1);
     EntityChildren.emplace_back();       // empty children list
     RootOrder.push_back((int)id);        // new entity starts at root
@@ -192,6 +194,67 @@ void Scene::DeleteGroup(int groupIdx)
     Groups[groupIdx].Name = "";
     Groups[groupIdx].ChildEntities.clear();
     Groups[groupIdx].ChildGroups.clear();
+}
+
+void Scene::DeleteEntity(int idx)
+{
+    if (idx < 0 || idx >= (int)Transforms.size()) return;
+
+    // Detach from parent
+    int par = (idx < (int)EntityParents.size()) ? EntityParents[idx] : -1;
+    if (par >= 0)
+    {
+        auto& ch = EntityChildren[par];
+        ch.erase(std::remove(ch.begin(), ch.end(), idx), ch.end());
+    }
+
+    // Detach children — they go to root
+    for (int child : EntityChildren[idx])
+    {
+        EntityParents[child] = -1;
+        RootOrder.push_back(child);
+    }
+
+    // Remove from group
+    int grp = EntityGroups[idx];
+    if (grp >= 0 && grp < (int)Groups.size())
+    {
+        auto& ce = Groups[grp].ChildEntities;
+        ce.erase(std::remove(ce.begin(), ce.end(), idx), ce.end());
+    }
+
+    // Remove from root order
+    RootOrder.erase(std::remove(RootOrder.begin(), RootOrder.end(), idx), RootOrder.end());
+
+    // Helper: fix any index > idx (shift down by 1) in a list
+    auto fixIdx = [&](int& v) { if (v > idx) --v; else if (v == idx) v = -1; };
+    auto fixList = [&](std::vector<int>& list)
+    {
+        for (auto& v : list) if (v > idx) --v;
+    };
+
+    // Erase from all parallel arrays
+    auto erase1 = [&](auto& vec) { vec.erase(vec.begin() + idx); };
+    erase1(Transforms);
+    erase1(Cameras);
+    erase1(MeshRenderers);
+    erase1(RigidBodies);
+    erase1(GameCameras);
+    erase1(EntityNames);
+    erase1(EntityGroups);
+    erase1(EntityParents);
+    erase1(EntityChildren);
+    erase1(EntityMaterial);
+    erase1(EntityColors);
+    // RootOrder was already cleaned manually — just fix remaining indices:
+    fixList(RootOrder);
+
+    // Fix EntityParents and EntityChildren references
+    for (auto& p : EntityParents) if (p > idx) --p;
+    for (auto& childList : EntityChildren) fixList(childList);
+
+    // Fix group ChildEntities
+    for (auto& g : Groups) fixList(g.ChildEntities);
 }
 
 } // namespace tsu

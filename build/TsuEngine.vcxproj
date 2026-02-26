@@ -86,7 +86,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -112,10 +112,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -154,7 +154,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -181,10 +181,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -223,7 +223,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -250,10 +250,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -292,7 +292,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -318,10 +318,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -424,6 +424,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\physics\physicsSystem.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\renderer\mesh.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\renderer\renderer.cpp" />
+    <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\renderer\textureLoader.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\scene\entity.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\scene\scene.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\serialization\sceneSerializer.cpp" />

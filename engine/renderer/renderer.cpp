@@ -51,25 +51,49 @@ void Renderer::Init()
         layout(location=0) in vec3 aPos;
         layout(location=1) in vec3 aNormal;
         layout(location=2) in vec3 aColor;
-        out vec3 vColor; out vec3 vNormal; out vec3 vFragPos;
+        out vec3 vColor; out vec3 vNormal; out vec3 vFragPos; out vec3 vLocalPos;
         uniform mat4 u_MVP; uniform mat4 u_Model;
         void main(){
             vColor=aColor;
+            vLocalPos=aPos;
             vNormal=mat3(transpose(inverse(u_Model)))*aNormal;
             vFragPos=vec3(u_Model*vec4(aPos,1.0));
             gl_Position=u_MVP*vec4(aPos,1.0);
         }
     )", R"(
         #version 330 core
-        in vec3 vColor; in vec3 vNormal; in vec3 vFragPos;
+        in vec3 vColor; in vec3 vNormal; in vec3 vFragPos; in vec3 vLocalPos;
         out vec4 FragColor;
         uniform vec3 u_LightPos;
+        uniform vec3 u_MaterialColor;
+        uniform sampler2D u_Texture;
+        uniform int u_UseTexture;
         void main(){
             vec3 ld=normalize(u_LightPos-vFragPos);
             float d=max(dot(normalize(vNormal),ld),0.2);
-            FragColor=vec4(vColor*d,1.0);
+            vec3 base;
+            if(u_UseTexture!=0){
+                // Triplanar mapping em espaço local: cada face recebe UV correto
+                vec3 n=abs(normalize(vNormal));
+                // Sharpness do blend entre eixos
+                n=pow(n,vec3(8.0));
+                float sum=n.x+n.y+n.z+0.0001;
+                n/=sum;
+                // UV de cada projeção (vLocalPos em [-0.5,0.5] -> UV em [0,1])
+                vec2 uvX=(vLocalPos.zy+0.5);
+                vec2 uvY=(vLocalPos.xz+0.5);
+                vec2 uvZ=(vLocalPos.xy+0.5);
+                vec4 cX=texture(u_Texture,uvX)*n.x;
+                vec4 cY=texture(u_Texture,uvY)*n.y;
+                vec4 cZ=texture(u_Texture,uvZ)*n.z;
+                vec4 tc=cX+cY+cZ;
+                base=tc.rgb*u_MaterialColor;
+            }else{
+                base=vColor*u_MaterialColor;
+            }
+            FragColor=vec4(base*d,1.0);
         }
-    )");
+    )");;
 
     // Shader de gizmo — sem iluminação, com alpha
     s_GizmoShader = LinkProgram(R"(
@@ -142,20 +166,181 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
 {
     glUseProgram(shader);
     glm::vec3 lightPos(3.0f, 6.0f, 3.0f);
-    unsigned int mvpLoc   = glGetUniformLocation(shader, "u_MVP");
-    unsigned int modelLoc = glGetUniformLocation(shader, "u_Model");
-    unsigned int lightLoc = glGetUniformLocation(shader, "u_LightPos");
+    unsigned int mvpLoc       = glGetUniformLocation(shader, "u_MVP");
+    unsigned int modelLoc     = glGetUniformLocation(shader, "u_Model");
+    unsigned int lightLoc     = glGetUniformLocation(shader, "u_LightPos");
+    unsigned int materialLoc  = glGetUniformLocation(shader, "u_MaterialColor");
+    unsigned int texLoc       = glGetUniformLocation(shader, "u_Texture");
+    unsigned int useTexLoc    = glGetUniformLocation(shader, "u_UseTexture");
     glUniform3fv(lightLoc, 1, &lightPos[0]);
+    glUniform1i(texLoc, 0); // GL_TEXTURE0
 
     for (size_t i=0; i<scene.Transforms.size(); i++)
     {
         if (!scene.MeshRenderers[i].MeshPtr) continue;
         glm::mat4 model = scene.GetEntityWorldMatrix((int)i);
         glm::mat4 mvp   = proj * view * model;
+        // Material
+        glm::vec3 matCol(1.0f, 1.0f, 1.0f);
+        unsigned int texID = 0;
+        if (i < (int)scene.EntityMaterial.size())
+        {
+            int mid = scene.EntityMaterial[i];
+            if (mid >= 0 && mid < (int)scene.Materials.size()) {
+                matCol = scene.Materials[mid].Color;
+                texID  = scene.Materials[mid].TextureID;
+            } else if (i < (int)scene.EntityColors.size()) {
+                matCol = scene.EntityColors[i];
+            }
+        }
+        // Bind texture
+        if (texID > 0) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, texID);
+            glUniform1i(useTexLoc, 1);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, 0);
+            glUniform1i(useTexLoc, 0);
+        }
+        glUniform3fv(materialLoc, 1, &matCol[0]);
         glUniformMatrix4fv(mvpLoc,   1, GL_FALSE, &mvp[0][0]);
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, &model[0][0]);
         scene.MeshRenderers[i].MeshPtr->Draw();
     }
+    // Unbind texture after draw loop
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+// ----------------------------------------------------------------
+// DrawColliderGizmos — wireframe verde das formas de colisão
+// ----------------------------------------------------------------
+
+void Renderer::DrawColliderGizmos(Scene& scene, const glm::mat4& view, const glm::mat4& proj)
+{
+    struct Vtx { float x,y,z, nx,ny,nz, r,g,b; };
+    static unsigned int cVAO = 0, cVBO = 0;
+    if (!cVAO) { glGenVertexArrays(1, &cVAO); glGenBuffers(1, &cVBO); }
+
+    glUseProgram(s_GizmoShader);
+    unsigned int mvpLoc   = glGetUniformLocation(s_GizmoShader, "u_MVP");
+    unsigned int alphaLoc = glGetUniformLocation(s_GizmoShader, "u_Alpha");
+    glUniform1f(alphaLoc, 0.9f);
+    glDisable(GL_DEPTH_TEST);
+    glLineWidth(1.5f);
+
+    std::vector<Vtx> verts;
+
+    auto addLine = [&](glm::vec3 a, glm::vec3 b, float r=0.1f, float g=1.0f, float bv=0.2f) {
+        verts.push_back({a.x,a.y,a.z, 0,1,0, r,g,bv});
+        verts.push_back({b.x,b.y,b.z, 0,1,0, r,g,bv});
+    };
+
+    const int CIRC_SEG = 16;
+
+    for (int i = 0; i < (int)scene.RigidBodies.size(); i++)
+    {
+        auto& rb = scene.RigidBodies[i];
+        if (!rb.ShowCollider || !rb.HasColliderModule) continue;
+
+        // World matrix do entity: contém posição + rotação + escala do parent chain
+        glm::mat4 worldMat = scene.GetEntityWorldMatrix(i);
+
+        // Extrai só a parte de rotação (normaliza as colunas para remover escala)
+        glm::mat4 rotMat(1.0f);
+        rotMat[0] = glm::vec4(glm::normalize(glm::vec3(worldMat[0])), 0.0f);
+        rotMat[1] = glm::vec4(glm::normalize(glm::vec3(worldMat[1])), 0.0f);
+        rotMat[2] = glm::vec4(glm::normalize(glm::vec3(worldMat[2])), 0.0f);
+
+        // Posição world do centro do collider (offset também é rotacionado)
+        glm::vec3 entityPos = glm::vec3(worldMat[3]);
+        glm::vec3 wpos = entityPos + glm::vec3(rotMat * glm::vec4(rb.ColliderOffset, 0.0f));
+
+        // Tamanho do collider aplicando escala world extraída da worldMat
+        glm::vec3 worldScale = {
+            glm::length(glm::vec3(worldMat[0])),
+            glm::length(glm::vec3(worldMat[1])),
+            glm::length(glm::vec3(worldMat[2]))
+        };
+        glm::vec3 sz  = rb.ColliderSize   * worldScale;
+        float     rad = rb.ColliderRadius * worldScale.x;
+        float     hgt = rb.ColliderHeight * worldScale.y;
+
+        // Helper: transforma ponto local (relativo ao centro do collider) para world-space
+        auto toWorld = [&](glm::vec3 local) -> glm::vec3 {
+            return wpos + glm::vec3(rotMat * glm::vec4(local, 0.0f));
+        };
+
+        if (rb.Collider == ColliderType::Box)
+        {
+            glm::vec3 h = sz * 0.5f;
+            glm::vec3 c[8] = {
+                toWorld({-h.x,-h.y,-h.z}), toWorld({+h.x,-h.y,-h.z}),
+                toWorld({+h.x,-h.y,+h.z}), toWorld({-h.x,-h.y,+h.z}),
+                toWorld({-h.x,+h.y,-h.z}), toWorld({+h.x,+h.y,-h.z}),
+                toWorld({+h.x,+h.y,+h.z}), toWorld({-h.x,+h.y,+h.z}),
+            };
+            int edges[12][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
+            for (auto& e : edges) addLine(c[e[0]], c[e[1]]);
+        }
+        else if (rb.Collider == ColliderType::Pyramid)
+        {
+            glm::vec3 h = sz * 0.5f;
+            glm::vec3 apex = toWorld({0.0f, h.y, 0.0f});
+            glm::vec3 c[4] = {
+                toWorld({-h.x,-h.y,-h.z}), toWorld({+h.x,-h.y,-h.z}),
+                toWorld({+h.x,-h.y,+h.z}), toWorld({-h.x,-h.y,+h.z}),
+            };
+            for (int k=0;k<4;k++) addLine(c[k], c[(k+1)%4]);
+            for (int k=0;k<4;k++) addLine(c[k], apex);
+        }
+        else if (rb.Collider == ColliderType::Sphere)
+        {
+            for (int axis = 0; axis < 3; axis++) {
+                for (int k = 0; k < CIRC_SEG; k++) {
+                    float a0 = 2*3.14159f*k/CIRC_SEG, a1 = 2*3.14159f*(k+1)/CIRC_SEG;
+                    glm::vec3 p0(0), p1(0);
+                    if      (axis==0) { p0={0,sinf(a0)*rad,cosf(a0)*rad}; p1={0,sinf(a1)*rad,cosf(a1)*rad}; }
+                    else if (axis==1) { p0={sinf(a0)*rad,0,cosf(a0)*rad}; p1={sinf(a1)*rad,0,cosf(a1)*rad}; }
+                    else              { p0={sinf(a0)*rad,cosf(a0)*rad,0}; p1={sinf(a1)*rad,cosf(a1)*rad,0}; }
+                    addLine(toWorld(p0), toWorld(p1));
+                }
+            }
+        }
+        else if (rb.Collider == ColliderType::Capsule)
+        {
+            float halfH = hgt * 0.5f;
+            for (int k = 0; k < CIRC_SEG; k++) {
+                float a0=2*3.14159f*k/CIRC_SEG, a1=2*3.14159f*(k+1)/CIRC_SEG;
+                glm::vec3 t0={sinf(a0)*rad, halfH, cosf(a0)*rad};
+                glm::vec3 t1={sinf(a1)*rad, halfH, cosf(a1)*rad};
+                glm::vec3 b0={sinf(a0)*rad,-halfH, cosf(a0)*rad};
+                glm::vec3 b1={sinf(a1)*rad,-halfH, cosf(a1)*rad};
+                addLine(toWorld(t0), toWorld(t1));
+                addLine(toWorld(b0), toWorld(b1));
+                if (k%4==0) addLine(toWorld(t0), toWorld(b0));
+            }
+        }
+    }
+
+    if (!verts.empty())
+    {
+        glBindVertexArray(cVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, cVBO);
+        glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(Vtx), verts.data(), GL_DYNAMIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9*sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9*sizeof(float), (void*)(3*sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9*sizeof(float), (void*)(6*sizeof(float)));
+        glEnableVertexAttribArray(2);
+        // Vértices já em world-space → model = identidade
+        glm::mat4 mvp = proj * view;
+        glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, &mvp[0][0]);
+        glDrawArrays(GL_LINES, 0, (GLsizei)verts.size());
+    }
+
+    glLineWidth(1.0f);
+    glEnable(GL_DEPTH_TEST);
 }
 
 // ----------------------------------------------------------------
@@ -186,18 +371,18 @@ void Renderer::DrawGizmos(Scene& scene, const glm::mat4& view, const glm::mat4& 
         glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, &mvp[0][0]);
         gizmoSphere.Draw();
 
-        // Linha na direção Front da game camera
-        glm::vec3 front = scene.GameCameras[i].Front;
-
-        // A linha mesh aponta em +Z por padrão
-        glm::vec3 defaultDir = {0.0f, 0.0f, 1.0f};
-        glm::vec3 axis = glm::cross(defaultDir, front);
-        float angle = acos(glm::clamp(glm::dot(defaultDir, front), -1.0f, 1.0f));
-
-        glm::mat4 lineModel = glm::translate(glm::mat4(1.0f), pos);
-        if (glm::length(axis) > 0.0001f)
-            lineModel = glm::rotate(lineModel, angle, glm::normalize(axis));
-
+        // Seta aponta para onde a câmera olha (-Z local = coluna 2 negada)
+        // Derivado do world matrix do Transform do entity (não de GameCamera.Front)
+        glm::mat4 wm        = scene.GetEntityWorldMatrix((int)i);
+        glm::vec3 camRight   =  glm::normalize(glm::vec3(wm[0]));
+        glm::vec3 camUp      =  glm::normalize(glm::vec3(wm[1]));
+        glm::vec3 camForward = -glm::normalize(glm::vec3(wm[2])); // câmera olha -Z
+        // Rotation matrix: columns are the new axes (GLM column-major: mat[col][row])
+        glm::mat4 rot(1.0f);
+        rot[0] = glm::vec4(camRight,   0.0f);  // column 0 = camera right
+        rot[1] = glm::vec4(camUp,      0.0f);  // column 1 = camera up
+        rot[2] = glm::vec4(camForward, 0.0f);  // column 2 = camera forward
+        glm::mat4 lineModel = glm::translate(glm::mat4(1.0f), pos) * rot;
         mvp = proj * view * lineModel;
         glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, &mvp[0][0]);
         gizmoLine.Draw();
@@ -217,6 +402,7 @@ void Renderer::RenderSceneEditor(Scene& scene, const EditorCamera& camera, int w
     glm::mat4 projection = camera.GetProjection(aspect);
 
     DrawScene(scene, view, projection, s_ShaderProgram);
+    DrawColliderGizmos(scene, view, projection);
     DrawGizmos(scene, view, projection);
 }
 
@@ -231,8 +417,13 @@ void Renderer::RenderSceneGame(Scene& scene, int winW, int winH)
 
     float aspect        = (float)winW / (float)winH;
     auto& gc            = scene.GameCameras[camIdx];
-    glm::vec3 pos       = scene.Transforms[camIdx].Position;
-    glm::mat4 view      = glm::lookAt(pos, pos + gc.Front, gc.Up);
+
+    // View derivada do world matrix do Transform (so the entity Rotation drives the camera)
+    glm::mat4 wm        = scene.GetEntityWorldMatrix(camIdx);
+    glm::vec3 pos       = glm::vec3(wm[3]);
+    glm::vec3 camFwd    = -glm::normalize(glm::vec3(wm[2]));
+    glm::vec3 camUp     =  glm::normalize(glm::vec3(wm[1]));
+    glm::mat4 view      = glm::lookAt(pos, pos + camFwd, camUp);
     glm::mat4 proj      = gc.GetProjection(aspect);
 
     DrawScene(scene, view, proj, s_ShaderProgram);
