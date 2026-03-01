@@ -3,13 +3,13 @@
 
 namespace tsu {
 
-// Tipos de collider disponíveis
+// Available collider types
 enum class ColliderType {
     None,
-    Box,       // AABB — para cubos
-    Sphere,    // para esferas
-    Capsule,   // para cilindros/cápsulas
-    Pyramid    // aproximado como cone AABB
+    Box,       // AABB — for cubes
+    Sphere,    // for spheres
+    Capsule,   // for cylinders/capsules
+    Pyramid    // approximated as cone AABB
 };
 
 struct RigidBodyComponent

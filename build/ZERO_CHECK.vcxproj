@@ -69,7 +69,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -79,7 +79,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -89,7 +89,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -99,7 +99,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>

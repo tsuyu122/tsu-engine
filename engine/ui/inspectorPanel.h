@@ -19,7 +19,15 @@ public:
 
     void Render(Scene& scene, int selectedEntity, int selectedGroup,
                 int winX, int winY, int panelW, int panelH,
-                int selectedMaterial = -1);
+                int selectedMaterial = -1, int selectedTexture = -1,
+                int selectedPrefab = -1, const std::vector<int>* multiSelection = nullptr);
+
+    // Prefab editor mode: set before calling Render so inspector shows node properties
+    void SetPrefabEditorState(bool active, int prefabIdx, int selectedNode) {
+        m_PrefabEditorActive = active;
+        m_PrefabEditorIdx    = prefabIdx;
+        m_PrefabSelectedNode = selectedNode;
+    }
 
 private:
     void DrawTransformSection (TransformComponent& t, const char* label = "Transform");
@@ -45,6 +53,7 @@ private:
     void DrawAddComponentMenu (Scene& scene, int entityIdx, std::vector<int>& order);
     void DrawAddGroupComponentMenu(SceneGroup& group, std::vector<int>& order);
     void DrawMaterialEditor   (Scene& scene, int matIdx);
+    void DrawTextureInspector (Scene& scene, int texIdx);
 
     std::vector<int>& GetOrBuildOrder     (Scene& scene, int entityIdx);
     std::vector<int>& GetOrBuildGroupOrder(SceneGroup& group, int groupIdx);
@@ -53,6 +62,11 @@ private:
     char m_SearchBuffer[128] = {};  // Add Component search
     std::map<int, std::vector<int>> m_CompOrder;
     std::map<int, std::vector<int>> m_GroupCompOrder;
+
+    // Prefab editor state (set externally via SetPrefabEditorState)
+    bool m_PrefabEditorActive = false;
+    int  m_PrefabEditorIdx    = -1;
+    int  m_PrefabSelectedNode = -1;
 };
 
 } // namespace tsu

@@ -86,7 +86,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -112,10 +112,10 @@
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -123,7 +123,7 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copiando assets...</Message>
+      <Message>Copying assets...</Message>
       <Command>setlocal
 "C:\Program Files\Microsoft Visual Studio\18\Insiders\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E copy_directory C:/Users/hm/Desktop/tsuEngine/assets C:/Users/hm/Desktop/tsuEngine/build/Debug/assets
 if %errorlevel% neq 0 goto :cmEnd
@@ -154,7 +154,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -181,10 +181,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -192,7 +192,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copiando assets...</Message>
+      <Message>Copying assets...</Message>
       <Command>setlocal
 "C:\Program Files\Microsoft Visual Studio\18\Insiders\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E copy_directory C:/Users/hm/Desktop/tsuEngine/assets C:/Users/hm/Desktop/tsuEngine/build/Release/assets
 if %errorlevel% neq 0 goto :cmEnd
@@ -223,7 +223,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -250,10 +250,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -261,7 +261,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copiando assets...</Message>
+      <Message>Copying assets...</Message>
       <Command>setlocal
 "C:\Program Files\Microsoft Visual Studio\18\Insiders\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E copy_directory C:/Users/hm/Desktop/tsuEngine/assets C:/Users/hm/Desktop/tsuEngine/build/MinSizeRel/assets
 if %errorlevel% neq 0 goto :cmEnd
@@ -292,7 +292,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
       <BasicRuntimeChecks>Default</BasicRuntimeChecks>
       <BufferSecurityCheck></BufferSecurityCheck>
@@ -318,10 +318,10 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
     <Midl>
-      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\hm\Desktop\tsuEngine\external\glfw\include;C:\Users\hm\Desktop\tsuEngine\external\glad\include;C:\Users\hm\Desktop\tsuEngine\external\glm;C:\Users\hm\Desktop\tsuEngine\external\stb;C:\Users\hm\Desktop\tsuEngine\.;C:\Users\hm\Desktop\tsuEngine\Engine;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src;C:\Users\hm\Desktop\tsuEngine\build\_deps\imgui-src\backends;C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
       <HeaderFileName>%(Filename).h</HeaderFileName>
       <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
@@ -329,7 +329,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <PostBuildEvent>
-      <Message>Copiando assets...</Message>
+      <Message>Copying assets...</Message>
       <Command>setlocal
 "C:\Program Files\Microsoft Visual Studio\18\Insiders\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" -E copy_directory C:/Users/hm/Desktop/tsuEngine/assets C:/Users/hm/Desktop/tsuEngine/build/RelWithDebInfo/assets
 if %errorlevel% neq 0 goto :cmEnd
@@ -428,6 +428,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\scene\entity.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\scene\scene.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\serialization\sceneSerializer.cpp" />
+    <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\serialization\prefabSerializer.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\ui\hierarchyPanel.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\ui\inspectorPanel.cpp" />
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\ui\uiManager.cpp" />

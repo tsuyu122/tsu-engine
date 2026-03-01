@@ -21,11 +21,17 @@ public:
     static Mesh CreateCapsule (const std::string& hexColor = "#FFFFFF", float radius = 0.5f, float height = 1.0f, int segments = 32);
     static Mesh CreatePlane   (const std::string& hexColor = "#FFFFFF");
 
+    // Load an OBJ file from disk; returns an empty mesh on failure
+    static Mesh LoadOBJ(const std::string& path);
+
     // Gizmos internos do editor (sem textura, cor fixa)
-    static Mesh CreateGizmoSphere(float radius = 0.08f); // bolinha da game camera
-    static Mesh CreateGizmoLine  (float length = 0.6f);  // linha de direção
-    // Seta do gizmo de translação (cilindro + cone, aponta em +Y)
+    static Mesh CreateGizmoSphere(float radius = 0.08f);
+    static Mesh CreateGizmoLine  (float length = 0.6f);
     static Mesh CreateGizmoArrow (float length, float r, float g, float b);
+
+    // Axis-aligned bounding box (object space)
+    glm::vec3 BoundsMin = glm::vec3(-0.5f);
+    glm::vec3 BoundsMax = glm::vec3( 0.5f);
 
 private:
     unsigned int VAO, VBO;

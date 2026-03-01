@@ -22,13 +22,14 @@ Entity Scene::CreateEntity(const std::string& name)
     Lights.emplace_back();
     EntityParents.push_back(-1);
     EntityChildren.emplace_back();       // empty children list
+    EntityIsPrefabInstance.push_back(false);
     RootOrder.push_back((int)id);        // new entity starts at root
     return Entity(id, this);
 }
 
 void Scene::OnUpdate(float dt)
 {
-    // Scripts e behaviours futuros vão aqui
+    // Future scripts and behaviours go here
     (void)dt;
 }
 
@@ -252,6 +253,8 @@ void Scene::DeleteEntity(int idx)
     erase1(PlayerControllers);
     erase1(MouseLooks);
     erase1(Lights);
+    if (idx < (int)EntityIsPrefabInstance.size())
+        EntityIsPrefabInstance.erase(EntityIsPrefabInstance.begin() + idx);
     // RootOrder was already cleaned manually — just fix remaining indices:
     fixList(RootOrder);
 

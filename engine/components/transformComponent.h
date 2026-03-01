@@ -7,16 +7,16 @@ namespace tsu {
 struct TransformComponent
 {
     glm::vec3 Position = {0.0f, 0.0f, 0.0f};
-    glm::vec3 Rotation = {0.0f, 0.0f, 0.0f}; // em graus
+    glm::vec3 Rotation = {0.0f, 0.0f, 0.0f}; // in degrees
     glm::vec3 Scale    = {1.0f, 1.0f, 1.0f};
 
-    // 1️⃣ Movimento em eixo global (ignora rotação)
+    // 1️⃣ World-axis movement (ignores rotation)
     void MoveWorld(const glm::vec3& dir, float speed)
     {
         Position += dir * speed;
     }
 
-    // 2️⃣ Movimento baseado na rotação do objeto
+    // 2️⃣ Movement based on object rotation
     void MoveLocal(const glm::vec3& dir, float speed)
     {
         glm::mat4 rotationMatrix = glm::mat4(1.0f);
@@ -29,13 +29,13 @@ struct TransformComponent
         Position += finalDir * speed;
     }
 
-    // 3️⃣ Movimento estilo personagem (usa deltaTime)
+    // 3️⃣ Character-style movement (uses deltaTime)
     void MoveCharacter(const glm::vec3& dir, float speed, float dt)
     {
         Position += dir * speed * dt;
     }
 
-    // 4️⃣ Movimento físico (placeholder)
+    // 4️⃣ Physics movement (placeholder)
     void MovePhysics(const glm::vec3& velocity, float dt)
     {
         Position += velocity * dt;

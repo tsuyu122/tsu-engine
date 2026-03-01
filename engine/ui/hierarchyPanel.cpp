@@ -1,9 +1,13 @@
 ﻿#include "ui/hierarchyPanel.h"
 #include "scene/entity.h"
 #include "renderer/mesh.h"
+#include "serialization/prefabSerializer.h"
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <cstring>
 #include <algorithm>
+#include <filesystem>
+#include <functional>
 
 namespace tsu {
 
@@ -33,13 +37,15 @@ void HierarchyPanel::CreateMeshEntity(Scene& scene, const std::string& type, int
 
     std::string color = "#DDDDDD";
     Mesh* mesh = nullptr;
-    if      (type == "Cube")     mesh = new Mesh(Mesh::CreateCube(color));
-    else if (type == "Sphere")   mesh = new Mesh(Mesh::CreateSphere(color));
-    else if (type == "Pyramid")  mesh = new Mesh(Mesh::CreatePyramid(color));
-    else if (type == "Cylinder") mesh = new Mesh(Mesh::CreateCylinder(color));
-    else if (type == "Capsule")  mesh = new Mesh(Mesh::CreateCapsule(color));
-    else if (type == "Plane")    mesh = new Mesh(Mesh::CreatePlane(color));
-    scene.MeshRenderers[id].MeshPtr = mesh;
+    std::string meshType;
+    if      (type == "Cube")     { mesh = new Mesh(Mesh::CreateCube(color));     meshType = "cube"; }
+    else if (type == "Sphere")   { mesh = new Mesh(Mesh::CreateSphere(color));   meshType = "sphere"; }
+    else if (type == "Pyramid")  { mesh = new Mesh(Mesh::CreatePyramid(color));  meshType = "pyramid"; }
+    else if (type == "Cylinder") { mesh = new Mesh(Mesh::CreateCylinder(color)); meshType = "cylinder"; }
+    else if (type == "Capsule")  { mesh = new Mesh(Mesh::CreateCapsule(color));  meshType = "capsule"; }
+    else if (type == "Plane")    { mesh = new Mesh(Mesh::CreatePlane(color));    meshType = "plane"; }
+    scene.MeshRenderers[id].MeshPtr  = mesh;
+    scene.MeshRenderers[id].MeshType = meshType;
 
     // If an entity is selected, spawn at its position and make it a child
     if (selectedEntity >= 0 && selectedEntity < (int)scene.Transforms.size())
@@ -134,6 +140,80 @@ void HierarchyPanel::CreateLightEntity(Scene& scene, LightType type, int& select
 }
 
 // ----------------------------------------------------------------
+// CreatePrefab  — recursive snapshot of entity + all children
+// ----------------------------------------------------------------
+void HierarchyPanel::CreatePrefab(Scene& scene, int entityIdx)
+{
+    if (entityIdx < 0 || entityIdx >= (int)scene.EntityNames.size()) return;
+
+    PrefabAsset prefab;
+    prefab.Name = scene.EntityNames[entityIdx];
+
+    // Recursive walk: snap entity tree into flat Nodes list, ParentIdx = index in list
+    std::function<void(int, int)> snap = [&](int eIdx, int parentNodeIdx)
+    {
+        PrefabEntityData node;
+        node.ParentIdx = parentNodeIdx;
+        node.Name      = scene.EntityNames[eIdx];
+
+        // Transform; root node stored with zero position (placed at spawn pos)
+        node.Transform = scene.Transforms[eIdx];
+        if (parentNodeIdx == -1)
+            node.Transform.Position = {0.0f, 0.0f, 0.0f};
+
+        // Mesh
+        if (eIdx < (int)scene.MeshRenderers.size() && scene.MeshRenderers[eIdx].MeshPtr)
+            node.MeshType = scene.MeshRenderers[eIdx].MeshType;
+
+        // Material
+        if (eIdx < (int)scene.EntityMaterial.size() && scene.EntityMaterial[eIdx] >= 0)
+        {
+            int mi = scene.EntityMaterial[eIdx];
+            if (mi < (int)scene.Materials.size())
+                node.MaterialName = scene.Materials[mi].Name;
+        }
+
+        // Light
+        if (eIdx < (int)scene.Lights.size() && scene.Lights[eIdx].Active)
+        {
+            node.HasLight = true;
+            node.Light    = scene.Lights[eIdx];
+        }
+
+        // Camera
+        if (eIdx < (int)scene.GameCameras.size() && scene.GameCameras[eIdx].Active)
+        {
+            node.HasCamera = true;
+            node.Camera    = scene.GameCameras[eIdx];
+        }
+
+        int myIdx = (int)prefab.Nodes.size();
+        prefab.Nodes.push_back(node);
+
+        // Recurse into children
+        if (eIdx < (int)scene.EntityChildren.size())
+            for (int child : scene.EntityChildren[eIdx])
+                snap(child, myIdx);
+    };
+    snap(entityIdx, -1);
+
+    // Build safe filesystem name
+    std::string safeName = prefab.Name;
+    for (auto& c : safeName) if (c == ' ' || c == '/' || c == '\\') c = '_';
+
+    std::filesystem::create_directories("assets/prefabs");
+    prefab.FilePath = "assets/prefabs/" + safeName + ".tprefab";
+
+    PrefabSerializer::Save(prefab, prefab.FilePath);
+    scene.Prefabs.push_back(prefab);
+
+    // Mark root entity as prefab instance (blue name)
+    while ((int)scene.EntityIsPrefabInstance.size() <= entityIdx)
+        scene.EntityIsPrefabInstance.push_back(false);
+    scene.EntityIsPrefabInstance[entityIdx] = true;
+}
+
+// ----------------------------------------------------------------
 // Insert-zone: thin drag-drop target rendered between sibling items.
 // Accepts ENTITY payload and reorders within lst (RootOrder or
 // group.ChildEntities or EntityChildren[parentEntity]).
@@ -218,7 +298,8 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
     bool isLeaf = entityChildren.empty();
 
     // ---- Tree node flags ----
-    bool isSelected = (selectedEntity == entityIdx);
+    bool isInMulti  = std::find(m_MultiSelection.begin(), m_MultiSelection.end(), entityIdx) != m_MultiSelection.end();
+    bool isSelected = (selectedEntity == entityIdx) || isInMulti;
     ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth;
     if (isLeaf)
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
@@ -229,10 +310,25 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
     bool isCamera = scene.GameCameras[entityIdx].Active;
     bool hasParent = (entityIdx < (int)scene.EntityParents.size())
                      && scene.EntityParents[entityIdx] >= 0;
+    bool isPrefab = (entityIdx < (int)scene.EntityIsPrefabInstance.size())
+                    && scene.EntityIsPrefabInstance[entityIdx];
+    bool isOrphanedPrefab = false;
+    if (isPrefab && entityIdx < (int)scene.EntityPrefabSource.size()) {
+        int srcIdx = scene.EntityPrefabSource[entityIdx];
+        if (srcIdx < 0 || srcIdx >= (int)scene.Prefabs.size())
+            isOrphanedPrefab = true;
+    }
     std::string prefix = isCamera ? "[Cam] " : (hasParent ? "  " : "  ");
     std::string label  = prefix + name + "##e" + std::to_string(entityIdx);
 
+    // Tint prefab instance names: blue if valid, red if orphaned (source prefab deleted)
+    if (isOrphanedPrefab)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+    else if (isPrefab)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.75f, 1.0f, 1.0f));
     bool open = ImGui::TreeNodeEx(label.c_str(), flags);
+    if (isPrefab || isOrphanedPrefab)
+        ImGui::PopStyleColor();
 
     // Select only on clean click-release; suppress selection when the user is
     // dragging the item (e.g. onto an Inspector slot or rearranging hierarchy).
@@ -241,8 +337,45 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
         ImVec2 dd = ImGui::GetMouseDragDelta(0);
         if (fabsf(dd.x) + fabsf(dd.y) < 5.0f)
         {
-            selectedEntity = entityIdx;
-            selectedGroup  = -1;
+            const ImGuiIO& io = ImGui::GetIO();
+            if (io.KeyCtrl)
+            {
+                // Ctrl+click: toggle in multi-selection
+                auto it = std::find(m_MultiSelection.begin(), m_MultiSelection.end(), entityIdx);
+                if (it != m_MultiSelection.end())
+                    m_MultiSelection.erase(it);
+                else
+                {
+                    // Ensure current primary is also in the set
+                    if (selectedEntity >= 0 &&
+                        std::find(m_MultiSelection.begin(), m_MultiSelection.end(), selectedEntity) == m_MultiSelection.end())
+                        m_MultiSelection.push_back(selectedEntity);
+                    m_MultiSelection.push_back(entityIdx);
+                }
+                m_LastSelected = entityIdx;
+                selectedEntity = (!m_MultiSelection.empty()) ? m_MultiSelection.back() : entityIdx;
+                selectedGroup  = -1;
+            }
+            else if (io.KeyShift && m_LastSelected >= 0)
+            {
+                // Shift+click: fill range by raw entity index
+                m_MultiSelection.clear();
+                int from = std::min(m_LastSelected, entityIdx);
+                int to   = std::max(m_LastSelected, entityIdx);
+                for (int ri = from; ri <= to; ri++)
+                    if (ri < (int)scene.EntityNames.size() && !scene.EntityNames[ri].empty())
+                        m_MultiSelection.push_back(ri);
+                selectedEntity = entityIdx;
+                selectedGroup  = -1;
+            }
+            else
+            {
+                // Plain click: single select, clear multi
+                m_MultiSelection.clear();
+                m_LastSelected = entityIdx;
+                selectedEntity = entityIdx;
+                selectedGroup  = -1;
+            }
         }
     }
 
@@ -282,8 +415,18 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
         }
         if (hasParent && ImGui::MenuItem("Unparent"))
             scene.SetEntityParent(entityIdx, -1);
+        if (isPrefab && ImGui::MenuItem("Unpack Prefab"))
+        {
+            if (entityIdx < (int)scene.EntityIsPrefabInstance.size())
+                scene.EntityIsPrefabInstance[entityIdx] = false;
+            if (entityIdx < (int)scene.EntityPrefabSource.size())
+                scene.EntityPrefabSource[entityIdx] = -1;
+        }
         ImGui::Separator();
-        if (ImGui::MenuItem("Apagar Entidade"))
+        if (ImGui::MenuItem("Create Prefab"))
+            CreatePrefab(scene, entityIdx);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Delete Entity"))
         {
             if (selectedEntity == entityIdx) selectedEntity = -1;
             else if (selectedEntity > entityIdx) selectedEntity--;
@@ -394,6 +537,153 @@ void HierarchyPanel::DrawGroupNode(Scene& scene, int groupIdx,
     }
 }
 
+// ----------------------------------------------------------------
+// Prefab editor: draw a prefab node as a tree node
+// ----------------------------------------------------------------
+void HierarchyPanel::DrawPrefabNodeTree(PrefabAsset& prefab, int nodeIdx, int depth)
+{
+    if (nodeIdx < 0 || nodeIdx >= (int)prefab.Nodes.size()) return;
+    PrefabEntityData& node = prefab.Nodes[nodeIdx];
+
+    // Collect children of this node
+    std::vector<int> children;
+    for (int i = 0; i < (int)prefab.Nodes.size(); ++i)
+        if (prefab.Nodes[i].ParentIdx == nodeIdx) children.push_back(i);
+
+    bool hasChildren = !children.empty();
+    bool isSelected  = m_PrefabSelectedNode && (*m_PrefabSelectedNode == nodeIdx);
+
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow |
+                               ImGuiTreeNodeFlags_SpanAvailWidth |
+                               ImGuiTreeNodeFlags_DefaultOpen;
+    if (isSelected) flags |= ImGuiTreeNodeFlags_Selected;
+    if (!hasChildren) flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+
+    // Color: root = cyan, children = white
+    if (depth == 0)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.35f, 0.85f, 1.0f, 1.0f));
+
+    ImGui::PushID(nodeIdx);
+    bool open = ImGui::TreeNodeEx(node.Name.c_str(), flags);
+    if (depth == 0) ImGui::PopStyleColor();
+
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) {
+        if (m_PrefabSelectedNode) *m_PrefabSelectedNode = nodeIdx;
+    }
+
+    // ---- Inline rename for prefab nodes ----
+    if (m_RenamingPrefabNode == nodeIdx)
+    {
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(120);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.2f, 0.4f, 0.9f, 0.8f));
+        bool confirmed = ImGui::InputText("##prefnode_rename", m_RenameBuffer,
+                                          sizeof(m_RenameBuffer),
+                                          ImGuiInputTextFlags_EnterReturnsTrue |
+                                          ImGuiInputTextFlags_AutoSelectAll);
+        ImGui::PopStyleColor();
+        if (confirmed || (!ImGui::IsItemActive() && !ImGui::IsItemFocused() &&
+                          ImGui::IsMouseClicked(0) && !ImGui::IsItemHovered()))
+        {
+            if (m_RenameBuffer[0] != '\0') node.Name = m_RenameBuffer;
+            m_RenamingPrefabNode = -1;
+        }
+    }
+
+    // ---- Right-click context for each prefab node ----
+    if (ImGui::BeginPopupContextItem())
+    {
+        if (ImGui::MenuItem("Rename"))
+        {
+            m_RenamingPrefabNode = nodeIdx;
+            strncpy(m_RenameBuffer, node.Name.c_str(), sizeof(m_RenameBuffer) - 1);
+        }
+        ImGui::Separator();
+        if (ImGui::BeginMenu("Add Child"))
+        {
+            auto addChildNode = [&](const char* name, const std::string& meshType) {
+                PrefabEntityData child;
+                child.Name      = name;
+                child.ParentIdx = nodeIdx;
+                child.MeshType  = meshType;
+                child.Transform.Scale = glm::vec3(1.0f);
+                int newIdx = (int)prefab.Nodes.size();
+                prefab.Nodes.push_back(child);
+                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+            };
+            if (ImGui::BeginMenu("3D Objects"))
+            {
+                if (ImGui::MenuItem("Cube"))     addChildNode("Cube",     "cube");
+                if (ImGui::MenuItem("Sphere"))   addChildNode("Sphere",   "sphere");
+                if (ImGui::MenuItem("Plane"))    addChildNode("Plane",    "plane");
+                if (ImGui::MenuItem("Pyramid"))  addChildNode("Pyramid",  "pyramid");
+                if (ImGui::MenuItem("Cylinder")) addChildNode("Cylinder", "cylinder");
+                if (ImGui::MenuItem("Capsule"))  addChildNode("Capsule",  "capsule");
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("Empty")) addChildNode("Empty", "");
+            if (ImGui::MenuItem("Light"))
+            {
+                PrefabEntityData child;
+                child.Name      = "Light";
+                child.ParentIdx = nodeIdx;
+                child.HasLight  = true;
+                child.Light.Active  = true;
+                child.Light.Enabled = true;
+                child.Light.Type    = LightType::Point;
+                child.Transform.Scale = glm::vec3(1.0f);
+                int newIdx = (int)prefab.Nodes.size();
+                prefab.Nodes.push_back(child);
+                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+            }
+            if (ImGui::MenuItem("Camera"))
+            {
+                PrefabEntityData child;
+                child.Name      = "Camera";
+                child.ParentIdx = nodeIdx;
+                child.HasCamera = true;
+                child.Camera.Active = true;
+                child.Transform.Scale = glm::vec3(1.0f);
+                int newIdx = (int)prefab.Nodes.size();
+                prefab.Nodes.push_back(child);
+                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::Separator();
+        if (depth > 0 && ImGui::MenuItem("Delete Node"))
+        {
+            // Recursively remove this node and children
+            std::function<void(int)> removeNode = [&](int ni) {
+                // First remove children
+                for (int i = (int)prefab.Nodes.size() - 1; i >= 0; --i)
+                    if (prefab.Nodes[i].ParentIdx == ni) removeNode(i);
+                // Fix parent indices
+                for (auto& n : prefab.Nodes)
+                    if (n.ParentIdx > ni) n.ParentIdx--;
+                    else if (n.ParentIdx == ni) n.ParentIdx = -1;
+                prefab.Nodes.erase(prefab.Nodes.begin() + ni);
+                if (m_PrefabSelectedNode && *m_PrefabSelectedNode >= ni)
+                    (*m_PrefabSelectedNode)--;
+                if (m_PrefabSelectedNode && *m_PrefabSelectedNode < 0)
+                    *m_PrefabSelectedNode = -1;
+            };
+            removeNode(nodeIdx);
+            ImGui::EndPopup();
+            ImGui::PopID();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopID();
+
+    if (open && hasChildren) {
+        for (int ci : children)
+            DrawPrefabNodeTree(prefab, ci, depth + 1);
+        ImGui::TreePop();
+    }
+}
+
 void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
                              int winX, int winY, int panelW, int panelH)
 {
@@ -409,6 +699,100 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
                           ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     ImGui::Begin("Hierarchy", nullptr, wf);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
+
+    // ---- Prefab editor mode: show prefab nodes instead of scene hierarchy ----
+    if (m_PrefabEditorActive && m_PrefabEditorIdx >= 0 &&
+        m_PrefabEditorIdx < (int)scene.Prefabs.size())
+    {
+        PrefabAsset& prefab = scene.Prefabs[m_PrefabEditorIdx];
+
+        // Sync / Save buttons at the top of the hierarchy
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.82f, 1.0f));
+        if (ImGui::Button("Sync Instances", ImVec2(-1, 0)) && m_SyncCallback)
+            m_SyncCallback();
+        ImGui::PopStyleColor();
+
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.65f, 0.35f, 1.0f));
+        if (ImGui::Button("Save to Disk", ImVec2(-1, 0)) && m_SaveCallback)
+            m_SaveCallback();
+        ImGui::PopStyleColor();
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Prefab: %s", prefab.Name.c_str());
+        ImGui::Separator();
+
+        // Draw prefab node tree starting from root nodes
+        for (int ni = 0; ni < (int)prefab.Nodes.size(); ++ni)
+            if (prefab.Nodes[ni].ParentIdx < 0)
+                DrawPrefabNodeTree(prefab, ni, 0);
+
+        // Click on empty background deselects node
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            !ImGui::IsAnyItemHovered())
+        {
+            if (m_PrefabSelectedNode) *m_PrefabSelectedNode = -1;
+        }
+
+        // Right-click on empty area = create root-level nodes
+        if (ImGui::BeginPopupContextWindow("##prefab_ctx",
+            ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
+        {
+            auto addRootNode = [&](const char* name, const std::string& meshType) {
+                PrefabEntityData child;
+                child.Name      = name;
+                child.ParentIdx = -1;
+                child.MeshType  = meshType;
+                child.Transform.Scale = glm::vec3(1.0f);
+                int newIdx = (int)prefab.Nodes.size();
+                prefab.Nodes.push_back(child);
+                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+            };
+            if (ImGui::BeginMenu("3D Objects"))
+            {
+                if (ImGui::MenuItem("Cube"))     addRootNode("Cube",     "cube");
+                if (ImGui::MenuItem("Sphere"))   addRootNode("Sphere",   "sphere");
+                if (ImGui::MenuItem("Plane"))    addRootNode("Plane",    "plane");
+                if (ImGui::MenuItem("Pyramid"))  addRootNode("Pyramid",  "pyramid");
+                if (ImGui::MenuItem("Cylinder")) addRootNode("Cylinder", "cylinder");
+                if (ImGui::MenuItem("Capsule"))  addRootNode("Capsule",  "capsule");
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("Empty")) addRootNode("Empty", "");
+            if (ImGui::MenuItem("Light"))
+            {
+                PrefabEntityData child;
+                child.Name      = "Light";
+                child.ParentIdx = -1;
+                child.HasLight  = true;
+                child.Light.Active  = true;
+                child.Light.Enabled = true;
+                child.Light.Type    = LightType::Point;
+                child.Transform.Scale = glm::vec3(1.0f);
+                int newIdx = (int)prefab.Nodes.size();
+                prefab.Nodes.push_back(child);
+                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+            }
+            if (ImGui::MenuItem("Camera"))
+            {
+                PrefabEntityData child;
+                child.Name      = "Camera";
+                child.ParentIdx = -1;
+                child.HasCamera = true;
+                child.Camera.Active = true;
+                child.Transform.Scale = glm::vec3(1.0f);
+                int newIdx = (int)prefab.Nodes.size();
+                prefab.Nodes.push_back(child);
+                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::PopStyleVar();
+        ImGui::End();
+        return;
+    }
 
     for (size_t g = 0; g < scene.Groups.size(); g++)
     {
@@ -429,16 +813,27 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
         }
     }
 
-    // Drop zone at the bottom = move to root
-    ImGui::Dummy(ImVec2(-1.0f, 30.0f));
-    if (ImGui::BeginDragDropTarget())
+    // Drop zone at the bottom = move to root (fill remaining space)
+    // Uses Dummy (not InvisibleButton) so it doesn't eat right-click events
     {
-        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ENTITY"))
+        float remH = ImGui::GetContentRegionAvail().y;
+        if (remH > 4.0f)  // only draw if there's actual remaining space
         {
-            int srcIdx = *(const int*)p->Data;
-            scene.UnparentEntity(srcIdx);
+            ImVec2 p0 = ImGui::GetCursorScreenPos();
+            float dummyW = ImGui::GetContentRegionAvail().x;
+            ImGui::Dummy(ImVec2(dummyW, remH));
+            ImVec2 p1 = ImVec2(p0.x + dummyW, p0.y + remH);
+            ImGuiWindow* win = ImGui::GetCurrentWindow();
+            if (ImGui::BeginDragDropTargetCustom(ImRect(p0, p1), win->ID))
+            {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ENTITY"))
+                {
+                    int srcIdx = *(const int*)p->Data;
+                    scene.UnparentEntity(srcIdx);
+                }
+                ImGui::EndDragDropTarget();
+            }
         }
-        ImGui::EndDragDropTarget();
     }
 
     // Left-click on empty hierarchy background deselects entity/group
@@ -446,8 +841,10 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
         ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
         !ImGui::IsAnyItemHovered())
     {
-        selectedEntity = -1;
-        selectedGroup  = -1;
+        selectedEntity   = -1;
+        selectedGroup    = -1;
+        m_MultiSelection.clear();
+        m_LastSelected   = -1;
     }
 
     // Right-click on empty area = create context menu
@@ -498,6 +895,7 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
         ImGui::EndPopup();
     }
 
+    ImGui::PopStyleVar(); // ItemSpacing
     ImGui::End();
 }
 

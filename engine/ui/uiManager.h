@@ -1,6 +1,7 @@
 #pragma once
 #include "ui/hierarchyPanel.h"
 #include "ui/inspectorPanel.h"
+#include <glm/glm.hpp>
 #include <vector>
 #include <string>
 #include <deque>
@@ -11,6 +12,7 @@ struct ImDrawList;
 namespace tsu {
 
 class Scene;
+enum class GizmoMode;
 
 class UIManager
 {
@@ -24,7 +26,7 @@ public:
     void BeginFrame();
     // Render all panels; returns true if any ImGui window captured input
     bool Render(Scene& scene, int& selectedEntity, int winW, int winH,
-                std::vector<std::string>& droppedFiles);
+                std::vector<std::string>& droppedFiles, GizmoMode& gizmoMode);
     // Submit ImGui draw data to GPU
     void EndFrame();
 
@@ -35,9 +37,17 @@ public:
     int GetViewportTab()  const { return m_ViewportTab; }
     // Current panel width (resizable by dragging the border)
     int GetPanelWidth()   const { return m_PanelWidth; }
+    // Prefab editor state
+    bool IsPrefabEditorActive() const { return m_PrefabEditorOpen && m_ViewportTab == 3; }
+    int  GetEditingPrefabIdx()  const { return m_EditingPrefabIdx; }
+    int  GetPrefabSelectedNode() const { return m_PrefabSelectedNode; }
+    void SetPrefabSelectedNode(int n) { m_PrefabSelectedNode = n; }
 
     // Log a message to the console panel
     void Log(const std::string& msg);
+
+    // Set the viewport drop world position (computed by Application each frame)
+    void SetViewportDropPos(const glm::vec3& pos) { m_ViewportDropPos = pos; }
 
     // Width reserved on each side (pixels) for renderers to know the viewport
     static constexpr int k_PanelWidth = 260;
@@ -53,10 +63,15 @@ private:
     InspectorPanel    m_Inspector;
     int               m_SelectedMaterial = -1;
     int               m_SelectedFolder   = -1;
+    int               m_SelectedTexture  = -1;
+    int               m_SelectedPrefab   = -1;
     int               m_CurrentFolder    = -1;  // -1 = raiz do asset browser
-    int               m_ViewportTab      = 0;   // 0=Scene, 1=Game
+    int               m_ViewportTab      = 0;   // 0=Scene, 1=Game, 2=ProjSettings, 3=PrefabEditor
     int               m_RequestViewportTab = -1;
     bool              m_ProjectSettingsOpen = false;
+    bool              m_PrefabEditorOpen   = false;
+    int               m_EditingPrefabIdx   = -1;
+    int               m_PrefabSelectedNode = -1;  // selected node inside prefab editor
     int               m_SelectedChannelIdx = 0;
     int               m_BottomTab        = 0;   // 0=Assets, 1=Console
     std::deque<std::string> m_ConsoleLogs;
@@ -67,6 +82,8 @@ private:
     bool              m_DraggingRight = false;
     // Project settings left-category selection (0 = Channel System)
     int               m_PsCategory   = 0;
+    // Viewport drop position (world space, computed by Application)
+    glm::vec3         m_ViewportDropPos = glm::vec3(0.0f);
     // Splash screen
     float             m_SplashStart  = -1.0f; // < 0 = not started
     void              DrawSplash(float t, int w, int h);

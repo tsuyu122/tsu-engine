@@ -20,6 +20,17 @@ if(NOT imgui_POPULATED)
     FetchContent_Populate(imgui)
 endif()
 
+# ---- tinyobjloader (header-only) ----
+FetchContent_Declare(
+    tinyobjloader
+    GIT_REPOSITORY https://github.com/tinyobjloader/tinyobjloader.git
+    GIT_TAG        v1.0.6
+)
+FetchContent_GetProperties(tinyobjloader)
+if(NOT tinyobjloader_POPULATED)
+    FetchContent_Populate(tinyobjloader)
+endif()
+
 add_library(imgui STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_draw.cpp
@@ -46,6 +57,7 @@ include_directories(
     Engine
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
+    ${tinyobjloader_SOURCE_DIR}
 )
 
 add_executable(TsuEngine WIN32
@@ -61,6 +73,7 @@ add_executable(TsuEngine WIN32
     Engine/scene/entity.cpp
     Engine/scene/scene.cpp
     Engine/serialization/sceneSerializer.cpp
+    Engine/serialization/prefabSerializer.cpp
     Engine/ui/hierarchyPanel.cpp
     Engine/ui/inspectorPanel.cpp
     Engine/ui/uiManager.cpp
@@ -73,4 +86,4 @@ add_custom_command(TARGET TsuEngine POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/assets"
     "$<TARGET_FILE_DIR:TsuEngine>/assets"
-    COMMENT "Copiando assets...")
+    COMMENT "Copying assets...")

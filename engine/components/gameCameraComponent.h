@@ -5,17 +5,17 @@
 
 namespace tsu {
 
-// Câmera de jogo — existe na scene, ativa só no GameMode
-// No EditorMode aparece como gizmo (bolinha vermelha + linha)
+// Game camera — exists in the scene, active only in GameMode
+// In EditorMode it appears as a gizmo (red sphere + line)
 struct GameCameraComponent
 {
     float FOV  = 75.0f;
     float Near = 0.1f;
     float Far  = 500.0f;
 
-    bool Active = true; // câmera principal de jogo
+    bool Active = true; // main game camera
 
-    // Direção calculada a partir do transform da entidade
+    // Direction computed from the entity's transform
     glm::vec3 Front   = { 0.0f, 0.0f, -1.0f };
     glm::vec3 Up      = { 0.0f, 1.0f,  0.0f };
     glm::vec3 Right   = { 1.0f, 0.0f,  0.0f };

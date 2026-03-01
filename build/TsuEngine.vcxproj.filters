@@ -37,6 +37,9 @@
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\serialization\sceneSerializer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\serialization\prefabSerializer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="C:\Users\hm\Desktop\tsuEngine\Engine\ui\hierarchyPanel.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

@@ -14,7 +14,7 @@
 
 namespace tsu {
 
-// Buffer de arquivos arrastados de fora do editor (GLFW drop callback)
+// Buffer of files dragged from outside the editor (GLFW drop callback)
 static std::vector<std::string> s_DroppedFiles;
 
 static void OnGLFWDrop(GLFWwindow*, int count, const char** paths)
@@ -94,10 +94,10 @@ void Application::HandleEditorInput(int winW, int winH)
         }
     }
 
-    // Não interfere quando o mouse direito está girando a camera
+    // Don't interfere when right mouse is rotating the camera
     if (InputManager::IsMousePressed(Mouse::Right)) return;
 
-    // Não interfere quando o ImGui está capturando o mouse (clique em painel)
+    // Don't interfere when ImGui is capturing the mouse (click on panel)
     if (m_UIManager.WantCaptureMouse()) return;
 
     // Ignore clicks on stacked top UI (menu + toolbar + camera tabs)
@@ -105,43 +105,298 @@ void Application::HandleEditorInput(int winW, int winH)
 
     const MouseDelta delta = InputManager::GetMouseDelta();
 
-    // ---- Mouse pressionado (hold) ----
+    // ---- Mouse held (hold) ----
     if (InputManager::IsMousePressed(Mouse::Left))
     {
         if (m_Gizmo.IsDragging() && m_SelectedEntity >= 0)
         {
-            glm::vec3 move = m_Gizmo.OnMouseDrag(m_EditorCamera,
-                                                   delta.x, delta.y,
-                                                   winW, winH);
-            m_Scene.Transforms[m_SelectedEntity].Position += move;
+            if (m_GizmoMode == GizmoMode::Move)
+            {
+                glm::vec3 move = m_Gizmo.OnMouseDrag(m_EditorCamera,
+                                                       delta.x, delta.y,
+                                                       winW, winH);
+                m_Scene.Transforms[m_SelectedEntity].Position += move;
+            }
+            else if (m_GizmoMode == GizmoMode::Rotate)
+            {
+                float deg = m_Gizmo.OnMouseDragRotation(m_EditorCamera,
+                                                         delta.x, delta.y,
+                                                         winW, winH);
+                auto axis = m_Gizmo.GetDragAxis();
+                if (axis == EditorGizmo::Axis::X || axis == EditorGizmo::Axis::YZ)
+                    m_Scene.Transforms[m_SelectedEntity].Rotation.x += deg;
+                else if (axis == EditorGizmo::Axis::Y || axis == EditorGizmo::Axis::XZ)
+                    m_Scene.Transforms[m_SelectedEntity].Rotation.y += deg;
+                else if (axis == EditorGizmo::Axis::Z || axis == EditorGizmo::Axis::XY)
+                    m_Scene.Transforms[m_SelectedEntity].Rotation.z += deg;
+            }
+            else if (m_GizmoMode == GizmoMode::Scale)
+            {
+                glm::vec3 sd = m_Gizmo.OnMouseDragScale(m_EditorCamera,
+                                                          delta.x, delta.y,
+                                                          winW, winH);
+                m_Scene.Transforms[m_SelectedEntity].Scale += sd;
+                // Clamp scale to prevent going negative
+                auto& s = m_Scene.Transforms[m_SelectedEntity].Scale;
+                s.x = std::max(s.x, 0.01f);
+                s.y = std::max(s.y, 0.01f);
+                s.z = std::max(s.z, 0.01f);
+            }
             return;
         }
     }
 
-    // ---- Mouse desceu (click) ----
+    // ---- Mouse down (click) ----
     if (InputManager::IsMouseDown(Mouse::Left))
     {
-        // Tenta primeiro acertar um eixo do gizmo
+        // Try first to hit a gizmo axis
         if (m_SelectedEntity >= 0)
         {
+            int gizmoHitMode = (m_GizmoMode == GizmoMode::Rotate) ? 1 : 0;
             auto axis = m_Gizmo.OnMouseDown(
-                m_Scene.Transforms[m_SelectedEntity].Position,
-                m_EditorCamera, mx, my, winW, winH);
+                m_Scene.GetEntityWorldPos(m_SelectedEntity),
+                m_EditorCamera, mx, my, winW, winH, gizmoHitMode);
 
             if (axis != EditorGizmo::Axis::None)
-                return; // começou drag no gizmo
+                return; // started gizmo drag
         }
 
-        // Raycast para seleção de entidade
+        // Raycast for entity selection
         m_SelectedEntity = RaycastScene(mx, my, winW, winH);
         return;
     }
 
-    // ---- Mouse solto ----
+    // ---- Mouse released ----
     if (InputManager::IsMouseUp(Mouse::Left))
     {
         m_Gizmo.OnMouseUp();
     }
+
+    // Gizmo mode hotkeys: W = Move, E = Rotate, R = Scale
+    if (InputManager::IsKeyDown(Key::W)) m_GizmoMode = GizmoMode::Move;
+    if (InputManager::IsKeyDown(Key::E)) m_GizmoMode = GizmoMode::Scale;
+    if (InputManager::IsKeyDown(Key::R)) m_GizmoMode = GizmoMode::Rotate;
+}
+
+// ----------------------------------------------------------------
+// RebuildPrefabPreview — populate m_PrefabPreviewScene from a PrefabAsset
+// ----------------------------------------------------------------
+void Application::RebuildPrefabPreview()
+{
+    int idx = m_UIManager.GetEditingPrefabIdx();
+    if (idx < 0 || idx >= (int)m_Scene.Prefabs.size()) return;
+
+    const PrefabAsset& prefab = m_Scene.Prefabs[idx];
+
+    // Clear old preview scene completely
+    m_PrefabPreviewScene = Scene();
+
+    // Copy materials from main scene so mesh materials resolve
+    m_PrefabPreviewScene.Materials = m_Scene.Materials;
+
+    // Add a default directional light so the prefab is visible
+    {
+        Entity lightEnt = m_PrefabPreviewScene.CreateEntity("_PreviewLight");
+        int li = (int)lightEnt.GetID();
+        m_PrefabPreviewScene.Transforms[li].Position = glm::vec3(5.0f, 8.0f, 5.0f);
+        m_PrefabPreviewScene.Transforms[li].Rotation = glm::vec3(-45.0f, 30.0f, 0.0f);
+        m_PrefabPreviewScene.Lights[li].Active    = true;
+        m_PrefabPreviewScene.Lights[li].Enabled   = true;
+        m_PrefabPreviewScene.Lights[li].Type      = LightType::Directional;
+        m_PrefabPreviewScene.Lights[li].Intensity = 1.5f;
+        m_PrefabPreviewScene.Lights[li].Color     = glm::vec3(1.0f);
+    }
+
+    // Create entities from prefab nodes (offset by 1 because of light entity)
+    for (int ni = 0; ni < (int)prefab.Nodes.size(); ++ni)
+    {
+        const PrefabEntityData& node = prefab.Nodes[ni];
+        Entity ent = m_PrefabPreviewScene.CreateEntity(node.Name);
+        int ei = (int)ent.GetID();
+
+        m_PrefabPreviewScene.Transforms[ei] = node.Transform;
+
+        // Resolve parent (offset by 1 for the preview light entity)
+        if (node.ParentIdx >= 0)
+            m_PrefabPreviewScene.SetEntityParent(ei, node.ParentIdx + 1);
+
+        // Create mesh
+        if (!node.MeshType.empty())
+        {
+            Mesh* mesh = nullptr;
+            const std::string& mt = node.MeshType;
+            if      (mt == "cube")     mesh = new Mesh(Mesh::CreateCube("#DDDDDD"));
+            else if (mt == "sphere")   mesh = new Mesh(Mesh::CreateSphere("#DDDDDD"));
+            else if (mt == "pyramid")  mesh = new Mesh(Mesh::CreatePyramid("#DDDDDD"));
+            else if (mt == "cylinder") mesh = new Mesh(Mesh::CreateCylinder("#DDDDDD"));
+            else if (mt == "capsule")  mesh = new Mesh(Mesh::CreateCapsule("#DDDDDD"));
+            else if (mt == "plane")    mesh = new Mesh(Mesh::CreatePlane("#DDDDDD"));
+            else if (mt.size() > 4 && mt.substr(0,4) == "obj:")
+                mesh = new Mesh(Mesh::LoadOBJ(mt.substr(4)));
+            if (mesh) {
+                m_PrefabPreviewScene.MeshRenderers[ei].MeshPtr  = mesh;
+                m_PrefabPreviewScene.MeshRenderers[ei].MeshType = mt;
+            }
+        }
+
+        // Resolve material by name
+        if (!node.MaterialName.empty())
+        {
+            for (int mi = 0; mi < (int)m_PrefabPreviewScene.Materials.size(); ++mi)
+                if (m_PrefabPreviewScene.Materials[mi].Name == node.MaterialName)
+                    { m_PrefabPreviewScene.EntityMaterial[ei] = mi; break; }
+        }
+
+        // Light
+        if (node.HasLight)
+        {
+            m_PrefabPreviewScene.Lights[ei] = node.Light;
+            m_PrefabPreviewScene.Lights[ei].Active  = true;
+            m_PrefabPreviewScene.Lights[ei].Enabled = true;
+        }
+    }
+
+    m_PrefabPreviewIdx = idx;
+}
+
+// ----------------------------------------------------------------
+// SyncPrefabPreviewBack — write preview entity transforms back to prefab nodes
+// ----------------------------------------------------------------
+void Application::SyncPrefabPreviewBack()
+{
+    int idx = m_PrefabPreviewIdx;
+    if (idx < 0 || idx >= (int)m_Scene.Prefabs.size()) return;
+
+    PrefabAsset& prefab = m_Scene.Prefabs[idx];
+    // Entity 0 = preview light, entities 1..N = prefab nodes 0..N-1
+    for (int ni = 0; ni < (int)prefab.Nodes.size(); ++ni)
+    {
+        int ei = ni + 1;
+        if (ei >= (int)m_PrefabPreviewScene.Transforms.size()) break;
+        prefab.Nodes[ni].Transform = m_PrefabPreviewScene.Transforms[ei];
+        prefab.Nodes[ni].Name      = m_PrefabPreviewScene.EntityNames[ei];
+    }
+}
+
+// ----------------------------------------------------------------
+// HandlePrefabEditorInput — gizmo for prefab preview entities
+// ----------------------------------------------------------------
+void Application::HandlePrefabEditorInput(int winW, int winH)
+{
+    if (!m_UIManager.IsPrefabEditorActive()) return;
+    if (m_PrefabPreviewIdx < 0) return;
+
+    double mxd, myd;
+    InputManager::GetMousePosition(mxd, myd);
+    float mx = (float)mxd;
+    float my = (float)myd;
+
+    if (InputManager::IsMousePressed(Mouse::Right)) return;
+    if (m_UIManager.WantCaptureMouse()) return;
+    if (my <= (float)UIManager::k_TopStackH) return;
+
+    int selNode = m_UIManager.GetPrefabSelectedNode();
+    // Map node index to preview entity index (offset by 1 for light)
+    int selEntity = (selNode >= 0) ? selNode + 1 : -1;
+    if (selEntity >= (int)m_PrefabPreviewScene.Transforms.size()) selEntity = -1;
+
+    const MouseDelta delta = InputManager::GetMouseDelta();
+
+    // ---- Mouse held (drag) ----
+    if (InputManager::IsMousePressed(Mouse::Left))
+    {
+        if (m_Gizmo.IsDragging() && selEntity >= 0)
+        {
+            if (m_GizmoMode == GizmoMode::Move)
+            {
+                glm::vec3 move = m_Gizmo.OnMouseDrag(m_EditorCamera,
+                                                       delta.x, delta.y,
+                                                       winW, winH);
+                m_PrefabPreviewScene.Transforms[selEntity].Position += move;
+            }
+            else if (m_GizmoMode == GizmoMode::Rotate)
+            {
+                float deg = m_Gizmo.OnMouseDragRotation(m_EditorCamera,
+                                                         delta.x, delta.y,
+                                                         winW, winH);
+                auto axis = m_Gizmo.GetDragAxis();
+                if (axis == EditorGizmo::Axis::X || axis == EditorGizmo::Axis::YZ)
+                    m_PrefabPreviewScene.Transforms[selEntity].Rotation.x += deg;
+                else if (axis == EditorGizmo::Axis::Y || axis == EditorGizmo::Axis::XZ)
+                    m_PrefabPreviewScene.Transforms[selEntity].Rotation.y += deg;
+                else if (axis == EditorGizmo::Axis::Z || axis == EditorGizmo::Axis::XY)
+                    m_PrefabPreviewScene.Transforms[selEntity].Rotation.z += deg;
+            }
+            else if (m_GizmoMode == GizmoMode::Scale)
+            {
+                glm::vec3 sd = m_Gizmo.OnMouseDragScale(m_EditorCamera,
+                                                          delta.x, delta.y,
+                                                          winW, winH);
+                m_PrefabPreviewScene.Transforms[selEntity].Scale += sd;
+                auto& s = m_PrefabPreviewScene.Transforms[selEntity].Scale;
+                s.x = std::max(s.x, 0.01f);
+                s.y = std::max(s.y, 0.01f);
+                s.z = std::max(s.z, 0.01f);
+            }
+            // Sync this specific node back to the prefab immediately
+            SyncPrefabPreviewBack();
+            return;
+        }
+    }
+
+    // ---- Mouse down (click) ----
+    if (InputManager::IsMouseDown(Mouse::Left))
+    {
+        // Try gizmo hit first
+        if (selEntity >= 0)
+        {
+            int gizmoHitMode = (m_GizmoMode == GizmoMode::Rotate) ? 1 : 0;
+            auto axis = m_Gizmo.OnMouseDown(
+                m_PrefabPreviewScene.Transforms[selEntity].Position,
+                m_EditorCamera, mx, my, winW, winH, gizmoHitMode);
+            if (axis != EditorGizmo::Axis::None)
+                return;
+        }
+
+        // Raycast the preview scene for node selection
+        float aspect = (float)winW / (float)winH;
+        glm::mat4 vp = m_EditorCamera.GetProjection(aspect) * m_EditorCamera.GetViewMatrix();
+        glm::mat4 vpI = glm::inverse(vp);
+        float ndcX =  2.0f * mx / (float)winW - 1.0f;
+        float ndcY = -2.0f * my / (float)winH + 1.0f;
+        glm::vec4 nearH = vpI * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+        glm::vec4 farH  = vpI * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
+        glm::vec3 orig = glm::vec3(nearH) / nearH.w;
+        glm::vec3 dir  = glm::normalize(glm::vec3(farH) / farH.w - orig);
+
+        float bestT = 1e30f;
+        int hitNode = -1;
+        // Skip entity 0 (preview light)
+        for (int ei = 1; ei < (int)m_PrefabPreviewScene.Transforms.size(); ++ei)
+        {
+            if (!m_PrefabPreviewScene.MeshRenderers[ei].MeshPtr) continue;
+            glm::vec3 pos  = m_PrefabPreviewScene.GetEntityWorldPos(ei);
+            glm::vec3 sc   = m_PrefabPreviewScene.Transforms[ei].Scale;
+            float radius   = std::max({sc.x, sc.y, sc.z}) * 0.5f;
+            glm::vec3 oc   = orig - pos;
+            float b = glm::dot(oc, dir);
+            float c = glm::dot(oc, oc) - radius * radius;
+            float disc = b*b - c;
+            if (disc < 0.0f) continue;
+            float t = -b - sqrtf(disc);
+            if (t < 0.0f) t = -b + sqrtf(disc);
+            if (t > 0.0f && t < bestT) { bestT = t; hitNode = ei - 1; }
+        }
+        m_UIManager.SetPrefabSelectedNode(hitNode);
+        return;
+    }
+
+    if (InputManager::IsMouseUp(Mouse::Left))
+        m_Gizmo.OnMouseUp();
+
+    if (InputManager::IsKeyDown(Key::W)) m_GizmoMode = GizmoMode::Move;
+    if (InputManager::IsKeyDown(Key::E)) m_GizmoMode = GizmoMode::Rotate;
+    if (InputManager::IsKeyDown(Key::R)) m_GizmoMode = GizmoMode::Scale;
 }
 
 glm::vec3 Application::ComputeViewportSpawnPoint(float mx, float my, int winW, int winH) const
@@ -414,8 +669,19 @@ int Application::RaycastScene(float mx, float my, int winW, int winH)
         bool hasCamera = m_Scene.GameCameras[i].Active;
         if (!hasMesh && !hasCamera) continue;
 
-        glm::vec3 pos  = m_Scene.Transforms[i].Position;
-        glm::vec3 half = hasCamera ? glm::vec3(0.3f) : m_Scene.Transforms[i].Scale * 0.5f;
+        glm::vec3 pos  = m_Scene.GetEntityWorldPos((int)i);
+        glm::vec3 half;
+        if (hasCamera) {
+            half = glm::vec3(0.3f);
+        } else if (m_Scene.MeshRenderers[i].MeshPtr) {
+            // Use actual mesh AABB scaled by entity scale
+            const Mesh* mp = m_Scene.MeshRenderers[i].MeshPtr;
+            glm::vec3 s = m_Scene.Transforms[i].Scale;
+            glm::vec3 extent = (mp->BoundsMax - mp->BoundsMin) * 0.5f;
+            half = extent * s;
+        } else {
+            half = m_Scene.Transforms[i].Scale * 0.5f;
+        }
         glm::vec3 bmin = pos - half;
         glm::vec3 bmax = pos + half;
 
@@ -455,7 +721,7 @@ int Application::RaycastScene(float mx, float my, int winW, int winH)
 
 void Application::HandleToolbarInput()
 {
-    // Clique do mouse na toolbar
+    // Mouse click on the toolbar
     if (InputManager::IsMouseDown(Mouse::Left))
     {
         double mx, my;
@@ -502,7 +768,7 @@ void Application::Run()
     Renderer::Init();
     m_UIManager.Init(m_Window.GetNativeWindow());
 
-    // Registrar callback de drag & drop de arquivos externos (texturas)
+    // Register callback for external file drag & drop
     glfwSetDropCallback(m_Window.GetNativeWindow(), OnGLFWDrop);
 
     while (!m_Window.ShouldClose())
@@ -510,13 +776,13 @@ void Application::Run()
         float time      = (float)glfwGetTime();
         float deltaTime = time - m_LastFrameTime;
         m_LastFrameTime = time;
-        if (deltaTime > 0.05f) deltaTime = 0.05f; // cap em 20fps
+        if (deltaTime > 0.05f) deltaTime = 0.05f; // cap at 20fps
 
         InputManager::Update(m_Window.GetNativeWindow());
         m_UIManager.BeginFrame();
         HandleToolbarInput();
 
-        // s_DroppedFiles é processado em UIManager::Render (que conhece a pasta atual)
+        // s_DroppedFiles is processed in UIManager::Render (which knows the current folder)
         Renderer::BeginFrame();
 
         int winW = m_Window.GetWidth();
@@ -536,19 +802,79 @@ void Application::Run()
         }
 
         // Determine which view to render in the viewport
-        bool showGameView    = (m_UIManager.GetViewportTab() == 1);
-        bool showProjectView = (m_UIManager.GetViewportTab() == 2);
+        bool showGameView      = (m_UIManager.GetViewportTab() == 1);
+        bool showProjectView   = (m_UIManager.GetViewportTab() == 2);
+        bool showPrefabEditor  = m_UIManager.IsPrefabEditorActive();
 
-        // Editor camera update: needed when showing scene view
+        // Editor camera update: needed when showing scene view or prefab editor
         if (!showGameView && !showProjectView)
             m_EditorCamera.OnUpdate(deltaTime);
 
+        // Prefab editor: rebuild preview scene when the edited prefab changes
+        if (showPrefabEditor)
+        {
+            int editIdx = m_UIManager.GetEditingPrefabIdx();
+            if (editIdx != m_PrefabPreviewIdx || m_PrefabPreviewIdx < 0)
+                RebuildPrefabPreview();
+            else if (m_PrefabPreviewIdx >= 0 && m_PrefabPreviewIdx < (int)m_Scene.Prefabs.size())
+            {
+                // Sync sidebar property edits → preview entities each frame
+                const PrefabAsset& pf = m_Scene.Prefabs[m_PrefabPreviewIdx];
+                for (int ni = 0; ni < (int)pf.Nodes.size(); ++ni)
+                {
+                    int ei = ni + 1; // offset for preview light
+                    if (ei >= (int)m_PrefabPreviewScene.Transforms.size()) break;
+                    m_PrefabPreviewScene.Transforms[ei] = pf.Nodes[ni].Transform;
+                }
+            }
+        }
+        else
+        {
+            // If we just left the prefab editor, drop the preview scene
+            if (m_PrefabPreviewIdx >= 0)
+            {
+                m_PrefabPreviewScene = Scene();
+                m_PrefabPreviewIdx = -1;
+            }
+        }
+
         // Editor picking/gizmo (only in editor mode + scene view)
-        if (m_Mode == EngineMode::Editor && !showGameView && !showProjectView)
+        if (m_Mode == EngineMode::Editor && !showGameView && !showProjectView && !showPrefabEditor)
             HandleEditorInput(winW, winH);
 
+        // Prefab editor gizmo
+        if (showPrefabEditor)
+            HandlePrefabEditorInput(winW, winH);
+
+        // Compute viewport drop position for drag-to-viewport
+        {
+            double mxd, myd;
+            InputManager::GetMousePosition(mxd, myd);
+            m_UIManager.SetViewportDropPos(ComputeViewportSpawnPoint((float)mxd, (float)myd, winW, winH));
+        }
+
         // Render 3D scene
-        if (showGameView)
+        if (showPrefabEditor)
+        {
+            // Render the prefab preview scene
+            Renderer::RenderSceneEditor(m_PrefabPreviewScene, m_EditorCamera, winW, winH);
+
+            // Draw gizmo on selected prefab node
+            int selNode = m_UIManager.GetPrefabSelectedNode();
+            int selEnt  = (selNode >= 0) ? selNode + 1 : -1;
+            if (selEnt >= 0 && selEnt < (int)m_PrefabPreviewScene.Transforms.size())
+            {
+                int axisInt = (int)m_Gizmo.GetDragAxis();
+                glm::vec3 gizmoPos = m_PrefabPreviewScene.Transforms[selEnt].Position;
+                if (m_GizmoMode == GizmoMode::Move)
+                    Renderer::DrawTranslationGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+                else if (m_GizmoMode == GizmoMode::Rotate)
+                    Renderer::DrawRotationGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+                else if (m_GizmoMode == GizmoMode::Scale)
+                    Renderer::DrawScaleGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+            }
+        }
+        else if (showGameView)
         {
             Renderer::RenderSceneGame(m_Scene, winW, winH);
         }
@@ -557,10 +883,20 @@ void Application::Run()
             Renderer::RenderSceneEditor(m_Scene, m_EditorCamera, winW, winH);
             if (m_Mode == EngineMode::Editor && m_SelectedEntity >= 0)
             {
-                Renderer::DrawTranslationGizmo(
-                    m_Scene.Transforms[m_SelectedEntity].Position,
-                    (int)m_Gizmo.GetDragAxis(),
-                    m_EditorCamera, winW, winH);
+                int axisInt = (int)m_Gizmo.GetDragAxis();
+                glm::vec3 gizmoWorldPos = m_Scene.GetEntityWorldPos(m_SelectedEntity);
+                if (m_GizmoMode == GizmoMode::Move)
+                    Renderer::DrawTranslationGizmo(
+                        gizmoWorldPos,
+                        axisInt, m_EditorCamera, winW, winH);
+                else if (m_GizmoMode == GizmoMode::Rotate)
+                    Renderer::DrawRotationGizmo(
+                        gizmoWorldPos,
+                        axisInt, m_EditorCamera, winW, winH);
+                else if (m_GizmoMode == GizmoMode::Scale)
+                    Renderer::DrawScaleGizmo(
+                        gizmoWorldPos,
+                        axisInt, m_EditorCamera, winW, winH);
             }
         }
 
@@ -579,7 +915,7 @@ void Application::Run()
             ImGui::End();
         }
 
-        // Toolbar sempre visível por cima
+        // Toolbar always visible on top
         Renderer::RenderToolbar(
             m_Mode != EngineMode::Editor,
             m_Mode == EngineMode::Paused,
@@ -587,7 +923,7 @@ void Application::Run()
             (float)UIManager::k_MenuBarH);
 
         // UI panels — always visible in all modes
-        m_UIManager.Render(m_Scene, m_SelectedEntity, winW, winH, s_DroppedFiles);
+        m_UIManager.Render(m_Scene, m_SelectedEntity, winW, winH, s_DroppedFiles, m_GizmoMode);
 
         // Viewport right-click context menu (editor mode only)
         if (m_Mode == EngineMode::Editor && !showGameView && !showProjectView && m_OpenViewportMenu)

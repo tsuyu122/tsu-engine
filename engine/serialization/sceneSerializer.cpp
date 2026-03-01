@@ -1,7 +1,8 @@
 #include "serialization/sceneSerializer.h"
-#include "scene/scene.h"    // contém ColliderType, RigidBodyComponent, GameCameraComponent
+#include "scene/scene.h"    // contains ColliderType, RigidBodyComponent, GameCameraComponent
 #include "scene/entity.h"
 #include "renderer/mesh.h"
+#include "renderer/textureLoader.h"
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -95,14 +96,66 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         float       lightOuterAngle = 45.0f;
         float       lightWidth      = 1.0f;
         float       lightHeight     = 1.0f;
+        int         materialIdx     = -1;   // index into scene.Materials
     };
 
-    struct ChannelData {
-        bool        valid = false;
-        int         index = -1;
-        std::string name = "Channel";
-        std::string type = "bool";
-        std::string value = "false";
+    struct MaterialData {
+        bool        valid      = false;
+        int         index      = -1;   // 0-based index
+        std::string name       = "Material";
+        glm::vec3   color      = {1,1,1};
+        std::string albedoPath;
+        std::string normalPath;
+        std::string aoPath;
+        std::string roughPath;
+        std::string metalPath;
+        float roughness = 0.5f;
+        float metallic  = 0.0f;
+        float aoValue   = 1.0f;
+        float tilingX   = 1.0f;
+        float tilingY   = 1.0f;
+        bool  worldSpaceUV = false;
+    };
+
+    auto flushMaterial = [&](MaterialData& d)
+    {
+        if (!d.valid || d.index < 0) return;
+        // Grow Materials list to fit (scene may not have created them yet)
+        while ((int)scene.Materials.size() <= d.index)
+            scene.Materials.emplace_back();
+
+        auto& mat       = scene.Materials[d.index];
+        mat.Name        = d.name;
+        mat.Color       = d.color;
+        mat.AlbedoPath  = d.albedoPath;
+        mat.NormalPath  = d.normalPath;
+        mat.AOPath      = d.aoPath;
+        mat.RoughnessPath = d.roughPath;
+        mat.MetallicPath  = d.metalPath;
+        mat.Roughness   = d.roughness;
+        mat.Metallic    = d.metallic;
+        mat.AOValue     = d.aoValue;
+        mat.Tiling      = {d.tilingX, d.tilingY};
+        mat.WorldSpaceUV = d.worldSpaceUV;
+        mat.ORM_Dirty   = true;   // repack on first draw
+
+        // Try to resolve texture IDs from already-loaded scene textures
+        auto lookupOrLoad = [&](const std::string& p, bool linear) -> unsigned int {
+            if (p.empty()) return 0;
+            auto it = std::find(scene.Textures.begin(), scene.Textures.end(), p);
+            if (it != scene.Textures.end()) {
+                int idx = (int)(it - scene.Textures.begin());
+                if (idx < (int)scene.TextureIDs.size()) return scene.TextureIDs[idx];
+            }
+            // Load directly
+            unsigned int id = linear ? LoadTextureLinear(p) : LoadTexture(p);
+            if (id) { scene.Textures.push_back(p); scene.TextureIDs.push_back(id); }
+            return id;
+        };
+        mat.AlbedoID = lookupOrLoad(d.albedoPath, false);
+        mat.NormalID = lookupOrLoad(d.normalPath, true);
+
+        d = MaterialData{};
     };
 
     auto flushEntity = [&](EntityData& d)
@@ -133,10 +186,12 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (d.type == "cylinder") mesh = new Mesh(Mesh::CreateCylinder(d.color));
             else if (d.type == "sphere")   mesh = new Mesh(Mesh::CreateSphere(d.color));
             else if (d.type == "capsule")  mesh = new Mesh(Mesh::CreateCapsule(d.color));
+            else if (d.type == "plane")    mesh = new Mesh(Mesh::CreatePlane(d.color));
             else
                 std::cerr << "[SceneSerializer] Tipo desconhecido: " << d.type << "\n";
 
-            scene.MeshRenderers[id].MeshPtr = mesh;
+            scene.MeshRenderers[id].MeshPtr  = mesh;
+            scene.MeshRenderers[id].MeshType = d.type;
 
             if (d.hasRigidBody)
             {
@@ -225,6 +280,14 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         d = EntityData{};
     };
 
+    struct ChannelData {
+        bool        valid  = false;
+        int         index  = -1;
+        std::string name   = "Channel";
+        std::string type   = "bool";
+        std::string value  = "false";
+    };
+
     auto flushChannel = [&](ChannelData& c)
     {
         if (!c.valid) return;
@@ -256,7 +319,8 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
 
     EntityData cur;
     ChannelData curCh;
-    enum class Section { None, Entity, Channel };
+    MaterialData curMat;
+    enum class Section { None, Entity, Channel, Material };
     Section section = Section::None;
     std::string line;
 
@@ -269,6 +333,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         {
             flushChannel(curCh);
             flushEntity(cur);
+            flushMaterial(curMat);
             cur.valid = true;
             section = Section::Entity;
             continue;
@@ -278,8 +343,19 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         {
             flushEntity(cur);
             flushChannel(curCh);
+            flushMaterial(curMat);
             curCh.valid = true;
             section = Section::Channel;
+            continue;
+        }
+
+        if (line == "[material]")
+        {
+            flushEntity(cur);
+            flushChannel(curCh);
+            flushMaterial(curMat);
+            curMat.valid = true;
+            section = Section::Material;
             continue;
         }
 
@@ -346,6 +422,24 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (k == "light_outer")      cur.lightOuterAngle    = std::stof(val);
             else if (k == "light_width")      cur.lightWidth         = std::stof(val);
             else if (k == "light_height")     cur.lightHeight        = std::stof(val);
+            else if (k == "entity_material")  cur.materialIdx        = std::stoi(val);
+        }
+        else if (section == Section::Material)
+        {
+            if      (k == "mat_index")     curMat.index     = std::stoi(val);
+            else if (k == "mat_name")      curMat.name      = val;
+            else if (k == "mat_color")     curMat.color     = parseVec3(val);
+            else if (k == "mat_albedo")    curMat.albedoPath = val;
+            else if (k == "mat_normal")    curMat.normalPath = val;
+            else if (k == "mat_ao")        curMat.aoPath     = val;
+            else if (k == "mat_roughness_tex") curMat.roughPath  = val;
+            else if (k == "mat_metallic_tex")  curMat.metalPath  = val;
+            else if (k == "mat_roughness") curMat.roughness  = std::stof(val);
+            else if (k == "mat_metallic")  curMat.metallic   = std::stof(val);
+            else if (k == "mat_ao_value")  curMat.aoValue    = std::stof(val);
+            else if (k == "mat_tiling_x")  curMat.tilingX    = std::stof(val);
+            else if (k == "mat_tiling_y")  curMat.tilingY    = std::stof(val);
+            else if (k == "mat_world_uv")  curMat.worldSpaceUV = (val == "true");
         }
         else if (section == Section::Channel)
         {
@@ -358,6 +452,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
 
     flushEntity(cur);
     flushChannel(curCh);
+    flushMaterial(curMat);
 }
 
 void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
@@ -370,6 +465,28 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
     }
 
     file << "# tsuEngine Scene File\n\n";
+
+    // ---- Materials ----
+    for (size_t mi = 0; mi < scene.Materials.size(); ++mi)
+    {
+        const auto& mat = scene.Materials[mi];
+        file << "[material]\n";
+        file << "mat_index = "  << mi << "\n";
+        file << "mat_name  = "  << mat.Name << "\n";
+        file << "mat_color = "  << mat.Color.r << " " << mat.Color.g << " " << mat.Color.b << "\n";
+        if (!mat.AlbedoPath.empty())    file << "mat_albedo       = " << mat.AlbedoPath    << "\n";
+        if (!mat.NormalPath.empty())    file << "mat_normal       = " << mat.NormalPath    << "\n";
+        if (!mat.AOPath.empty())        file << "mat_ao           = " << mat.AOPath         << "\n";
+        if (!mat.RoughnessPath.empty()) file << "mat_roughness_tex = " << mat.RoughnessPath << "\n";
+        if (!mat.MetallicPath.empty())  file << "mat_metallic_tex  = " << mat.MetallicPath  << "\n";
+        file << "mat_roughness = " << mat.Roughness << "\n";
+        file << "mat_metallic  = " << mat.Metallic  << "\n";
+        file << "mat_ao_value  = " << mat.AOValue   << "\n";
+        file << "mat_tiling_x  = " << mat.Tiling.x  << "\n";
+        file << "mat_tiling_y  = " << mat.Tiling.y  << "\n";
+        if (mat.WorldSpaceUV) file << "mat_world_uv  = true\n";
+        file << "\n";
+    }
 
     for (size_t i = 0; i < scene.Channels.size(); ++i)
     {
@@ -407,6 +524,9 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
         std::string entityName = (i < scene.EntityNames.size()) ? scene.EntityNames[i] : "Entity";
         file << "name  = " << entityName << "\n";
 
+        if (i < scene.EntityMaterial.size() && scene.EntityMaterial[i] >= 0)
+            file << "entity_material = " << scene.EntityMaterial[i] << "\n";
+
         if (gc.Active)
         {
             file << "type  = game_camera\n"
@@ -416,7 +536,14 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
         }
         else if (mr.MeshPtr)
         {
-            file << "type  = cube\ncolor = #FFFFFF\n";
+            // Write the actual mesh type stored in the component
+            const std::string& mt = mr.MeshType;
+            if      (mt == "sphere")   file << "type  = sphere\ncolor = #FFFFFF\n";
+            else if (mt == "pyramid")  file << "type  = pyramid\ncolor = #FFFFFF\n";
+            else if (mt == "cylinder") file << "type  = cylinder\ncolor = #FFFFFF\n";
+            else if (mt == "capsule")  file << "type  = capsule\ncolor = #FFFFFF\n";
+            else if (mt == "plane")    file << "type  = plane\ncolor = #FFFFFF\n";
+            else                       file << "type  = cube\ncolor = #FFFFFF\n";
             if (rb.HasGravityModule || rb.HasColliderModule)
             {
                 file << "rigidbody = true\n"

@@ -16,24 +16,22 @@ By precalculating lighting interactions across modular configurations, the engin
 
 Performance and optimization are central priorities. The architecture is being designed with careful attention to efficiency, including optimization strategies specifically targeting AMD hardware.
 
-## Intended Features
+## Current Features
 
-Tsu Game Engine is planned to include:
-
-- A modular Entity Component System (ECS)
-- A custom editor with scene manipulation tools
-- Clear separation between Editor Mode and runtime Game Mode
-- Visual transform gizmos (move, rotate, scale)
-- A modular scripting system
-- Scene serialization
-- A material and shader system
-- A module-based procedural generation pipeline
-- A lighting system capable of precomputed modular light permutations
-- A rendering pipeline designed for high performance and hardware-aware optimization
-
-## Purpose
-
-Tsu is both a purpose-driven solution for a specific game design challenge and an evolving engine architecture project. What began as a necessity to enable a game concept has grown into a deliberate effort to design and build a fully independent game engine from the ground up.
+- **PBR Rendering** — Cook-Torrance BRDF with GGX distribution, Smith geometry, Schlick fresnel
+- **Multi-light system** — up to 8 simultaneous lights (Directional, Point, Spot, Area)
+- **Dual shadow mapping** — 2D shadow maps for directional/spot lights + cubemap shadows for point lights, both with PCF filtering
+- **PBR material system** — albedo, normal, and ORM (AO/Roughness/Metallic) texture support with triplanar UV mapping
+- **Full editor environment** — hierarchy panel, inspector panel, asset browser, project settings, console
+- **Transform gizmos** — Move, Rotate, and Scale with multi-axis handles
+- **Entity Component System** — parallel-array architecture with 8 component types
+- **Physics system** — gravity, OBB/Sphere/Capsule/Pyramid collision with SAT, rigid body angular dynamics
+- **Player controller** — 4 movement modes, local and channel-based input bindings
+- **Prefab system** — create, instantiate, edit, and sync reusable entity templates
+- **OBJ import** — drag-and-drop mesh import with automatic AABB computation
+- **Scene serialization** — full round-trip save/load in plain-text format
+- **Multi-select** — Ctrl+Click and Shift+Click entity selection in the hierarchy
+- **Input channel system** — runtime-configurable input bindings without recompilation
 
 ---
 
@@ -42,18 +40,18 @@ Tsu is both a purpose-driven solution for a specific game design challenge and a
 | Layer | Technology |
 |---|---|
 | Language | C++17 |
-| Build | CMake |
-| Graphics API | OpenGL 3.3 Core Profile |
+| Build | CMake 3.16+ |
+| Graphics API | OpenGL 4.6 Core Profile |
 | GL Loader | GLAD |
 | Window / Input | GLFW |
 | Editor UI | Dear ImGui v1.91.6 |
 | Math | GLM |
+| Mesh Import | tinyobjloader v1.0.6 |
+| Image Loading | stb_image |
 
 ---
 
 ## Engine Conventions
-
-These conventions apply throughout the entire codebase.
 
 | Axis | Role |
 |---|---|
@@ -71,47 +69,81 @@ Rotations are stored in degrees and applied **Rx then Ry then Rz** (roll, yaw, p
 
 ```
 tsuEngine/
- CMakeLists.txt
- assets/scenes/          - saved .tscene files
- engine/
-    components/         - component struct headers
-    core/               - Application loop, Window
-    editor/             - EditorCamera, EditorGizmo
-    input/              - InputManager
-    physics/            - PhysicsSystem
-    renderer/           - Renderer, Mesh, TextureLoader
-    scene/              - Scene, Entity
-    serialization/      - SceneSerializer
-    ui/                 - HierarchyPanel, InspectorPanel
- external/               - GLAD, GLFW, GLM, stb
- sandbox/main.cpp        - entry point
- shaders/                - vertex.glsl, fragment.glsl
+├── CMakeLists.txt
+├── assets/
+│   └── scenes/              saved .tscene files
+├── engine/
+│   ├── components/          component struct headers
+│   ├── core/                Application loop, Window
+│   ├── editor/              EditorCamera, EditorGizmo
+│   ├── input/               InputManager
+│   ├── physics/             PhysicsSystem
+│   ├── renderer/            Renderer, Mesh, TextureLoader
+│   ├── scene/               Scene, Entity
+│   ├── serialization/       SceneSerializer, PrefabSerializer
+│   └── ui/                  HierarchyPanel, InspectorPanel, UIManager
+├── external/                GLAD, GLFW, GLM, stb
+├── sandbox/
+│   └── main.cpp             entry point (WinMain on Windows)
+└── shaders/                 legacy reference shaders (unused)
 ```
 
 ---
 
 ## Scene and Entity System
 
-`engine/scene/scene.h` and `scene.cpp`
-
 All scene data lives in **parallel arrays**. Every entity is an integer index. A component is present when its `Active` flag is `true`.
 
 ```
-Index 0  ->  Transforms[0], MeshRenderers[0], RigidBodies[0], PlayerControllers[0] ...
-Index 1  ->  Transforms[1], MeshRenderers[1], RigidBodies[1], PlayerControllers[1] ...
+Index 0  →  Transforms[0], MeshRenderers[0], RigidBodies[0], Lights[0], ...
+Index 1  →  Transforms[1], MeshRenderers[1], RigidBodies[1], Lights[1], ...
 ```
 
-Key `Scene` methods:
+### Per-Entity Arrays
+
+| Array | Purpose |
+|---|---|
+| `Transforms` | Local TRS (position, rotation, scale, parent) |
+| `MeshRenderers` | Mesh pointer and active flag |
+| `RigidBodies` | Physics: gravity, collider, rigid body modules |
+| `GameCameras` | In-game perspective cameras |
+| `PlayerControllers` | Character movement controllers |
+| `MouseLooks` | Standalone mouse-look rotation |
+| `Lights` | Directional, Point, Spot, Area light data |
+| `EntityNames` | Display names |
+| `EntityParents` / `EntityChildren` | Parent-child hierarchy |
+| `EntityGroups` | Scene group membership |
+| `EntityMaterial` | Material asset index (-1 = none) |
+| `EntityColors` | Per-entity color override |
+| `EntityPrefabSource` | Prefab instance tracking (-1 = none) |
+
+### Key Scene Methods
 
 | Method | Description |
 |---|---|
-| `GetEntityWorldMatrix(i)` | Walks the parent chain and returns the full world TRS matrix for entity i |
-| `GetEntityWorldPos(i)` | World position as glm::vec3 |
+| `GetEntityWorldMatrix(i)` | Walks the parent chain and returns the full world TRS matrix |
+| `GetEntityWorldPos(i)` | World position extracted from the world matrix |
 | `GetActiveGameCamera()` | Index of the first active GameCameraComponent, or -1 |
-| `GetChannelString(ch)` | StringValue of a channel (used by Channels input mode) |
-| `EnsureSize(n)` | Grows all arrays to hold at least n entities |
+| `SetEntityParent(child, parent)` | Reparent an entity (-1 = unparent) |
+| `DeleteEntity(idx)` | Remove entity and fix all references |
+| `CreateGroup(name, parent)` | Create a hierarchy folder |
 
-**SceneGroup** - hierarchy folders. Groups carry their own `TransformComponent` (local to parent group) so child entities inherit the group world transform.
+### Scene Groups
+
+Groups are hierarchy folders with their own `TransformComponent`. Child entities and sub-groups inherit the group's world transform. Groups can be nested arbitrarily.
+
+### Scene Assets
+
+The scene owns all asset data:
+
+| Asset Type | Description |
+|---|---|
+| `Materials` | PBR materials with albedo/normal/ORM textures and scalar fallbacks |
+| `Textures` | Imported image files with per-texture import settings |
+| `Prefabs` | Reusable entity templates (.tprefab files) |
+| `MeshAssets` | Registered OBJ file paths |
+| `Channels` | Named variables (Boolean, Float, String) for runtime input configuration |
+| `Folders` | Virtual folder hierarchy for asset organization |
 
 ---
 
@@ -119,255 +151,315 @@ Key `Scene` methods:
 
 ### TransformComponent
 
-`engine/components/transformComponent.h`
-
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `Position` | glm::vec3 | {0,0,0} | Local position |
-| `Rotation` | glm::vec3 | {0,0,0} | Local Euler rotation in degrees. X=roll, Y=yaw, Z=pitch |
-| `Scale` | glm::vec3 | {1,1,1} | Local scale |
-| `Parent` | int | -1 | Parent entity index. -1 means no parent |
+| `Position` | vec3 | {0,0,0} | Local position |
+| `Rotation` | vec3 | {0,0,0} | Euler rotation in degrees (X=roll, Y=yaw, Z=pitch) |
+| `Scale` | vec3 | {1,1,1} | Local scale |
+| `Parent` | int | -1 | Parent entity index (-1 = no parent) |
 
-`GetMatrix()` returns a local TRS matrix. World matrix is the product of the full parent chain via `Scene::GetEntityWorldMatrix()`.
-
----
+`GetMatrix()` returns the local TRS matrix. The full world matrix is computed by `Scene::GetEntityWorldMatrix()` via recursive parent chain traversal.
 
 ### MeshRendererComponent
 
-`engine/components/meshRendererComponent.h`
-
 | Field | Type | Description |
 |---|---|---|
-| `MeshPtr` | Mesh* | Pointer to an engine mesh (Box, Sphere, Capsule, Cylinder, Plane, and others) |
+| `MeshPtr` | Mesh* | Pointer to a mesh (Box, Sphere, Capsule, Cylinder, Pyramid, Plane, or OBJ) |
 | `Active` | bool | Whether the mesh is rendered this frame |
-
----
 
 ### GameCameraComponent
 
-`engine/components/cameraComponent.h`
-
-Perspective camera that drives the in-game view.
+Perspective camera for the in-game view. The camera looks along its world **-Z** axis.
 
 | Field | Default | Description |
 |---|---|---|
 | `FOV` | 75 | Vertical field of view in degrees |
 | `Near` / `Far` | 0.1 / 500 | Clipping planes |
-| `Active` | false | Only the first active camera is rendered per frame |
-
-`GetProjection(float aspect)` returns a glm::perspective matrix. The game view direction is derived from the entity world transform. The camera looks along its world **-Z** axis.
-
----
+| `Active` | false | Only the first active camera is used |
+| `Yaw` / `Pitch` | -90 / 0 | Camera orientation angles |
 
 ### RigidBodyComponent
 
-`engine/scene/scene.h`
+Three independently toggleable sub-modules:
 
-Three optional sub-modules toggled independently via the inspector.
-
-#### Gravity Module
+**Gravity Module**
 
 | Field | Default | Description |
 |---|---|---|
-| `UseGravity` | true | Apply downward acceleration each tick |
-| `IsKinematic` | false | Kinematic bodies move by code only, not forces |
-| `Mass` | 1.0 | Kilograms. Affects impulse magnitude on collision |
+| `UseGravity` | true | Apply downward acceleration |
+| `IsKinematic` | false | Move by code only, not forces |
+| `Mass` | 1.0 | Kilograms |
 | `Drag` | 0.01 | Linear velocity damping per tick |
-| `FallSpeedMultiplier` | 1.0 | Scale factor applied to gravitational acceleration |
-| `Velocity` | {0,0,0} | Current world-space velocity in meters per second |
+| `FallSpeedMultiplier` | 1.0 | Gravity acceleration scale |
+| `Velocity` | {0,0,0} | World-space velocity (m/s) |
 | `IsGrounded` | false | True when resting on a surface |
 
-#### Collider Module
+**Collider Module**
 
 | Field | Default | Description |
 |---|---|---|
 | `Collider` | Box | Shape: Box, Sphere, Capsule, Pyramid, or None |
-| `ColliderSize` | {1,1,1} | Full extents for Box colliders |
-| `ColliderRadius` | 0.5 | Radius for Sphere and Capsule |
-| `ColliderHeight` | 1.0 | Cylinder height for Capsule |
-| `ColliderOffset` | {0,0,0} | Local offset from the entity origin |
-| `ShowCollider` | false | Renders a green wireframe overlay in the editor |
+| `ColliderSize` | {1,1,1} | Full extents for Box |
+| `ColliderRadius` | 0.5 | Radius for Sphere / Capsule |
+| `ColliderHeight` | 1.0 | Height for Capsule |
+| `ColliderOffset` | {0,0,0} | Local offset from entity origin |
+| `ShowCollider` | false | Renders green wireframe in editor |
 
-#### RigidBody Mode
-
-Full simulation including angular velocity from impacts.
+**RigidBody Mode**
 
 | Field | Default | Description |
 |---|---|---|
-| `AngularVelocity` | {0,0,0} | Rotational velocity in degrees per second |
+| `AngularVelocity` | {0,0,0} | Rotational velocity (degrees/sec) |
 | `AngularDamping` | 0.0 | 0 = no damping, 1 = instant stop |
-| `Restitution` | 0.25 | Bounciness coefficient. 0 = no bounce, 1 = perfect elastic |
-| `FrictionCoef` | 0.15 | Lateral friction applied on collision impact |
-
----
+| `Restitution` | 0.25 | Bounce coefficient (0–1) |
+| `FrictionCoef` | 0.15 | Lateral friction on impact |
 
 ### PlayerControllerComponent
 
-`engine/scene/scene.h`
+Character controller with 4 movement modes and 2 input modes.
 
-Character controller with movement and optional built-in mouse look.
-
-#### Movement Fields
-
-| Field | Default | Description |
-|---|---|---|
-| `WalkSpeed` | 4.0 | Base movement speed in units per second |
-| `RunMultiplier` | 1.8 | Speed multiplier while run key is held |
-| `CrouchMultiplier` | 0.45 | Speed multiplier while crouch key is held |
-| `AllowRun` / `AllowCrouch` | true | External flags to block these actions |
-
-#### Movement Mode
-
-| Mode | Name | Description |
-|---|---|---|
-| 1 | WorldWithCollision | Move along world-space X/Z axes. Entity rotation is ignored. Physics collision active. |
-| **2** | **LocalWithCollision** | Move relative to the entity facing direction. Forward always goes where the entity looks. Physics collision active. This is the default. |
-| 3 | WorldNoCollision | World-space movement, noclip. Collision response bypassed. |
-| 4 | LocalNoCollision | Facing-relative movement, noclip. |
-
-#### Input Mode
+**Movement Modes:**
 
 | Mode | Description |
 |---|---|
-| Local | Reads GLFW key codes from KeyForward, KeyBack, KeyLeft, KeyRight, KeyRun, KeyCrouch |
-| Channels | Each action maps to a channel index. The channel holds the key name as a string |
+| WorldWithCollision | World-space X/Z axes, physics collision |
+| **LocalWithCollision** | Entity-relative facing direction, physics collision **(default)** |
+| WorldNoCollision | World-space, noclip |
+| LocalNoCollision | Facing-relative, noclip |
 
-Default local bindings: W forward, S back, A left, D right, Left Shift run, Left Control crouch.
+**Input Modes:**
 
-Runtime read-only fields: `IsRunning`, `IsCrouching`, `LastMoveAxis`.
+| Mode | Description |
+|---|---|
+| Local | Reads GLFW key codes directly (default: WASD + Shift/Ctrl) |
+| Channels | Maps actions to channel indices with string-based key names |
 
----
+| Field | Default | Description |
+|---|---|---|
+| `WalkSpeed` | 4.0 | Base movement speed (units/sec) |
+| `RunMultiplier` | 1.8 | Speed multiplier while running |
+| `CrouchMultiplier` | 0.45 | Speed multiplier while crouching |
 
 ### MouseLookComponent
 
-`engine/scene/scene.h`
-
-Standalone mouse look for cases where yaw/pitch rotation is needed independent of a PlayerController.
+Standalone mouse-look rotation. Controls yaw and pitch of separate target entities.
 
 | Field | Description |
 |---|---|
-| `YawTargetEntity` | Entity rotated around world Y for horizontal look |
-| `PitchTargetEntity` | Entity rotated around **local X** for pitch. |
-| `SensitivityX` / `SensitivityY` | Per-axis mouse sensitivity |
-| `InvertX` / `InvertY` | Flip axis direction |
-| `ClampPitch` | Enable pitch angle clamping |
-| `PitchMin` / `PitchMax` | Clamp range, recommend -89 to 89 degrees |
-| `CurrentYaw` / `CurrentPitch` | Accumulated angles in degrees, read-only at runtime |
-
----
+| `YawTargetEntity` | Entity rotated around world Y |
+| `PitchTargetEntity` | Entity rotated around local X |
+| `SensitivityX` / `SensitivityY` | Per-axis sensitivity |
+| `InvertX` / `InvertY` | Axis inversion |
+| `ClampPitch` | Enable pitch clamping |
+| `PitchMin` / `PitchMax` | Clamp range (recommend -89 to 89) |
 
 ### LightComponent
 
-`engine/scene/scene.h`
-
 | Type | Description |
 |---|---|
-| Directional | Sun-like infinite light. No position, only direction from entity rotation. Used as the shadow map caster. |
-| Point | Omnidirectional. Falls off with distance up to Range. |
-| Spot | Cone light. Full brightness inside InnerAngle, smooth falloff to OuterAngle. Also casts shadow maps. |
-| Area | Rectangular area source defined by Width and Height. |
+| Directional | Sun-like infinite light. Direction from entity rotation. Casts 2D shadow. |
+| Point | Omnidirectional. Attenuates with distance. Casts cubemap shadow. |
+| Spot | Cone with inner/outer angle falloff. Casts 2D shadow. |
+| Area | Rectangular source with Width/Height. |
 
 | Field | Default | Description |
 |---|---|---|
 | `Color` | {1,1,1} | RGB multiplier |
-| `Temperature` | 6500 | Color temperature in Kelvin, converted to an RGB tint |
+| `Temperature` | 6500 | Color temperature in Kelvin |
 | `Intensity` | 1.0 | Brightness scalar |
-| `Range` | 10.0 | Maximum influence radius for Point, Spot, and Area lights |
-| `InnerAngle` | 30 | Spot full-brightness cone half-angle in degrees |
-| `OuterAngle` | 45 | Spot falloff-edge cone half-angle in degrees |
+| `Range` | 10.0 | Attenuation distance (Point, Spot, Area) |
+| `InnerAngle` | 30 | Spot inner cone half-angle (degrees) |
+| `OuterAngle` | 45 | Spot outer cone half-angle (degrees) |
+| `Width` / `Height` | 1.0 | Area light dimensions |
 
-Up to **8 active lights** are passed to the shader per frame.
+Up to **8 active lights** per frame.
 
 ---
 
 ## Renderer
 
-`engine/renderer/renderer.h` and `renderer.cpp`
+Static class. Handles all rendering through a forward PBR pipeline.
 
-Static class. All rendering goes through it.
+### Per-Frame Pipeline
 
-### Per-frame Pipeline
+1. **Cache World Matrices** — builds all entity world matrices once per frame to avoid redundant recursive parent-chain traversal across render passes
+2. **Shadow Pass** (`RenderShadowPass`) — renders depth from the first active directional/spot light (2D shadow map) and the first active point light (cubemap shadow)
+3. **Scene Pass** (`DrawScene`) — forward-renders all mesh entities with PBR shading, up to 8 lights, and shadow lookup
+4. **Gizmos** (editor only) — collider wireframes, game camera visualization
 
-1. **Shadow Pass** (`RenderShadowPass`). Finds the first active Directional or Spot light. Renders all meshes to a 2048x2048 depth-only framebuffer from the light point of view. Front-face culling prevents self-shadow artifacts.
+### PBR Shading
 
-2. **Scene Pass** (`DrawScene`). Forward-renders all mesh entities. Passes up to 8 lights as uniforms. Binds the shadow depth texture to GL_TEXTURE1 when a shadow caster was found.
+The fragment shader implements a full Cook-Torrance BRDF:
 
-3. **Gizmos** (editor only). Collider wireframes in green, game camera gizmos (sphere plus forward arrow).
+- **Distribution**: GGX (Trowbridge-Reitz)
+- **Geometry**: Smith's method with Schlick-GGX approximation
+- **Fresnel**: Schlick approximation with roughness-aware variant for ambient
+- **Textures**: Albedo (unit 0), Normal map (unit 2), ORM packed texture (unit 3)
+- **UV Mapping**: Triplanar projection (world-space or object-space), configurable tiling
+- **Tone Mapping**: Reinhard
+- **Gamma Correction**: sRGB (gamma 2.2)
+- **Ambient**: Fresnel-weighted diffuse ambient with AO, floor of 0.08
+- **Fallback**: soft directional light when no lights exist in the scene
 
-### Shadow Mapping
+### Shadow System
+
+**2D Shadow Map (Directional / Spot)**
 
 | Property | Value |
 |---|---|
-| Resolution | 2048 x 2048 |
-| Filter | PCF 3x3 kernel |
-| Bias | adaptive: max(0.005 * (1 - N dot L), 0.0005) |
-| Max shadow strength | 80 percent. Ambient is always at least 20 percent. |
-| Outside map | No shadow. Border clamp color is 1.0. |
-| Directional projection | Orthographic plus/minus 30 units, eye at -forward * 40 |
-| Spot projection | Perspective. FOV = OuterAngle * 2 |
+| Resolution | 1024 × 1024 |
+| Filter | PCF 3×3 kernel |
+| Bias | Adaptive: max(0.005 × (1 - N·L), 0.0005) |
+| Max shadow | 70%. Minimum 30% light always passes. |
+| Outside map | No shadow (border clamp = 1.0) |
+| Directional | Orthographic ±30 units, eye at -forward × 40 |
+| Spot | Perspective, FOV = OuterAngle × 2 |
 
-### Lighting Model
+**Point Light Cubemap Shadow**
 
-Diffuse plus constant ambient in GLSL.
+| Property | Value |
+|---|---|
+| Resolution | 512 × 512 per face |
+| Faces | All 6 rendered in single pass via geometry shader |
+| Filter | 4-sample PCF with offset directions |
+| Bias | Distance-dependent: 0.15 + 0.05 × (depth / far) |
+| Max shadow | 80%. Minimum 20% light always passes. |
+| Far plane | 25.0 units |
+| Self-shadow prevention | Front-face culling during shadow pass |
 
-- Ambient floor: vec3(0.07)
-- Fallback: one soft default directional light is used when no lights are in the scene
-- Temperature: Kelvin converted to approximate RGB using a piecewise formula, multiplied into the light color uniform before passing to the shader
+**Per-Light Shadow**: Shadow attenuation is applied only to the specific light that cast it, not globally. Other lights illuminate shadow regions normally.
+
+### Temperature to RGB
+
+Kelvin values (1000–12000) are converted to approximate RGB using a piecewise formula and multiplied into the light color before upload.
+
+### Performance Optimizations
+
+- **VSync enabled** via `glfwSwapInterval(1)`
+- **Uniform location caching** — all `glGetUniformLocation` calls happen once at init, stored in a `ShaderLocs` struct
+- **Per-frame world matrix cache** — `CacheWorldMatrices()` builds a flat vector of all entity world matrices once, eliminating redundant recursive parent-chain traversal across shadow pass, point shadow pass, and draw pass
 
 ### Public API
 
 | Method | Description |
 |---|---|
-| `Init()` | Compile shaders, build shadow FBO, initialize gizmo meshes |
-| `BeginFrame()` | Clear the framebuffer |
-| `RenderSceneEditor(scene, cam, w, h)` | Full editor render: shadow, scene, gizmos |
-| `RenderSceneGame(scene, w, h)` | Game render from the active game camera |
-| `RenderToolbar(playing, paused, w, h)` | Play and pause HUD bar |
-| `DrawTranslationGizmo(pos, axis, cam, w, h)` | Draw the 3-axis translation gizmo |
+| `Init()` | Compile PBR/gizmo/shadow/HUD shaders, build FBOs, cache uniform locations |
+| `BeginFrame()` | Clear framebuffer |
+| `RenderSceneEditor(scene, cam, w, h)` | Full editor render: cache matrices → shadow → scene → gizmos |
+| `RenderSceneGame(scene, w, h)` | Game render from active game camera |
+| `RenderToolbar(playing, paused, w, h)` | Play/Pause HUD overlay |
+| `DrawTranslationGizmo(pos, axis, cam, w, h)` | 3-axis translation gizmo (X, Y, Z + XY, XZ, YZ planes) |
+| `DrawRotationGizmo(pos, axis, cam, w, h)` | 3-ring rotation gizmo |
+| `DrawScaleGizmo(pos, axis, cam, w, h)` | 3-axis scale gizmo with cube tips |
+
+---
+
+## Mesh System
+
+### Primitive Types
+
+| Type | Description |
+|---|---|
+| Cube | 12 triangles, face normals |
+| Sphere | UV sphere (16 stacks × 32 slices) |
+| Capsule | Cylinder body + hemispherical caps |
+| Cylinder | 32-segment parametric with top/bottom caps |
+| Pyramid | 4 lateral + 2 base triangles |
+| Plane | Double-sided 1×1 XZ quad |
+
+### OBJ Import
+
+`Mesh::LoadOBJ(path)` loads arbitrary OBJ files via tinyobjloader. Vertices are auto-normalized to a 1-unit bounding box. AABB (`BoundsMin`, `BoundsMax`) is computed from vertex data for raycast picking.
+
+### Vertex Format
+
+9 floats per vertex: position(3) + normal(3) + color(3). All meshes use `GL_TRIANGLES`.
+
+---
+
+## Texture System
+
+| Function | Description |
+|---|---|
+| `LoadTexture(path)` | sRGB load for albedo textures, vertical flip, mipmaps |
+| `LoadTextureLinear(path)` | Linear load for normal/data maps, no flip |
+| `PackORM(ao, rough, metal, defaults)` | Packs 3 greyscale textures into a single RGB ORM texture (R=AO, G=Roughness, B=Metallic) with nearest-neighbour resampling |
+
+### Texture Import Settings
+
+| Setting | Options |
+|---|---|
+| `IsLinear` | sRGB (albedo) or Linear (normal/data) |
+| `WrapS` / `WrapT` | Repeat, Clamp, Mirrored Repeat |
+| `Filter` | Linear + Mipmaps, Nearest |
+| `Anisotropy` | 1–16 |
+
+---
+
+## PBR Material System
+
+Materials are stored as `MaterialAsset` in the scene and support full PBR workflows.
+
+| Property | Description |
+|---|---|
+| `Color` | RGB tint multiplied over albedo |
+| `AlbedoPath` | Albedo texture path |
+| `NormalPath` | Normal map path |
+| `AOPath` / `RoughnessPath` / `MetallicPath` | Source textures packed into ORM at runtime |
+| `Roughness` | Scalar fallback (0.0–1.0, default 0.5) |
+| `Metallic` | Scalar fallback (0.0–1.0, default 0.0) |
+| `AOValue` | Scalar fallback (0.0–1.0, default 1.0) |
+| `Tiling` | UV scale (x = XZ, y = Y) |
+| `WorldSpaceUV` | Triplanar mapping using world position (seamless across objects) |
+
+Materials are assigned per-entity and can be dragged from the Asset Browser onto entities in the hierarchy or inspector.
 
 ---
 
 ## Physics System
 
-`engine/physics/physicsSystem.h` and `physicsSystem.cpp`
-
 Per-tick simulation over all entities with active RigidBodyComponent modules.
 
-**Gravity** applies 9.81 * FallSpeedMultiplier downward to Velocity.y each tick. Drag is applied as `Velocity *= (1 - Drag)`.
+**Gravity**: 9.8 m/s² × FallSpeedMultiplier downward. Drag applied as `Velocity *= (1 - Drag)`.
 
-**Collision detection:**
+### Collision Detection
 
-| Shape | Method |
+Full collision pair matrix using proper 3D algorithms:
+
+| Pair | Method |
 |---|---|
-| Box | AABB overlap |
-| Sphere | Centre-to-centre distance |
-| Capsule | Distance to line segment |
-| Pyramid | Bounding AABB approximation |
-| None | No collision |
+| OBB vs OBB | SAT with 15 separating axes |
+| Sphere vs OBB | Closest-point on OBB |
+| Sphere vs Sphere | Center-to-center distance |
+| Capsule vs OBB | Iterative closest-point |
+| Capsule vs Sphere | Segment-to-sphere distance |
+| Capsule vs Capsule | Segment-to-segment closest points |
+| Pyramid vs OBB | SAT with pyramid face normals |
+| Pyramid vs Sphere | Closest point on triangle faces |
+| Pyramid vs Capsule | Triangle face intersection |
+| Pyramid vs Pyramid | SAT between two pyramid meshes |
 
-On collision the velocity component along the surface normal is reflected by Restitution. The entity is depenetrated and IsGrounded is set when resting on a surface. Friction reduces lateral velocity on impact.
+**OBB Construction**: Built from world matrix, fully supports rotation and non-uniform scale.
 
-**RigidBody Mode** accumulates angular velocity from impacts. AngularDamping bleeds it per tick.
+**Collision Response**: Normal-based depenetration, velocity reflection by restitution, lateral friction. `IsGrounded` set when resting on a surface.
+
+**RigidBody Mode**: Angular velocity accumulation from impacts, configurable angular damping.
 
 ---
 
 ## Input System
 
-`engine/input/inputManager.h` and `inputManager.cpp`
-
 | Method | Description |
 |---|---|
 | `IsKeyPressed(code)` | True while key is held |
-| `IsKeyJustPressed(code)` | True on the first frame a key transitions to down |
-| `GetMouseDelta()` | Returns MouseDelta with dx and dy since last frame |
-| `KeyNameToCode(name)` | Converts "W", "Space", "Left Shift" etc. to GLFW key code |
-| `KeyCodeToName(code)` | Converts GLFW key code back to a human-readable name |
+| `IsKeyJustPressed(code)` | True on first frame of key-down transition |
+| `GetMouseDelta()` | dx/dy since last frame |
+| `KeyNameToCode(name)` | "W", "Space", "Left Shift" → GLFW key code |
+| `KeyCodeToName(code)` | GLFW key code → human-readable name |
 
----
+### Input Channels
 
-## Input Channels
-
-Named variables stored in `Scene::Channels`. Each channel has a Name, a Type (Boolean, Float, or String), and a value. In Channels input mode the PlayerController maps each action (Forward, Back, Left, Right, Run, Crouch) to a channel index. The channel StringValue holds the key name such as "W". Channels are managed in the Project Settings panel and let input bindings be changed at runtime without recompiling.
+Named variables in `Scene::Channels` (Boolean, Float, or String). In Channels input mode, the PlayerController maps each action to a channel index whose `StringValue` holds the key name. Channels are edited in the Project Settings panel and allow runtime input rebinding without recompilation.
 
 ---
 
@@ -375,71 +467,152 @@ Named variables stored in `Scene::Channels`. Each channel has a Name, a Type (Bo
 
 ### Application and Main Loop
 
-`engine/core/application.h` and `application.cpp`
+Engine modes: **Editor**, **Game**, **Paused**.
 
-| Method | Description |
-|---|---|
-| `UpdatePlayerControllers(dt)` | Reads input, moves all active PlayerControllers, applies built-in mouse look |
-| `UpdateMouseLook(dt)` | Processes all standalone MouseLookComponent entities |
-| `RaycastScene(mx, my, w, h)` | Casts a ray from the editor camera through screen pixel (mx, my) and returns the hit entity index |
+**Play system**: F1 = Play/Stop, F2 = Pause/Resume (also via toolbar buttons). Editor state (positions, rotations, velocities) is snapshot before play and restored on stop.
 
-Editor Mode renders the scene plus gizmos. Play Mode runs physics, controllers, then a game camera render.
+**Editor input**: Ray-AABB picking for entity selection, gizmo interaction (Move/Rotate/Scale with drag detection), viewport right-click context menu (create entities, lights, cameras), gizmo hotkeys (W=Move, E=Scale, R=Rotate).
 
 ### Editor Camera
 
-`engine/editor/editorCamera.h` and `editorCamera.cpp`
+Free-fly camera with right-click look, WASD movement, middle-mouse pan, scroll zoom.
 
-Free-fly camera. Right-click and drag to look. WASD to fly. Scroll to zoom.
-
-| Method | Description |
+| Feature | Details |
 |---|---|
-| `GetViewMatrix()` | lookAt view matrix |
-| `GetProjection(aspect)` | Perspective projection matrix |
-| `ProcessMouseMovement(dx, dy)` | Apply yaw and pitch deltas |
-| `ProcessScroll(offset)` | Adjust zoom level |
+| Movement | WASD + Space/E (up) + Ctrl/Q (down) |
+| Look | Right-mouse drag |
+| Pan | Middle-mouse drag |
+| Zoom | Scroll wheel |
+| Speed boost | Hold Shift (3× multiplier) |
+| Scroll speed | Shift+Scroll adjusts (0.01–10.0 range, shows HUD) |
+| Projection | Perspective, FOV=60°, Near=0.1, Far=1000 |
 
-### Editor Gizmo
+### Editor Gizmos
 
-`engine/editor/editorGizmo.h` and `editorGizmo.cpp`
+Three gizmo modes with constant screen-size rendering (15% of camera distance):
 
-3-axis translation gizmo for selected entities. HitTest detects which axis handle is under the cursor. Returns world-space drag deltas for translation.
+| Mode | Features |
+|---|---|
+| **Move** | 3 single-axis arrows + 3 dual-axis plane handles (XY, XZ, YZ) |
+| **Rotate** | 3 ring circles (64 segments per ring, 18px hit radius) |
+| **Scale** | 3 axes with cube tips + 3 plane handles |
 
 ### Hierarchy Panel
 
-`engine/ui/hierarchyPanel.h` and `hierarchyPanel.cpp`
+Left panel (260px default, resizable) displaying the full entity and group tree.
 
-Left panel showing the full entity and group tree. Click to select. Drag to reorder. Click does not fire on drag. Inline rename. Create and delete entities and groups. Right-click context menu. Component type icons next to entity names.
+**Features:**
+- Click to select, drag to reorder or reparent
+- Multi-select: Ctrl+Click (toggle) and Shift+Click (range)
+- Inline rename for entities, groups, and prefab nodes
+- Right-click context menu: Create 3D Objects (Cube, Sphere, Plane, Pyramid, Cylinder, Capsule), Create Lights (Directional, Point, Spot, Area), Create Camera, Create Group, Rename, Unparent, Unpack Prefab, Delete
+- Drag-drop zones between siblings for reorder, onto groups for reparenting, onto bottom zone for unparent
+- Material drag-drop onto entities from Asset Browser
+- Prefab instances shown in **blue**; orphaned instances in **red**
+- Component type icons next to entity names
+
+**Prefab Editor Mode**: When editing a prefab, the hierarchy shows the prefab's node tree with right-click menus for adding child nodes (3D Objects, Empty, Light, Camera), renaming, and deleting nodes. Includes Sync Instances and Save to Disk buttons.
 
 ### Inspector Panel
 
-`engine/ui/inspectorPanel.h` and `inspectorPanel.cpp`
+Right panel (260px default, resizable) showing all components on the selected entity with collapsible sections.
 
-Right panel showing all components on the selected entity. Each component has a collapsible section with a header strip. Components can be removed via the X button on the header.
-
-Sections and their key exposed fields:
-
-| Section | Key fields |
+| Section | Key Features |
 |---|---|
-| Transform | Position, Rotation in degrees, Scale |
-| Mesh Renderer | Mesh type picker, material picker |
-| Game Camera | FOV, Near, Far, Enabled toggle |
-| Rigid Body | Gravity/Collider/RigidBody sub-modules with all fields, collider wireframe toggle |
-| Player Controller | Movement mode, input mode, key bindings or channels, mouse look settings |
-| Mouse Look | Yaw and pitch targets, sensitivity, invert, clamp settings |
-| Light | Type, Color, Temperature, Intensity, Range, Inner and Outer angle |
-| Add Component | Searchable popup to add any component to the entity |
+| **Transform** | Position, Rotation (degrees), Scale — colored X/Y/Z labels, double-right-click reset |
+| **Material** | Color picker, material dropdown, drag-drop assignment |
+| **Game Camera** | FOV, Near, Far, Yaw, Pitch, enable toggle |
+| **Gravity** | UseGravity, IsKinematic, Mass, Drag, FallSpeedMultiplier, Velocity |
+| **Collider** | Type dropdown, Size/Radius/Height/Offset, ShowCollider toggle |
+| **RigidBody** | AngularVelocity, AngularDamping, Restitution, Friction |
+| **Player Controller** | Movement mode, input mode, key bindings, speeds |
+| **Mouse Look** | Target entities, sensitivity, invert, pitch clamping |
+| **Light** | Type, Color, Temperature, Intensity, Range, Angles, Width/Height |
+| **Add Component** | Searchable popup to add any component |
+
+Components can be reordered via drag-drop on headers and removed via right-click context menu.
+
+### Asset Browser
+
+Bottom panel (200px) organized in a virtual folder hierarchy.
+
+**Asset Types**: Folders, Materials, Textures, Prefabs, OBJ Mesh Assets
+
+**Features:**
+- Folder navigation with breadcrumb bar
+- External file drag-drop: OBJ files → mesh assets, images → textures
+- Prefab creation: drag entity from hierarchy into the drop zone
+- Prefab instantiation: right-click → Instantiate, or drag to viewport
+- Context menus: rename, delete, move to folder on all asset types
+- Background context menu: create new folders and materials
+- Double-click prefab → opens Prefab Editor tab
+- Double-click OBJ → instantiates new entity
+
+### Viewport Tabs
+
+| Tab | Description |
+|---|---|
+| Editor Camera | Main 3D viewport with editor camera |
+| Game Camera | In-game camera preview |
+| Project Settings | Channel system configuration (closeable) |
+| Prefab Editor | Edit prefab nodes with 3D preview (closeable) |
+
+### Console
+
+Log panel (tab next to Assets) with max 200 entries (deque). Accessible via `UIManager::Log()`.
+
+### Splash Screen
+
+Animated smiley-face logo drawn via ImDrawList for 3.2 seconds on startup. The same logo is used as the procedurally generated window icon (64×64) and in the menu bar.
+
+---
+
+## Prefab System
+
+### Creating Prefabs
+
+Drag an entity (or entity tree) from the Hierarchy into the Asset Browser drop zone. The system recursively snapshots transforms, meshes, materials, lights, and cameras into a `PrefabAsset` and saves it as a `.tprefab` file.
+
+### Instantiating Prefabs
+
+Right-click a prefab → Instantiate, or drag from Asset Browser into the viewport. Creates entities for all nodes with proper parent-child relationships.
+
+### Prefab Instance Tracking
+
+Entities track their source prefab via `EntityPrefabSource`. This enables:
+- **Orphaned detection**: deleted prefab sources → instances turn red in hierarchy
+- **Unpack Prefab**: right-click to detach from source, making it standalone
+
+### Prefab Editor
+
+Double-click a prefab to open a dedicated editor tab with:
+- Editable prefab name and per-node properties (name, transform, mesh type, material, light, camera)
+- Right-click context menus: Add Child (3D Objects, Empty, Light, Camera), Rename, Delete Node
+- **Sync Instances** button: propagate edits to all scene instances
+- **Save to Disk** button: write prefab back to `.tprefab` file
+- Full 3D preview with gizmo support
 
 ---
 
 ## Scene Serialization
 
-`engine/serialization/sceneSerializer.h` and `sceneSerializer.cpp`
+Scenes are saved as plain-text `.tscene` files. Prefabs use `.tprefab` files.
 
-Scenes are saved as plain-text `.tscene` files in `assets/scenes/`.
-
-### File Format
+### Scene File Format
 
 ```
+[material]
+name = Metal
+color = 0.8 0.8 0.8
+roughness = 0.3
+metallic = 0.9
+
+[channel]
+ch_idx = 0
+ch_name = Forward
+ch_type = string
+ch_string = W
+
 [entity]
 name = Player
 pos  = 0.0 1.0 0.0
@@ -448,40 +621,66 @@ scale = 1.0 1.0 1.0
 mesh = capsule
 player_controller = true
 pc_move_mode = 2
-pc_mode = local
-pc_key_forward = 87
-pc_key_back = 83
-pc_key_left = 65
-pc_key_right = 68
-
-[entity]
-name = Camera
-parent = 0
-pos = 0.0 0.8 0.0
-game_camera = true
-cam_fov = 75.0
 ```
 
-### API
+### Prefab File Format
 
-| Method | Description |
+```
+name = MyPrefab
+[node]
+node_idx = 0
+node_name = Root
+node_parent = -1
+node_mesh = cube
+node_pos = 0.0 0.0 0.0
+node_rot = 0.0 0.0 0.0
+node_scale = 1.0 1.0 1.0
+```
+
+Supports full round-trip save/load of all entity data including PBR materials, physics modules, player controllers, mouse look, lights, and channel bindings.
+
+---
+
+## OBJ Import
+
+OBJ files can be dragged from the file system into the editor.
+
+| Drop Target | Behavior |
 |---|---|
-| `SaveScene(scene, path)` | Writes the entire scene to a .tscene file |
-| `LoadScene(path, scene)` | Parses a .tscene file and populates the scene |
+| Viewport | Creates entity with OBJ mesh at origin |
+| Asset Browser | Creates entity AND registers OBJ as a mesh asset with "OBJ" icon |
+
+Registered mesh assets appear in the Asset Browser with support for double-click instantiation, right-click deletion, and drag-drop.
+
+`Mesh::LoadOBJ()` auto-normalizes meshes to a 1-unit bounding box and computes AABB for accurate raycast picking.
 
 ---
 
 ## Building
 
-Requirements: CMake 3.20 or higher, a C++17 compiler (MSVC or GCC/Clang), OpenGL 3.3 capable GPU.
+**Requirements:**
+- CMake 3.16 or higher
+- C++17 compiler (MSVC recommended on Windows)
+- OpenGL 4.6 capable GPU
 
 ```bash
 cmake -S . -B build
 cmake --build build --config Release
-./build/Release/TsuEngine
+./build/Release/TsuEngine.exe
 ```
 
-GLFW is expected as a pre-built library under `external/glfw/`. GLAD, GLM, and stb are header-only and included in `external/`. ImGui is fetched automatically via CMake FetchContent.
+GLFW is included under `external/glfw/`. GLAD, GLM, and stb are header-only in `external/`. ImGui and tinyobjloader are fetched automatically via CMake FetchContent.
+
+---
+
+## Default Scene
+
+The default scene (`assets/scenes/default.tscene`) contains:
+- A camera entity
+- A white cube at the origin
+- An orange pyramid
+- A blue cylinder
+- A ground plane (flattened cube)
 
 ---
 

@@ -274,11 +274,18 @@ FETCHCONTENT_QUIET:BOOL=ON
 // for imgui
 FETCHCONTENT_SOURCE_DIR_IMGUI:PATH=
 
+//When not empty, overrides where to find pre-populated content
+// for tinyobjloader
+FETCHCONTENT_SOURCE_DIR_TINYOBJLOADER:PATH=
+
 //Enables UPDATE_DISCONNECTED behavior for all content population
 FETCHCONTENT_UPDATES_DISCONNECTED:BOOL=OFF
 
 //Enables UPDATE_DISCONNECTED behavior just for population of imgui
 FETCHCONTENT_UPDATES_DISCONNECTED_IMGUI:BOOL=OFF
+
+//Enables UPDATE_DISCONNECTED behavior just for population of tinyobjloader
+FETCHCONTENT_UPDATES_DISCONNECTED_TINYOBJLOADER:BOOL=OFF
 
 //Git command line client
 GIT_EXECUTABLE:FILEPATH=C:/Program Files/Git/cmd/git.exe

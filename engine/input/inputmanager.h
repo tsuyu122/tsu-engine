@@ -1,18 +1,19 @@
 #pragma once
 
-// Não incluímos GLFW aqui para evitar problemas de include circular.
-// O GLFWwindow é forward-declared.
+// We don't include GLFW here to avoid circular include issues.
+// GLFWwindow is forward-declared.
 struct GLFWwindow;
 
 namespace tsu {
 
 namespace Key {
-    // Valores espelhados do GLFW — sem depender do header dele aqui
+    // Values mirrored from GLFW — without depending on its header here
     constexpr int W           = 87;
     constexpr int A           = 65;
     constexpr int S           = 83;
     constexpr int D           = 68;
     constexpr int E           = 69;
+    constexpr int R           = 82;
     constexpr int Q           = 81;
     constexpr int Space       = 32;
     constexpr int LeftShift   = 340;

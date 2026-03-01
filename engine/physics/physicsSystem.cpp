@@ -8,7 +8,7 @@
 namespace tsu {
 
 // ----------------------------------------------------------------
-// BuildOBB — extrai posição, rotação e escala da world matrix
+// BuildOBB — extracts position, rotation and scale from the world matrix
 // ----------------------------------------------------------------
 
 OBB PhysicsSystem::BuildOBB(const Scene& scene, uint32_t id)
@@ -142,7 +142,7 @@ bool PhysicsSystem::CheckSphereOBB(
 }
 
 // ----------------------------------------------------------------
-// CheckCapsuleOBB — cápsula vs OBB (iterative closest point)
+// CheckCapsuleOBB — capsule vs OBB (iterative closest point)
 // ----------------------------------------------------------------
 
 bool PhysicsSystem::CheckCapsuleOBB(
@@ -310,7 +310,7 @@ bool PhysicsSystem::CheckCapsuleCapsule(
 }
 
 // ----------------------------------------------------------------
-// BuildPyramidVerts — 5 vértices world-space: v0..v3 = base, v4 = apex
+// BuildPyramidVerts — 5 world-space vertices: v0..v3 = base, v4 = apex
 // ----------------------------------------------------------------
 
 void PhysicsSystem::BuildPyramidVerts(const Scene& scene, uint32_t id, glm::vec3 outVerts[5])
@@ -386,8 +386,8 @@ static glm::vec3 ClosestPointOnTriangle(const glm::vec3& p,
 }
 
 // ----------------------------------------------------------------
-// CheckPyramidOBB — SAT com normais das faces da pirâmide
-// Pirâmide: v0..v3 base, v4 apex. Faces: base + 4 triângulos laterais.
+// CheckPyramidOBB — SAT with pyramid face-normals
+// Pyramid: v0..v3 base, v4 apex. Faces: base + 4 lateral triangles.
 // ----------------------------------------------------------------
 
 bool PhysicsSystem::CheckPyramidOBB(
@@ -541,7 +541,7 @@ bool PhysicsSystem::CheckCapsulePyramid(
 }
 
 // ----------------------------------------------------------------
-// CheckPyramidPyramid — SAT entre duas pirâmides
+// CheckPyramidPyramid — SAT between two pyramids
 // ----------------------------------------------------------------
 
 bool PhysicsSystem::CheckPyramidPyramid(
@@ -600,10 +600,10 @@ bool PhysicsSystem::CheckPyramidPyramid(
 }
 
 // ----------------------------------------------------------------
-// Helpers para resolução de RigidBody completo
+// Helpers for full RigidBody resolution
 // ----------------------------------------------------------------
 
-// Inverso dos momentos principais de inércia de uma caixa (diagonal)
+// Inverse of box principal moments of inertia (diagonal)
 static glm::vec3 BoxInertiaDiagInv(float mass, const glm::vec3& half)
 {
     return glm::vec3(
@@ -613,7 +613,7 @@ static glm::vec3 BoxInertiaDiagInv(float mass, const glm::vec3& half)
     );
 }
 
-// Inverso dos momentos de inércia de uma esfera sólida: I = (2/5)*m*r²
+// Inverse of solid sphere moments of inertia: I = (2/5)*m*r²
 static glm::vec3 SphereInertiaDiagInv(float mass, float radius)
 {
     float I = 0.4f * mass * radius * radius;
@@ -621,8 +621,8 @@ static glm::vec3 SphereInertiaDiagInv(float mass, float radius)
     return glm::vec3(inv);
 }
 
-// Inverso dos momentos de inércia de uma cápsula (aprox. cilindro sólido)
-// Eixo Y = eixo do cilindro
+// Inverse of capsule moments of inertia (approx. solid cylinder)
+// Y axis = cylinder axis
 static glm::vec3 CapsuleInertiaDiagInv(float mass, float radius, float height)
 {
     float r2 = radius * radius;
@@ -635,8 +635,8 @@ static glm::vec3 CapsuleInertiaDiagInv(float mass, float radius, float height)
     );
 }
 
-// Inverso dos momentos de inércia de uma pirâmide sólida (base quadrada)
-// CM a H/4 da base. Iy = m*a²/10, Ix=Iz = m*(a²/20 + 3h²/80)
+// Inverse of solid pyramid moments of inertia (square base)
+// CM at H/4 from base. Iy = m*a²/10, Ix=Iz = m*(a²/20 + 3h²/80)
 static glm::vec3 PyramidInertiaDiagInv(float mass, const glm::vec3& half)
 {
     float a2 = (2.0f*half.x) * (2.0f*half.z); // base area proxy
@@ -650,7 +650,7 @@ static glm::vec3 PyramidInertiaDiagInv(float mass, const glm::vec3& half)
     );
 }
 
-// Aplica I^{-1} diagonal (em espaço local do OBB) a um vetor world-space
+// Applies I^{-1} diagonal (in OBB local space) to a world-space vector
 static glm::vec3 ApplyIInvWorld(const OBB& obb, const glm::vec3& Iinv, const glm::vec3& v)
 {
     glm::vec3 local = {
@@ -662,15 +662,15 @@ static glm::vec3 ApplyIInvWorld(const OBB& obb, const glm::vec3& Iinv, const glm
     return obb.axes[0]*local.x + obb.axes[1]*local.y + obb.axes[2]*local.z;
 }
 
-// Centroide dos vértices mais extremos da OBB na direção `dir`.
-// Trata contato em canto (1 vértice), aresta (2) e face (4) corretamente:
-// ao fazer a média dos vértices empatados o componente "ao longo da aresta"
-// cancela, evitando torques espúrios em eixos que não participam da colisão.
+// Centroid of the OBB vertices most extreme in direction `dir`.
+// Handles corner (1 vertex), edge (2) and face (4) contacts correctly:
+// by averaging the tied vertices the "along-the-edge" component
+// cancels out, avoiding spurious torques on axes not involved in the collision.
 static glm::vec3 OBBContactCentroid(const OBB& obb, const glm::vec3& dir)
 {
     float tol = 1e-3f * (obb.half.x + obb.half.y + obb.half.z);
 
-    // 1ª passagem: projeção MÁXIMA (vértice mais extremo na direção `dir`)
+    // 1st pass: MAXIMUM projection (most extreme vertex in direction `dir`)
     float maxProj = -FLT_MAX;
     for (int mask = 0; mask < 8; mask++) {
         float sx = (mask & 1) ? 1.0f : -1.0f;
@@ -683,7 +683,7 @@ static glm::vec3 OBBContactCentroid(const OBB& obb, const glm::vec3& dir)
         maxProj = std::max(maxProj, glm::dot(c, dir));
     }
 
-    // 2ª passagem: média de todos os vértices dentro da tolerância
+    // 2nd pass: average of all vertices within tolerance
     glm::vec3 sum(0.0f);
     int count = 0;
     for (int mask = 0; mask < 8; mask++) {
@@ -740,25 +740,25 @@ void PhysicsSystem::Update(Scene& scene, float dt)
     for (int iter = 0; iter < 4; ++iter)
         ResolveCollisions(scene);
 
-    // Torque direto de gravidade para RigidBody em contato com o chão.
-    // Executado após ResolveCollisions para usar IsGrounded recém atualizado,
-    // garantindo resposta angular imediata já na primeira frame de contato.
-    // τ = arm × N_contact, onde N_contact ≈ (0, mass*|g|, 0) equilibra a gravidade.
-    // Para inclinação < 45° o torque é restaurador (volta a ficar plano);
-    // para inclinação > 45° o torque é derrubador (tomba).
-    // Esfera NÃO entra neste loop (simetricamente rotatória — não tomba).
+    // Direct gravity torque for RigidBody in contact with the ground.
+    // Executed after ResolveCollisions to use freshly-updated IsGrounded,
+    // ensuring immediate angular response on the first contact frame.
+    // τ = arm × N_contact, where N_contact ≈ (0, mass*|g|, 0) balances gravity.
+    // For tilt < 45° the torque is restoring (returns to flat);
+    // for tilt > 45° the torque tips the object over.
+    // Sphere does NOT enter this loop (rotationally symmetric — doesn’t tip).
     for (size_t i = 0; i < scene.RigidBodies.size(); i++)
     {
         auto& rb = scene.RigidBodies[i];
         if (!rb.HasRigidBodyMode || !rb.HasColliderModule) continue;
         if (rb.IsKinematic || !rb.UseGravity || !rb.IsGrounded) continue;
 
-        // Esferas e cápsulas não usam o modelo de tipping (pivô em contato).
-        // Esferas: rotacionalmente simétricas — não tombam.
-        // Cápsulas: fundo arredondado — rolling vem da fricção na colisão,
-        // não de torque gravitacional. Se entrassem aqui, a constraint de
-        // pêndulo (velocity = cross(omega, -arm)) sobrescreveria a velocidade
-        // tangencial da rampa, fazendo a cápsula parar como um cubo.
+        // Spheres and capsules don't use the tipping model (pivot at contact).
+        // Spheres: rotationally symmetric — don't tip.
+        // Capsules: rounded bottom — rolling comes from collision friction,
+        // not gravitational torque. If they entered here, the pendulum
+        // constraint (velocity = cross(omega, -arm)) would overwrite the
+        // tangential ramp velocity, making the capsule stop like a box.
         if (rb.Collider == ColliderType::Sphere) continue;
         if (rb.Collider == ColliderType::Capsule) continue;
 
@@ -767,7 +767,7 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         glm::vec3 contact;
         if (rb.Collider == ColliderType::Pyramid)
         {
-            // Usar vértices reais da pirâmide para encontrar ponto de contato
+        // Use real pyramid vertices to find contact point
             glm::vec3 pyrV[5];
             BuildPyramidVerts(scene, (uint32_t)i, pyrV);
             float tol = 1e-3f * (obb.half.x + obb.half.y + obb.half.z);
@@ -783,21 +783,21 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         }
         else
         {
-            // Box: vértice(s) mais baixo(s) do OBB
+            // Box: lowest OBB vertex(es)
             contact = OBBContactCentroid(obb, glm::vec3(0.0f, -1.0f, 0.0f));
         }
 
-        // Use actual center of mass (pyramid CM is at H/4 from base, not H/2)
+        // Use actual enter of mass (pyramid CM is at H/4 from base, not H/2)
         glm::vec3 cm = obb.center;
         if (rb.Collider == ColliderType::Pyramid)
             cm = obb.center - obb.axes[1] * (obb.half.y * 0.5f);
-        glm::vec3 arm = contact - cm; // CM → contato
+        glm::vec3 arm = contact - cm; // CM → contact
 
-        // Se braço é quase vertical → plano ou exatamente 45°
+        // If arm is nearly vertical → flat or exactly 45°
         float armHorizSq = arm.x*arm.x + arm.z*arm.z;
         if (armHorizSq < 0.0001f)
         {
-            // Distingue cubo plano (setteld) de cubo preso em 45°
+            // Distinguish flat cube (settled) from cube stuck at 45°
             const auto& rot = scene.Transforms[i].Rotation;
             auto near45 = [](float deg) {
                 float d = std::fmod(std::abs(deg), 90.0f);
@@ -806,7 +806,7 @@ void PhysicsSystem::Update(Scene& scene, float dt)
             if ((near45(rot.x) || near45(rot.z)) &&
                 glm::length(rb.AngularVelocity) < 5.0f)
             {
-                // Travado em 45° — chutar aleatoriamente para um lado (50/50)
+                // Stuck at 45° — randomly nudge to one side (50/50)
                 static uint32_t rng45 = 0xDEADBEEFu;
                 rng45 = rng45 * 1664525u + 1013904223u;
                 float sx = (rng45 & 0x80000000u) ? 1.0f : -1.0f;
@@ -816,7 +816,7 @@ void PhysicsSystem::Update(Scene& scene, float dt)
             }
             else if (!near45(rot.x) && !near45(rot.z))
             {
-                // Realmente plano — desacelera e para
+                // Truly flat — decelerate and stop
                 rb.AngularVelocity *= 0.8f;
                 if (glm::length(rb.AngularVelocity) < 0.5f)
                     rb.AngularVelocity = glm::vec3(0);
@@ -829,14 +829,14 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         // Torque: τ = arm × N_contact, N = (0, +mg, 0)
         glm::vec3 tau = glm::cross(arm, glm::vec3(0.0f, rb.Mass * std::abs(Gravity), 0.0f));
 
-        // Braço em espaço local do OBB (para Steiner)
+        // Arm in OBB local space (for Steiner)
         glm::vec3 armL = {
             glm::dot(arm, obb.axes[0]),
             glm::dot(arm, obb.axes[1]),
             glm::dot(arm, obb.axes[2])
         };
 
-        // Inércia do CM (diagonal) — per-shape
+        // CM inertia (diagonal) — per-shape
         glm::vec3 IcmInv;
         glm::vec3 Icm;
         if (rb.Collider == ColliderType::Pyramid) {
@@ -852,7 +852,7 @@ void PhysicsSystem::Update(Scene& scene, float dt)
             );
         }
 
-        // Steiner: I_pivô = I_cm + m * |arm_perp|²
+        // Steiner: I_pivot = I_cm + m * |arm_perp|²
         glm::vec3 Ipivot = {
             Icm.x + rb.Mass * (armL.y*armL.y + armL.z*armL.z),
             Icm.y + rb.Mass * (armL.x*armL.x + armL.z*armL.z),
@@ -864,7 +864,7 @@ void PhysicsSystem::Update(Scene& scene, float dt)
             1.0f / std::max(Ipivot.z, 0.01f)
         };
 
-        // Aceleração angular (rad/s²) usando inércia do pivô
+        // Angular acceleration (rad/s²) using pivot inertia
         glm::vec3 dOmegaRad = ApplyIInvWorld(obb, IpivotInv, tau) * dt;
 
         // Clamp angular acceleration to prevent explosion from vertex jumps
@@ -878,44 +878,44 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         float spd = glm::length(rb.AngularVelocity);
         if (spd > 720.0f) rb.AngularVelocity *= 720.0f / spd;
 
-        // Gravidade nunca produz torque em Y: arm × (0,mg,0) → tau.y ≡ 0.
-        // Qualquer AngularVelocity.y quando grounded vem de impulsos de
-        // colisão ou acoplamento numérico do cross-product multi-eixo.
-        // Zeramos completamente para eliminar giro horizontal espúrio.
+        // Gravity never produces Y torque: arm × (0,mg,0) → tau.y ≡ 0.
+        // Any AngularVelocity.y when grounded comes from collision impulses
+        // or numerical coupling from the multi-axis cross-product.
+        // We zero it completely to eliminate spurious horizontal spin.
         rb.AngularVelocity.y = 0.0f;
 
-        // CONSTRAINT DE PÊNDULO: v_cm = ω_total × (-arm)
+        // PENDULUM CONSTRAINT: v_cm = ω_total × (-arm)
         glm::vec3 omegaRad = glm::radians(rb.AngularVelocity);
         glm::vec3 vPendulum = glm::cross(omegaRad, -arm);
 
-        // Limita velocidade total do pêndulo
+        // Limit total pendulum speed
         float armLen = glm::length(arm);
         float maxPendulumSpeed = std::max(armLen * glm::radians(720.0f), 15.0f);
         float pendSpeed = glm::length(vPendulum);
         if (pendSpeed > maxPendulumSpeed)
             vPendulum *= maxPendulumSpeed / pendSpeed;
 
-        // Aplica X e Z do pêndulo; Y apenas se for para baixo.
+        // Apply X and Z from pendulum; Y only if downward.
         //
-        // Por que clampear Y:
-        //   Em inclinações multi-eixo (X+Y, X+Z), cross(ω,-arm).y pode ser positivo
-        //   porque ω acumula componentes em X e Z enquanto arm tem componente em Z:
+        // Why clamp Y:
+        //   In multi-axis tilts (X+Y, X+Z), cross(ω,-arm).y can be positive
+        //   because ω accumulates X and Z components while arm has Z component:
         //     vPendulum.y = ω.x*arm.z - ω.z*arm.x
-        //   Positivo → lança objeto para cima → salta do chão → ressalta.
+        //   Positive → launches object upward → jumps off ground → bounces.
         //
-        // Aplica restrição de pêndulo: X e Z diretos, Y apenas para baixo.
-        // maxDOmega já limita variações bruscas de ω, portanto não precisamos
-        // suavizar X/Z aqui (suavização excessiva travava o cubo).
+        // Apply pendulum constraint: X and Z directly, Y only downward.
+        // maxDOmega already limits abrupt ω changes, so we don't need
+        // to smooth X/Z here (excessive smoothing locked the cube).
         rb.Velocity.x = vPendulum.x;
         rb.Velocity.z = vPendulum.z;
         rb.Velocity.y = std::min(vPendulum.y, 0.0f);
     }
 
-    // Cápsula em pé: equilíbrio instável → perturbar para tombar.
-    // Uma cápsula real em pé (height > diameter) tomba com qualquer perturbação.
-    // O fundo hemisférico faz o contato ficar sempre direto abaixo do centro
-    // do hemisfério, então o gravity torque loop não gera torque (arm vertical).
-    // Solução: detectar cápsula em pé e aplicar perturbação angular.
+    // Capsule standing upright: unstable equilibrium → perturb to tip over.
+    // A real capsule standing upright (height > diameter) tips with any perturbation.
+    // The hemispherical bottom keeps the contact directly below the hemisphere center,
+    // so the gravity torque loop generates no torque (arm is vertical).
+    // Solution: detect upright capsule and apply angular perturbation.
     for (size_t i = 0; i < scene.RigidBodies.size(); i++)
     {
         auto& rb = scene.RigidBodies[i];
@@ -931,10 +931,10 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         float capHeight = rb.ColliderHeight * glm::length(glm::vec3(wm[1]));
         float capHalfH = std::max(capHeight * 0.5f - capRadius, 0.0f);
 
-        // Cápsula em pé (eixo quase vertical, com segmento > 0)
+        // Capsule standing (axis nearly vertical, segment > 0)
         if (axisVert > 0.85f && capHalfH > 0.01f)
         {
-            // Aplicar perturbação uma vez para kickstart do tombamento
+            // Apply perturbation once to kickstart tipping
             if (glm::length(rb.AngularVelocity) < 3.0f)
             {
                 rb.AngularVelocity.x += 8.0f;
@@ -943,9 +943,9 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         }
     }
 
-    // Cancela velocidade residual de gravidade para objetos parados no chão.
-    // NÃO aplica a objetos tipping (ω significativo) — esses precisam de
-    // velocidade vertical para orbitar o ponto de contato.
+    // Cancel residual gravity velocity for objects resting on the ground.
+    // Does NOT apply to tipping objects (significant ω) — those need
+    // vertical velocity to orbit the contact point.
     for (size_t i = 0; i < scene.RigidBodies.size(); i++)
     {
         auto& rb = scene.RigidBodies[i];
@@ -954,8 +954,8 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         if (rb.IsGrounded && rb.Velocity.y < 0.1f)
         {
             bool tipping = rb.HasRigidBodyMode && glm::length(rb.AngularVelocity) > 1.0f;
-            // Esferas em rampas precisam manter Velocity.y para rolar pela inclinação.
-            // A colisão já lida com a componente normal; zerar Y aqui mata a velocidade tangencial.
+            // Spheres on ramps need to keep Velocity.y to roll along the slope.
+            // Collision already handles the normal component; zeroing Y here kills tangential velocity.
             bool isSphere = rb.HasColliderModule && rb.Collider == ColliderType::Sphere;
             bool isCapsule = rb.HasColliderModule && rb.Collider == ColliderType::Capsule;
             if (!tipping && !isSphere && !isCapsule) rb.Velocity.y = 0.0f;
@@ -964,7 +964,7 @@ void PhysicsSystem::Update(Scene& scene, float dt)
 }
 
 // ----------------------------------------------------------------
-// ResolveCollisions — OBB para box/pyramid, sphere/capsule correto
+// ResolveCollisions — OBB for box/pyramid, sphere/capsule correct
 // ----------------------------------------------------------------
 
 void PhysicsSystem::ResolveCollisions(Scene& scene)
@@ -1072,7 +1072,7 @@ void PhysicsSystem::ResolveCollisions(Scene& scene)
 
             if (!hit) continue;
 
-            // --- Separação posicional: Baumgarte com slop ---
+            // --- Positional separation: Baumgarte with slop ---
             constexpr float SLOP      = 0.005f;
             constexpr float BAUMGARTE = 0.6f;
             float corr = std::max(depth - SLOP, 0.0f) * BAUMGARTE;
@@ -1084,7 +1084,7 @@ void PhysicsSystem::ResolveCollisions(Scene& scene)
             else if (!bKin)
                 scene.Transforms[j].Position -= normal * corr;
 
-            // --- Resolução de velocidade ---
+            // --- Velocity resolution ---
             bool anyRB = rbA.HasRigidBodyMode || rbB.HasRigidBodyMode;
 
             if (anyRB)
@@ -1161,7 +1161,7 @@ void PhysicsSystem::ResolveCollisions(Scene& scene)
                 glm::vec3 armA = contactArm(aKin, tA, dummyA, aIsPyr ? pyrVertsA : nullptr, posA, rA, hA, capAxisA, -normal);
                 glm::vec3 armB = contactArm(bKin, tB, dummyB, bIsPyr ? pyrVertsB : nullptr, posB, rB, hB, capAxisB,  normal);
 
-                // Tensor de inércia inverso — per-shape
+                // Inverse inertia tensor — per-shape
                 auto getIInv = [](bool isKin, bool hasRB, ColliderType ct, float mass,
                                   const glm::vec3& half, float rad, float h) -> glm::vec3
                 {
@@ -1224,8 +1224,8 @@ void PhysicsSystem::ResolveCollisions(Scene& scene)
                             if (spd > 720.0f) rbB.AngularVelocity *= 720.0f / spd;
                         }
 
-                        // --- Atrito (modelo de Coulomb) ---
-                        // Recomputa velocidade relativa pós-impulso normal
+                        // --- Friction (Coulomb model) ---
+                        // Recompute relative velocity after normal impulse
                         glm::vec3 omegaA2 = (!aKin && rbA.HasRigidBodyMode) ? glm::radians(rbA.AngularVelocity) : glm::vec3(0);
                         glm::vec3 omegaB2 = (!bKin && rbB.HasRigidBodyMode) ? glm::radians(rbB.AngularVelocity) : glm::vec3(0);
                         glm::vec3 vRel2   = (aKin ? glm::vec3(0) : rbA.Velocity + glm::cross(omegaA2, armA))

@@ -3,13 +3,17 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
+#include <iostream>
+
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
 
 namespace tsu {
 
 static const float PI = 3.14159265358979f;
 
 // ----------------------------------------------------------------
-// Utilitários
+// Utilities
 // ----------------------------------------------------------------
 
 glm::vec3 HexToRGB(const std::string& hex)
@@ -57,7 +61,7 @@ void Mesh::Draw()
 }
 
 // ----------------------------------------------------------------
-// Helper para adicionar triângulo com normal calculada
+// Helper to add triangle with computed normal
 // ----------------------------------------------------------------
 
 static void addTri(std::vector<float>& v,
@@ -96,7 +100,7 @@ Mesh Mesh::CreateCube(const std::string& hexColor)
 }
 
 // ----------------------------------------------------------------
-// PIRÂMIDE
+// PYRAMID
 // ----------------------------------------------------------------
 
 Mesh Mesh::CreatePyramid(const std::string& hexColor)
@@ -121,7 +125,7 @@ Mesh Mesh::CreatePyramid(const std::string& hexColor)
 }
 
 // ----------------------------------------------------------------
-// CILINDRO
+// CYLINDER
 // ----------------------------------------------------------------
 
 Mesh Mesh::CreateCylinder(const std::string& hexColor, int segments)
@@ -194,7 +198,7 @@ Mesh Mesh::CreateSphere(const std::string& hexColor, int stacks, int slices)
 }
 
 // ----------------------------------------------------------------
-// CÁPSULA (cilindro com hemisférios nas pontas)
+// CAPSULE (cylinder with hemispheres at the ends)
 // ----------------------------------------------------------------
 
 Mesh Mesh::CreateCapsule(const std::string& hexColor, float radius, float height, int segments)
@@ -205,7 +209,7 @@ Mesh Mesh::CreateCapsule(const std::string& hexColor, float radius, float height
     float halfH = height * 0.5f;
     int hemi = segments / 2;
 
-    // Corpo cilíndrico
+    // Cylindrical body
     for (int i=0; i<segments; i++)
     {
         float a0=(2*PI*i)/segments, a1=(2*PI*(i+1))/segments;
@@ -221,7 +225,7 @@ Mesh Mesh::CreateCapsule(const std::string& hexColor, float radius, float height
         v.insert(v.end(), {x0, halfH,z0, n0.x,n0.y,n0.z, r,g,b});
     }
 
-    // Hemisférios
+    // Hemispheres
     auto hemisphere = [&](float yOffset, float dir)
     {
         for (int i=0; i<hemi; i++)
@@ -250,7 +254,7 @@ Mesh Mesh::CreateCapsule(const std::string& hexColor, float radius, float height
 }
 
 // ----------------------------------------------------------------
-// GIZMO — esfera pequena vermelha translúcida
+// GIZMO — small red translucent sphere
 // ----------------------------------------------------------------
 
 Mesh Mesh::CreateGizmoSphere(float radius)
@@ -317,7 +321,7 @@ Mesh Mesh::CreateGizmoLine(float length)
 }
 
 // ----------------------------------------------------------------
-// CreateGizmoArrow — cilindro fino + cone na ponta, aponta em +Y
+// CreateGizmoArrow — thin cylinder + cone tip, points in +Y
 // ----------------------------------------------------------------
 
 Mesh Mesh::CreateGizmoArrow(float length, float rCol, float gCol, float bCol)
@@ -345,7 +349,7 @@ Mesh Mesh::CreateGizmoArrow(float length, float rCol, float gCol, float bCol)
 
     float angle = 2.0f * PI / (float)sides;
 
-    // Shaft (cilindro ao longo de Y de 0 a shaftH)
+    // Shaft (cylinder along Y from 0 to shaftH)
     for (int i = 0; i < sides; i++)
     {
         float a0 = angle * i, a1 = angle * (i + 1);
@@ -357,7 +361,7 @@ Mesh Mesh::CreateGizmoArrow(float length, float rCol, float gCol, float bCol)
         tri(b1, t0, t1);
     }
 
-    // Cone (de shaftH até shaftH + coneH)
+    // Cone (from shaftH to shaftH + coneH)
     glm::vec3 apex = { 0.0f, shaftH + coneH, 0.0f };
     for (int i = 0; i < sides; i++)
     {
@@ -371,7 +375,7 @@ Mesh Mesh::CreateGizmoArrow(float length, float rCol, float gCol, float bCol)
 }
 
 // ----------------------------------------------------------------
-// PLANE (quad de 1x1 em XZ, visível dos dois lados)
+// PLANE (1x1 quad in XZ, visible from both sides)
 // ----------------------------------------------------------------
 
 Mesh Mesh::CreatePlane(const std::string& hexColor)
@@ -393,6 +397,95 @@ Mesh Mesh::CreatePlane(const std::string& hexColor)
     addTri(verts, p3, p2, p0, r, g, b);
 
     return BuildFromVertices(verts);
+}
+
+// ----------------------------------------------------------------
+// LoadOBJ  — load a Wavefront .obj file, return as engine Mesh
+// Vertex format: pos(3) + normal(3) + color(3)
+// ----------------------------------------------------------------
+Mesh Mesh::LoadOBJ(const std::string& path)
+{
+    tinyobj::attrib_t attrib;
+    std::vector<tinyobj::shape_t>    shapes;
+    std::vector<tinyobj::material_t> materials;
+    std::string err;
+
+    // Base directory for material files
+    std::string baseDir;
+    size_t sep = path.find_last_of("/\\");
+    if (sep != std::string::npos) baseDir = path.substr(0, sep + 1);
+
+    // v1.0.6 signature: (attrib, shapes, materials, err, filename, basedir, triangulate)
+    bool ok = tinyobj::LoadObj(&attrib, &shapes, &materials, &err,
+                               path.c_str(),
+                               baseDir.empty() ? nullptr : baseDir.c_str(),
+                               /*triangulate=*/true);
+    if (!err.empty()) std::cerr << "[OBJ] " << err << "\n";
+    if (!ok)          return Mesh{};
+
+    std::vector<float> verts;
+    verts.reserve(shapes.size() * 3 * 9);
+
+    for (const auto& shape : shapes)
+    {
+        size_t indexOffset = 0;
+        for (size_t f = 0; f < shape.mesh.num_face_vertices.size(); ++f)
+        {
+            int fv = (int)shape.mesh.num_face_vertices[f];
+            for (int v = 0; v < fv; ++v)
+            {
+                tinyobj::index_t idx = shape.mesh.indices[indexOffset + v];
+
+                float px = attrib.vertices[3 * idx.vertex_index + 0];
+                float py = attrib.vertices[3 * idx.vertex_index + 1];
+                float pz = attrib.vertices[3 * idx.vertex_index + 2];
+
+                float nx = 0.0f, ny = 1.0f, nz = 0.0f;
+                if (idx.normal_index >= 0)
+                {
+                    nx = attrib.normals[3 * idx.normal_index + 0];
+                    ny = attrib.normals[3 * idx.normal_index + 1];
+                    nz = attrib.normals[3 * idx.normal_index + 2];
+                }
+
+                // v1.0.6 has no per-vertex color field; default to light grey
+                const float cr = 0.87f, cg = 0.87f, cb = 0.87f;
+
+                verts.insert(verts.end(), {px, py, pz, nx, ny, nz, cr, cg, cb});
+            }
+            indexOffset += fv;
+        }
+    }
+
+    if (verts.empty()) return Mesh{};
+
+    // Compute AABB from all vertex positions
+    glm::vec3 lo( 1e30f), hi(-1e30f);
+    for (size_t i = 0; i < verts.size(); i += 9) {
+        glm::vec3 p(verts[i], verts[i+1], verts[i+2]);
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+
+    // Auto-scale: normalize vertices so the mesh fits within a 1-unit bounding box
+    glm::vec3 extent = hi - lo;
+    float maxExtent = std::max({extent.x, extent.y, extent.z});
+    if (maxExtent > 1e-6f) {
+        float scaleFactor = 1.0f / maxExtent;
+        glm::vec3 center = (lo + hi) * 0.5f;
+        for (size_t i = 0; i < verts.size(); i += 9) {
+            verts[i+0] = (verts[i+0] - center.x) * scaleFactor;
+            verts[i+1] = (verts[i+1] - center.y) * scaleFactor;
+            verts[i+2] = (verts[i+2] - center.z) * scaleFactor;
+        }
+        lo = (lo - center) * scaleFactor;
+        hi = (hi - center) * scaleFactor;
+    }
+
+    Mesh m = BuildFromVertices(verts);
+    m.BoundsMin = lo;
+    m.BoundsMax = hi;
+    return m;
 }
 
 } // namespace tsu

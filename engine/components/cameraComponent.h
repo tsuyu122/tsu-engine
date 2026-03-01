@@ -25,7 +25,7 @@ struct CameraComponent
 
     CameraComponent()
     {
-        UpdateVectors(); // garante que Front/Right/Up começam corretos
+        UpdateVectors(); // ensures Front/Right/Up start correct
     }
 
     glm::mat4 GetProjection(float aspect) const

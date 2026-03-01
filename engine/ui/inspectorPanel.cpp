@@ -1,6 +1,11 @@
 #include "ui/inspectorPanel.h"
 #include "input/inputManager.h"
+#include "renderer/textureLoader.h"
+#include <glad/glad.h>
 #include <imgui.h>
+#ifndef GL_TEXTURE_MAX_ANISOTROPY_EXT
+#define GL_TEXTURE_MAX_ANISOTROPY_EXT 0x84FE
+#endif
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -8,6 +13,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <unordered_map>
+#include <functional>
 
 namespace tsu {
 
@@ -20,7 +26,8 @@ static const char* ColliderTypeNames[] = {
 // ----------------------------------------------------------------
 
 static bool TableDragFloat3(const char* label, float* v, float speed,
-                             float vmin = 0.0f, float vmax = 0.0f)
+                             float vmin = 0.0f, float vmax = 0.0f,
+                             const float* def3 = nullptr)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
@@ -29,11 +36,15 @@ static bool TableDragFloat3(const char* label, float* v, float speed,
     ImGui::TableSetColumnIndex(1);
     ImGui::SetNextItemWidth(-1);
     char id[64]; snprintf(id, sizeof(id), "##%s", label);
-    return ImGui::DragFloat3(id, v, speed, vmin, vmax);
+    bool changed = ImGui::DragFloat3(id, v, speed, vmin, vmax);
+    if (def3 && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right))
+        { v[0]=def3[0]; v[1]=def3[1]; v[2]=def3[2]; changed=true; }
+    return changed;
 }
 
 static bool TableDragFloat1(const char* label, float* v, float speed,
-                             float vmin = 0.0f, float vmax = 0.0f)
+                             float vmin = 0.0f, float vmax = 0.0f,
+                             const float* def1 = nullptr)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
@@ -42,7 +53,10 @@ static bool TableDragFloat1(const char* label, float* v, float speed,
     ImGui::TableSetColumnIndex(1);
     ImGui::SetNextItemWidth(-1);
     char id[64]; snprintf(id, sizeof(id), "##%s", label);
-    return ImGui::DragFloat(id, v, speed, vmin, vmax);
+    bool changed = ImGui::DragFloat(id, v, speed, vmin, vmax);
+    if (def1 && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right))
+        { *v = *def1; changed = true; }
+    return changed;
 }
 
 // ----------------------------------------------------------------
@@ -263,7 +277,7 @@ static bool DrawCompHeader(const char* label, const char* uid,
 }
 
 // ----------------------------------------------------------------
-// Material module UI (obrigatório, sempre após Transform)
+// Material module UI (mandatory, always after Transform)
 // ----------------------------------------------------------------
 
 static void DrawMaterialModule(Scene& scene, int idx)
@@ -274,11 +288,11 @@ static void DrawMaterialModule(Scene& scene, int idx)
     {
         int matIdx = (idx < (int)scene.EntityMaterial.size()) ? scene.EntityMaterial[idx] : -1;
 
-        // Cor: se nenhum material atribuído, edita EntityColors (local do objeto)
+        // Color: if no material assigned, edit EntityColors (per-object)
         bool hasMat = (matIdx >= 0 && matIdx < (int)scene.Materials.size());
         glm::vec3 color = hasMat ? scene.Materials[matIdx].Color
                                  : (idx < (int)scene.EntityColors.size() ? scene.EntityColors[idx] : glm::vec3(1.0f));
-        ImGui::Text("Cor:");
+        ImGui::Text("Color:");
         if (ImGui::ColorEdit3("##matcolor", &color.x))
         {
             if (hasMat)
@@ -457,11 +471,12 @@ bool InspectorPanel::DrawCameraSection(GameCameraComponent& gc,
     if (!ImGui::BeginTable("##cam", 2)) return true;
     ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 60.0f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
-    TableDragFloat1("FOV",   &gc.FOV,   0.5f, 10.0f, 170.0f);
-    TableDragFloat1("Near",  &gc.Near,  0.01f, 0.001f, 10.0f);
-    TableDragFloat1("Far",   &gc.Far,   1.0f, 1.0f, 10000.0f);
-    bool yawChanged = TableDragFloat1("Yaw",   &gc.Yaw,   0.5f);
-    bool pitchChanged = TableDragFloat1("Pitch", &gc.Pitch, 0.5f, -89.0f, 89.0f);
+    static const float kFOVDef=60.f,kNearDef=0.1f,kFarDef=1000.f,kYawDef=0.f,kPitchDef=0.f;
+    TableDragFloat1("FOV",   &gc.FOV,   0.5f, 10.0f, 170.0f,   &kFOVDef);
+    TableDragFloat1("Near",  &gc.Near,  0.01f, 0.001f, 10.0f,  &kNearDef);
+    TableDragFloat1("Far",   &gc.Far,   1.0f, 1.0f, 10000.0f,  &kFarDef);
+    bool yawChanged   = TableDragFloat1("Yaw",   &gc.Yaw,   0.5f, 0.f, 0.f, &kYawDef);
+    bool pitchChanged = TableDragFloat1("Pitch", &gc.Pitch, 0.5f, -89.0f, 89.0f, &kPitchDef);
     if (yawChanged || pitchChanged) gc.UpdateVectors();
     ImGui::EndTable();
     return true;
@@ -485,9 +500,10 @@ bool InspectorPanel::DrawGravitySection(RigidBodyComponent& rb,
     if (!ImGui::BeginTable("##grav", 2)) return true;
     ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 75.0f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
-    TableDragFloat1("Mass",      &rb.Mass,               0.05f,  0.001f, 1000.0f);
-    TableDragFloat1("Drag",      &rb.Drag,               0.001f, 0.0f,   1.0f);
-    TableDragFloat1("FallSpeed", &rb.FallSpeedMultiplier, 0.05f, 0.1f,   10.0f);
+    static const float kMassDef=1.f,kDragDef=0.f,kFallDef=1.f;
+    TableDragFloat1("Mass",      &rb.Mass,               0.05f,  0.001f, 1000.0f, &kMassDef);
+    TableDragFloat1("Drag",      &rb.Drag,               0.001f, 0.0f,   1.0f,    &kDragDef);
+    TableDragFloat1("FallSpeed", &rb.FallSpeedMultiplier, 0.05f, 0.1f,  10.0f,   &kFallDef);
     ImGui::EndTable();
 
     ImGui::TextDisabled("Velocity: %.2f  %.2f  %.2f",
@@ -535,33 +551,37 @@ bool InspectorPanel::DrawColliderSection(Scene& scene, int entityIdx,
     if (rb.Collider == ColliderType::Box || rb.Collider == ColliderType::Pyramid)
     {
         float sz[3] = { rb.ColliderSize.x, rb.ColliderSize.y, rb.ColliderSize.z };
-        if (TableDragFloat3("Size", sz, 0.01f, 0.001f, 100.0f))
+        static const float kSzDef[3]={1.f,1.f,1.f};
+        if (TableDragFloat3("Size", sz, 0.01f, 0.001f, 100.0f, kSzDef))
             rb.ColliderSize = { sz[0], sz[1], sz[2] };
     }
     else if (rb.Collider == ColliderType::Sphere)
     {
-        TableDragFloat1("Radius", &rb.ColliderRadius, 0.01f, 0.001f, 100.0f);
+        static const float kRadDef=0.5f;
+        TableDragFloat1("Radius", &rb.ColliderRadius, 0.01f, 0.001f, 100.0f, &kRadDef);
     }
     else if (rb.Collider == ColliderType::Capsule)
     {
-        TableDragFloat1("Radius", &rb.ColliderRadius, 0.01f, 0.001f, 100.0f);
-        TableDragFloat1("Height", &rb.ColliderHeight, 0.01f, 0.001f, 100.0f);
+        static const float kCapRadDef=0.5f, kCapHDef=2.f;
+        TableDragFloat1("Radius", &rb.ColliderRadius, 0.01f, 0.001f, 100.0f, &kCapRadDef);
+        TableDragFloat1("Height", &rb.ColliderHeight, 0.01f, 0.001f, 100.0f, &kCapHDef);
     }
 
     float off[3] = { rb.ColliderOffset.x, rb.ColliderOffset.y, rb.ColliderOffset.z };
-    if (TableDragFloat3("Offset", off, 0.01f))
+    static const float kOffDef[3]={0.f,0.f,0.f};
+    if (TableDragFloat3("Offset", off, 0.01f, 0.f, 0.f, kOffDef))
         rb.ColliderOffset = { off[0], off[1], off[2] };
 
     ImGui::EndTable();
 
-    // Liga/desliga visualização do wireframe verde
+    // Toggle collider wireframe green visualization
     ImGui::Checkbox("Show Collider", &rb.ShowCollider);
 
     return true;
 }
 
 // ----------------------------------------------------------------
-// RigidBody module (rotação + impulso + restitução)
+// RigidBody module (rotation + impulse + restitution)
 // ----------------------------------------------------------------
 
 bool InspectorPanel::DrawRigidBodySection(RigidBodyComponent& rb,
@@ -575,9 +595,10 @@ bool InspectorPanel::DrawRigidBodySection(RigidBodyComponent& rb,
     if (!ImGui::BeginTable("##rb", 2)) return true;
     ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 75.0f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
-    TableDragFloat1("Restitution",  &rb.Restitution,   0.01f, 0.0f, 1.0f);
-    TableDragFloat1("Friction",     &rb.FrictionCoef,  0.01f, 0.0f, 2.0f);
-    TableDragFloat1("AngDamping",   &rb.AngularDamping,0.001f,0.0f, 1.0f);
+    static const float kRestDef=0.3f, kFricDef=0.5f, kAngDampDef=0.05f;
+    TableDragFloat1("Restitution",  &rb.Restitution,   0.01f, 0.0f, 1.0f,  &kRestDef);
+    TableDragFloat1("Friction",     &rb.FrictionCoef,  0.01f, 0.0f, 2.0f,  &kFricDef);
+    TableDragFloat1("AngDamping",   &rb.AngularDamping,0.001f,0.0f, 1.0f,  &kAngDampDef);
     ImGui::EndTable();
 
     ImGui::TextDisabled("AngVel: %.1f  %.1f  %.1f",
@@ -617,9 +638,10 @@ bool InspectorPanel::DrawPlayerControllerSection(PlayerControllerComponent& pc,
     if (!ImGui::BeginTable("##pc_move", 2)) return true;
     ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 110.0f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
-    TableDragFloat1("Walk Speed", &pc.WalkSpeed, 0.05f, 0.01f, 100.0f);
-    TableDragFloat1("Run Mult", &pc.RunMultiplier, 0.05f, 1.0f, 10.0f);
-    TableDragFloat1("Crouch Mult", &pc.CrouchMultiplier, 0.05f, 0.05f, 1.0f);
+    static const float kWalkDef=5.f, kRunDef=2.f, kCrouchDef=0.5f;
+    TableDragFloat1("Walk Speed", &pc.WalkSpeed, 0.05f, 0.01f, 100.0f, &kWalkDef);
+    TableDragFloat1("Run Mult", &pc.RunMultiplier, 0.05f, 1.0f, 10.0f, &kRunDef);
+    TableDragFloat1("Crouch Mult", &pc.CrouchMultiplier, 0.05f, 0.05f, 1.0f, &kCrouchDef);
     ImGui::EndTable();
 
     ImGui::Checkbox("Allow Run", &pc.AllowRun);
@@ -1033,25 +1055,26 @@ bool InspectorPanel::DrawLightSection(LightComponent& lc, int orderIdx, std::vec
     }
 
     // --- Intensity ---
-    TableDragFloat1("Intensity", &lc.Intensity, 0.01f, 0.0f, 200.0f);
+    static const float kIntDef=1.f, kRangeDef=10.f, kInnerDef=25.f, kOuterDef=40.f, kWDef=2.f, kHDef=1.f;
+    TableDragFloat1("Intensity", &lc.Intensity, 0.01f, 0.0f, 200.0f, &kIntDef);
 
     // --- Range (not for directional) ---
     if (lc.Type != LightType::Directional)
-        TableDragFloat1("Range", &lc.Range, 0.1f, 0.0f, 2000.0f);
+        TableDragFloat1("Range", &lc.Range, 0.1f, 0.0f, 2000.0f, &kRangeDef);
 
     // --- Spot cone angles ---
     if (lc.Type == LightType::Spot)
     {
-        TableDragFloat1("Inner \xc2\xb0", &lc.InnerAngle, 0.5f, 0.0f, 89.9f);
-        TableDragFloat1("Outer \xc2\xb0", &lc.OuterAngle, 0.5f, 0.0f, 90.0f);
+        TableDragFloat1("Inner \xc2\xb0", &lc.InnerAngle, 0.5f, 0.0f, 89.9f, &kInnerDef);
+        TableDragFloat1("Outer \xc2\xb0", &lc.OuterAngle, 0.5f, 0.0f, 90.0f, &kOuterDef);
         if (lc.InnerAngle > lc.OuterAngle) lc.InnerAngle = lc.OuterAngle;
     }
 
     // --- Area light dimensions ---
     if (lc.Type == LightType::Area)
     {
-        TableDragFloat1("Width",  &lc.Width,  0.05f, 0.01f, 200.0f);
-        TableDragFloat1("Height", &lc.Height, 0.05f, 0.01f, 200.0f);
+        TableDragFloat1("Width",  &lc.Width,  0.05f, 0.01f, 200.0f, &kWDef);
+        TableDragFloat1("Height", &lc.Height, 0.05f, 0.01f, 200.0f, &kHDef);
     }
 
     ImGui::EndTable();
@@ -1184,7 +1207,7 @@ void InspectorPanel::DrawMaterialEditor(Scene& scene, int matIdx)
     if (matIdx < 0 || matIdx >= (int)scene.Materials.size()) return;
     auto& mat = scene.Materials[matIdx];
 
-    ImGui::TextColored(ImVec4(1,0.8f,0.3f,1), "Material");
+    ImGui::TextColored(ImVec4(1,0.8f,0.3f,1), "Material (PBR)");
     ImGui::Separator();
 
     // Nome
@@ -1195,101 +1218,258 @@ void InspectorPanel::DrawMaterialEditor(Scene& scene, int matIdx)
         mat.Name = nameBuf;
 
     ImGui::Spacing();
-    // Cor
-    ImGui::Text("Cor:");
+    ImGui::Text("Tint:");
     ImGui::ColorEdit3("##matedcolor", &mat.Color.x);
 
     ImGui::Spacing();
-    // Helper: procura TextureID no scene pelo path
+    ImGui::Separator();
+
+    // ----------------------------------------------------------------
+    // Helper: lookup GL ID by path
+    // ----------------------------------------------------------------
     auto lookupTexID = [&](const std::string& path) -> unsigned int {
         auto it = std::find(scene.Textures.begin(), scene.Textures.end(), path);
         if (it == scene.Textures.end()) return 0u;
         int idx = (int)(it - scene.Textures.begin());
         return (idx < (int)scene.TextureIDs.size()) ? scene.TextureIDs[idx] : 0u;
     };
-    // Sincroniza TextureID caso o path já tenha sido setado (e.g., load de cena)
-    if (!mat.TexturePath.empty() && mat.TextureID == 0)
-        mat.TextureID = lookupTexID(mat.TexturePath);
 
-    ImGui::Text("Textura:");
-
-    const float sqSz  = 64.0f;
-    float       btnW2 = ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0f + 6.0f;
-
-    // Quadrado de preview (drag-drop target)
-    ImGui::InvisibleButton("##texslot", {sqSz, sqSz});
+    // ----------------------------------------------------------------
+    // Reusable texture slot widget
+    // slotLabel    : e.g. "Albedo"
+    // pathRef      : std::string& holding the path
+    // idRef        : unsigned int& holding the GL texture ID
+    // popupId      : unique popup id string
+    // isLinear     : load without gamma (normal maps)
+    // onChanged    : callback on path change
+    // ----------------------------------------------------------------
+    auto TextureSlot = [&](const char* slotLabel,
+                            std::string& pathRef, unsigned int& idRef,
+                            const char* popupId, bool isLinear,
+                            std::function<void()> onChanged)
     {
-        ImVec2 sqMin = ImGui::GetItemRectMin();
-        ImVec2 sqMax = ImGui::GetItemRectMax();
-        auto*  dl    = ImGui::GetWindowDrawList();
-        if (mat.TextureID > 0)
-            // UV {0,1}->{1,0}: flip V because texture was loaded with flip=true (GL convention)
-            dl->AddImage((ImTextureID)(intptr_t)mat.TextureID, sqMin, sqMax, {0,1}, {1,0});
-        else {
-            dl->AddRectFilled(sqMin, sqMax,
-                IM_COL32((int)(mat.Color.r*255),(int)(mat.Color.g*255),(int)(mat.Color.b*255),255), 4.f);
-            dl->AddRect      (sqMin, sqMax, IM_COL32(100,100,100,180), 4.f);
-        }
-    }
-    if (ImGui::BeginDragDropTarget()) {
-        if (auto* pl = ImGui::AcceptDragDropPayload("TEXTURE_PATH")) {
-            mat.TexturePath = std::string((const char*)pl->Data, pl->DataSize - 1);
-            mat.TextureID   = lookupTexID(mat.TexturePath);
-        }
-        ImGui::EndDragDropTarget();
-    }
+        const float sqSz = 56.0f;
+        // Sync ID if path set but ID missing (e.g. after scene load)
+        if (!pathRef.empty() && idRef == 0)
+            idRef = lookupTexID(pathRef);
 
-    // Label + botões ao lado do quadrado
-    ImGui::SameLine();
-    ImGui::BeginGroup();
-    if (!mat.TexturePath.empty()) {
-        size_t sl = mat.TexturePath.find_last_of("/\\");
-        std::string fn = (sl != std::string::npos) ? mat.TexturePath.substr(sl+1) : mat.TexturePath;
-        if (fn.size() > 18) fn = fn.substr(0,17) + "\xe2\x80\xa6";
-        ImGui::TextUnformatted(fn.c_str());
-    } else {
-        ImGui::TextDisabled("(nenhuma)");
-    }
-    if (ImGui::Button("...", {btnW2, 0})) ImGui::OpenPopup("##texturepicker");
-    if (!mat.TexturePath.empty()) {
+        ImGui::PushID(popupId);
+        float labelW = ImGui::CalcTextSize(slotLabel).x + 4.0f;
+        constexpr float kSlotW = 76.0f; // square + gap
+
+        // Preview square
+        ImGui::InvisibleButton("##sq", {sqSz, sqSz});
+        {
+            ImVec2 mn = ImGui::GetItemRectMin();
+            ImVec2 mx = ImGui::GetItemRectMax();
+            auto*  dl = ImGui::GetWindowDrawList();
+            if (idRef > 0)
+                dl->AddImage((ImTextureID)(intptr_t)idRef, mn, mx, {0,1},{1,0});
+            else {
+                dl->AddRectFilled(mn, mx, IM_COL32(50,50,55,255), 4.f);
+                dl->AddRect(mn, mx, IM_COL32(100,100,110,200), 4.f);
+                ImVec2 tc = ImGui::CalcTextSize(slotLabel);
+                dl->AddText(ImVec2(mn.x+(sqSz-tc.x)*0.5f, mn.y+(sqSz-tc.y)*0.5f),
+                            IM_COL32(130,130,138,200), slotLabel);
+            }
+        }
+        // Drag-drop target on the square
+        if (ImGui::BeginDragDropTarget()) {
+            if (auto* pl = ImGui::AcceptDragDropPayload("TEXTURE_PATH")) {
+                pathRef = std::string((const char*)pl->Data, pl->DataSize - 1);
+                idRef   = isLinear ? LoadTextureLinear(pathRef) : lookupTexID(pathRef);
+                if (!idRef) idRef = lookupTexID(pathRef);
+                onChanged();
+            }
+            ImGui::EndDragDropTarget();
+        }
+
         ImGui::SameLine();
-        if (ImGui::Button("X", {0,0})) { mat.TexturePath.clear(); mat.TextureID = 0; }
-    }
-    ImGui::EndGroup();
-
-    if (ImGui::BeginPopup("##texturepicker")) {
-        ImGui::Text("Selecionar textura:");
-        ImGui::Separator();
-        if (scene.Textures.empty()) {
-            ImGui::TextDisabled("(nenhuma textura importada)");
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(slotLabel);
+        if (!pathRef.empty()) {
+            size_t sl = pathRef.find_last_of("/\\");
+            std::string fn = (sl != std::string::npos) ? pathRef.substr(sl+1) : pathRef;
+            if (fn.size() > 16) fn = fn.substr(0,15) + "\xe2\x80\xa6";
+            ImGui::TextDisabled("%s", fn.c_str());
         } else {
+            ImGui::TextDisabled("(nenhuma)");
+        }
+        // Picker button
+        if (ImGui::SmallButton("...")) ImGui::OpenPopup(popupId);
+        if (!pathRef.empty()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X")) { pathRef.clear(); idRef = 0; onChanged(); }
+        }
+        ImGui::EndGroup();
+
+        // Popup
+        if (ImGui::BeginPopup(popupId)) {
+            ImGui::Text("Selecionar:");
+            ImGui::Separator();
             for (int ti2 = 0; ti2 < (int)scene.Textures.size(); ++ti2) {
                 const auto& tp = scene.Textures[ti2];
                 size_t sl2 = tp.find_last_of("/\\");
                 std::string fn2 = (sl2 != std::string::npos) ? tp.substr(sl2+1) : tp;
                 unsigned int tid = (ti2 < (int)scene.TextureIDs.size()) ? scene.TextureIDs[ti2] : 0u;
-                if (tid > 0) { ImGui::Image((ImTextureID)(intptr_t)tid, {24,24}); ImGui::SameLine(); }
-                if (ImGui::Selectable(fn2.c_str(), mat.TexturePath == tp)) {
-                    mat.TexturePath = tp;
-                    mat.TextureID   = tid;
+                if (tid > 0) { ImGui::Image((ImTextureID)(intptr_t)tid, {20,20}); ImGui::SameLine(); }
+                if (ImGui::Selectable(fn2.c_str(), pathRef == tp)) {
+                    pathRef = tp;
+                    idRef   = isLinear ? LoadTextureLinear(pathRef) : tid;
+                    if (!idRef) idRef = tid;
+                    onChanged();
                     ImGui::CloseCurrentPopup();
                 }
             }
+            if (!pathRef.empty()) {
+                ImGui::Separator();
+                if (ImGui::Selectable("(Nenhuma)")) { pathRef.clear(); idRef = 0; onChanged(); ImGui::CloseCurrentPopup(); }
+            }
+            ImGui::EndPopup();
         }
-        if (!mat.TexturePath.empty()) {
-            ImGui::Separator();
-            if (ImGui::Selectable("(Nenhuma)")) { mat.TexturePath.clear(); mat.TextureID = 0; ImGui::CloseCurrentPopup(); }
-        }
-        ImGui::EndPopup();
-    }
+        ImGui::PopID();
+    };
+
+    // ---- Albedo ----
+    TextureSlot("Albedo", mat.AlbedoPath, mat.AlbedoID, "##pk_albedo", false, [](){});
 
     ImGui::Spacing();
-    ImGui::TextDisabled("GL Texture ID: %u", mat.TextureID);
+    // ---- Normal ----
+    TextureSlot("Normal", mat.NormalPath, mat.NormalID, "##pk_normal", true, [](){});
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.8f,0.9f,1.0f,1), "ORM Sources");
+    ImGui::TextDisabled("R=AO  G=Roughness  B=Metallic");
+    ImGui::Spacing();
+
+    // ORM-dirty trigger (shared for AO, Roughness, Metallic slots)
+    auto markORMDirty = [&]() { mat.ORM_Dirty = true; };
+
+    // ---- Roughness ----
+    unsigned int _dummy = 0;
+    TextureSlot("Roughness", mat.RoughnessPath, _dummy, "##pk_rough", false, markORMDirty);
+    ImGui::Spacing();
+
+    // ---- Metallic ----
+    _dummy = 0;
+    TextureSlot("Metallic",  mat.MetallicPath,  _dummy, "##pk_metal", false, markORMDirty);
+    ImGui::Spacing();
+
+    // ---- AO ----
+    _dummy = 0;
+    TextureSlot("AO",        mat.AOPath,        _dummy, "##pk_ao",    false, markORMDirty);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.8f,0.9f,1.0f,1), "Scalar Fallbacks");
+    ImGui::TextDisabled("Used when texture is empty  |  RClick = reset");
+    ImGui::Spacing();
+
+    // DragFloat with right-click reset helper
+    auto PBRDrag = [&](const char* label, float& val, float def,
+                        float speed, float lo, float hi, bool& dirty) {
+        if (ImGui::DragFloat(label, &val, speed, lo, hi, "%.3f")) dirty = true;
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(1)) {
+            val = def; dirty = true;
+        }
+    };
+
+    bool ormDirty = false;
+    PBRDrag("Roughness##sc", mat.Roughness, 0.5f, 0.005f, 0.0f, 1.0f, ormDirty);
+    PBRDrag("Metallic##sc",  mat.Metallic,  0.0f, 0.005f, 0.0f, 1.0f, ormDirty);
+    PBRDrag("AO##sc",        mat.AOValue,   1.0f, 0.005f, 0.0f, 1.0f, ormDirty);
+    if (ormDirty) mat.ORM_Dirty = true;
+
+    if (mat.ORM_Dirty)
+        ImGui::TextColored(ImVec4(1,0.7f,0.2f,1), "* ORM sera reempacotado no proximo frame");
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.8f,0.9f,1.0f,1), "UV Mapping");
+    ImGui::Spacing();
+    ImGui::DragFloat2("Tiling##uv", &mat.Tiling[0], 0.05f, 0.01f, 200.0f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("X: repeticoes nos eixos XZ (horizontal)\nY: repeticoes no eixo Y (vertical)");
+    ImGui::Checkbox("World-Space UV", &mat.WorldSpaceUV);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Global grid: adjacent objects align textures\nUseful for floors, walls, wallpaper.");
+}
+
+void InspectorPanel::DrawTextureInspector(Scene& scene, int texIdx)
+{
+    if (texIdx < 0 || texIdx >= (int)scene.Textures.size()) return;
+    while ((int)scene.TextureSettings.size() <= texIdx)
+        scene.TextureSettings.emplace_back();
+
+    const std::string& fullPath = scene.Textures[texIdx];
+    unsigned int glID = (texIdx < (int)scene.TextureIDs.size()) ? scene.TextureIDs[texIdx] : 0;
+    auto& cfg = scene.TextureSettings[texIdx];
+
+    size_t sl = fullPath.find_last_of("/\\");
+    std::string fname = (sl != std::string::npos) ? fullPath.substr(sl+1) : fullPath;
+
+    ImGui::TextColored(ImVec4(1,0.8f,0.3f,1), "Texture");
+    ImGui::Separator();
+    ImGui::TextUnformatted(fname.c_str());
+    ImGui::TextDisabled("%s", fullPath.c_str());
+    ImGui::Spacing();
+
+    if (glID > 0)
+        ImGui::Image((ImTextureID)(intptr_t)glID, {128,128}, {0,1},{1,0});
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(ImVec4(0.8f,0.9f,1.0f,1), "Import Settings");
+    ImGui::Spacing();
+
+    ImGui::Checkbox("Linear (normal/data map)", &cfg.IsLinear);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Ligado para normais, roughness, metallic, AO.\nDesligado para albedo (sRGB/cor).");
+
+    const char* wrapModes[] = { "Repeat", "Clamp to Edge", "Mirrored Repeat" };
+    bool wrapChanged = false;
+    if (ImGui::BeginCombo("Wrap S", wrapModes[cfg.WrapS]))
+    {
+        for (int w = 0; w < 3; w++) if (ImGui::Selectable(wrapModes[w], cfg.WrapS==w)) { cfg.WrapS=w; wrapChanged=true; }
+        ImGui::EndCombo();
+    }
+    if (ImGui::BeginCombo("Wrap T", wrapModes[cfg.WrapT]))
+    {
+        for (int w = 0; w < 3; w++) if (ImGui::Selectable(wrapModes[w], cfg.WrapT==w)) { cfg.WrapT=w; wrapChanged=true; }
+        ImGui::EndCombo();
+    }
+
+    const char* filterModes[] = { "Linear + Mipmaps", "Nearest" };
+    bool filterChanged = false;
+    if (ImGui::BeginCombo("Filter", filterModes[cfg.Filter]))
+    {
+        for (int f = 0; f < 2; f++) if (ImGui::Selectable(filterModes[f], cfg.Filter==f)) { cfg.Filter=f; filterChanged=true; }
+        ImGui::EndCombo();
+    }
+
+    bool anisoChanged = ImGui::SliderFloat("Anisotropy", &cfg.Anisotropy, 1.0f, 16.0f, "%.0fx");
+
+    // Apply GL params immediately
+    if ((wrapChanged || filterChanged || anisoChanged) && glID > 0)
+    {
+        static const GLenum wrapGL[] = { GL_REPEAT, GL_CLAMP_TO_EDGE, GL_MIRRORED_REPEAT };
+        static const GLint  minGL[]  = { GL_LINEAR_MIPMAP_LINEAR, GL_NEAREST };
+        static const GLint  magGL[]  = { GL_LINEAR, GL_NEAREST };
+        glBindTexture(GL_TEXTURE_2D, glID);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrapGL[cfg.WrapS]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrapGL[cfg.WrapT]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, minGL[cfg.Filter]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, magGL[cfg.Filter]);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, cfg.Anisotropy);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
 }
 
 void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                              int winX, int winY, int panelW, int panelH,
-                             int selectedMaterial)
+                             int selectedMaterial, int selectedTexture,
+                             int selectedPrefab, const std::vector<int>* multiSelection)
 {
     ImGui::SetNextWindowPos(ImVec2((float)winX, (float)winY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2((float)panelW, (float)panelH), ImGuiCond_Always);
@@ -1302,7 +1482,195 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
 
     ImGui::Begin("Inspector", nullptr, wf);
 
-    // Material selecionado no Asset Browser -- mostra editor de material
+    // ---- Multi-select notice ----
+    if (multiSelection && multiSelection->size() > 1)
+    {
+        ImGui::TextDisabled("%d objects selected", (int)multiSelection->size());
+        ImGui::Spacing();
+        ImGui::TextDisabled("Cannot edit multiple objects simultaneously.");
+        ImGui::End();
+        return;
+    }
+
+    // ---- Prefab editor mode: show selected node properties ----
+    if (m_PrefabEditorActive && m_PrefabEditorIdx >= 0 &&
+        m_PrefabEditorIdx < (int)scene.Prefabs.size())
+    {
+        PrefabAsset& prefab = scene.Prefabs[m_PrefabEditorIdx];
+        if (m_PrefabSelectedNode >= 0 && m_PrefabSelectedNode < (int)prefab.Nodes.size())
+        {
+            PrefabEntityData& node = prefab.Nodes[m_PrefabSelectedNode];
+
+            // Editable name
+            ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Prefab Node");
+            ImGui::Separator();
+            {
+                static char nodeName[128];
+                strncpy(nodeName, node.Name.c_str(), 127);
+                nodeName[127] = '\0';
+                ImGui::Text("Name"); ImGui::SameLine();
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::InputText("##prefnodename", nodeName, 128, ImGuiInputTextFlags_EnterReturnsTrue))
+                    node.Name = nodeName;
+            }
+
+            ImGui::Spacing();
+
+            // Transform
+            if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                if (ImGui::BeginTable("##prefnodetfm", 2, ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+                    TableDragFloat3("Position", &node.Transform.Position.x, 0.1f);
+                    TableDragFloat3("Rotation", &node.Transform.Rotation.x, 0.5f);
+                    TableDragFloat3("Scale",    &node.Transform.Scale.x,    0.05f);
+                    ImGui::EndTable();
+                }
+            }
+
+            // Mesh — editable type dropdown
+            {
+                ImGui::Spacing();
+                if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    static const char* meshTypes[] = {"(none)","cube","sphere","plane","pyramid","cylinder","capsule"};
+                    int current = 0;
+                    for (int i = 1; i < 7; i++)
+                        if (node.MeshType == meshTypes[i]) { current = i; break; }
+                    ImGui::Text("Type"); ImGui::SameLine();
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::Combo("##pref_meshtype", &current, meshTypes, 7))
+                        node.MeshType = (current == 0) ? "" : meshTypes[current];
+
+                    // Material name editable
+                    static char matBuf[128];
+                    strncpy(matBuf, node.MaterialName.c_str(), 127); matBuf[127] = '\0';
+                    ImGui::Text("Material"); ImGui::SameLine();
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::InputText("##pref_matname", matBuf, 128, ImGuiInputTextFlags_EnterReturnsTrue))
+                        node.MaterialName = matBuf;
+                }
+            }
+
+            // Light
+            if (node.HasLight)
+            {
+                ImGui::Spacing();
+                if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    static const char* ltNames[] = {"Directional","Point","Spot","Area"};
+                    int ltIdx = (int)node.Light.Type;
+                    ImGui::Text("Type"); ImGui::SameLine();
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::Combo("##pref_lighttype", &ltIdx, ltNames, 4))
+                        node.Light.Type = (LightType)ltIdx;
+                    ImGui::DragFloat("Intensity", &node.Light.Intensity, 0.05f, 0.0f, 100.0f);
+                    ImGui::ColorEdit3("Color", &node.Light.Color.x);
+                    if (node.Light.Type == LightType::Point || node.Light.Type == LightType::Spot)
+                        ImGui::DragFloat("Range", &node.Light.Range, 0.1f, 0.0f, 1000.0f);
+                    if (node.Light.Type == LightType::Spot) {
+                        ImGui::DragFloat("Inner Angle", &node.Light.InnerAngle, 0.5f, 0.0f, 90.0f);
+                        ImGui::DragFloat("Outer Angle", &node.Light.OuterAngle, 0.5f, 0.0f, 90.0f);
+                    }
+                    ImGui::Spacing();
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.15f, 0.15f, 1.0f));
+                    if (ImGui::Button("Remove Light", ImVec2(-1, 0)))
+                        node.HasLight = false;
+                    ImGui::PopStyleColor();
+                }
+            }
+
+            // Camera
+            if (node.HasCamera)
+            {
+                ImGui::Spacing();
+                if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    ImGui::DragFloat("FOV", &node.Camera.FOV, 0.5f, 1.0f, 179.0f);
+                    ImGui::DragFloat("Near", &node.Camera.Near, 0.01f, 0.001f, 100.0f);
+                    ImGui::DragFloat("Far", &node.Camera.Far, 1.0f, 1.0f, 100000.0f);
+                    ImGui::Spacing();
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.15f, 0.15f, 1.0f));
+                    if (ImGui::Button("Remove Camera", ImVec2(-1, 0)))
+                        node.HasCamera = false;
+                    ImGui::PopStyleColor();
+                }
+            }
+
+            // Add component buttons
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            if (!node.HasLight) {
+                if (ImGui::Button("Add Light", ImVec2(-1, 0))) {
+                    node.HasLight       = true;
+                    node.Light.Active   = true;
+                    node.Light.Enabled  = true;
+                    node.Light.Type     = LightType::Point;
+                    node.Light.Intensity= 1.0f;
+                    node.Light.Color    = glm::vec3(1.0f);
+                    node.Light.Range    = 10.0f;
+                }
+            }
+            if (!node.HasCamera) {
+                if (ImGui::Button("Add Camera", ImVec2(-1, 0))) {
+                    node.HasCamera     = true;
+                    node.Camera.Active = true;
+                    node.Camera.FOV    = 60.0f;
+                    node.Camera.Near   = 0.1f;
+                    node.Camera.Far    = 1000.0f;
+                }
+            }
+        }
+        else
+        {
+            ImGui::TextDisabled("Select a node in the hierarchy to edit.");
+        }
+        ImGui::End();
+        return;
+    }
+
+    // ---- Prefab selected in Asset Browser ----
+    if (selectedEntity < 0 && selectedGroup < 0 &&
+        selectedPrefab >= 0 && selectedPrefab < (int)scene.Prefabs.size())
+    {
+        const PrefabAsset& p = scene.Prefabs[selectedPrefab];
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Prefab");
+        ImGui::Separator();
+        ImGui::Text("Name:  %s", p.Name.c_str());
+        ImGui::Text("Nodes: %d", (int)p.Nodes.size());
+        if (!p.Nodes.empty())
+        {
+            const PrefabEntityData& root = p.Nodes[0];
+            if (!root.MeshType.empty())
+                ImGui::Text("Root mesh: %s", root.MeshType.c_str());
+            if (!root.MaterialName.empty())
+                ImGui::Text("Material:  %s", root.MaterialName.c_str());
+            if (root.HasLight)
+            {
+                static const char* ltN[] = {"Directional","Point","Spot","Area"};
+                ImGui::Text("Light: %s  int=%.2f", ltN[(int)root.Light.Type], root.Light.Intensity);
+            }
+            if (root.HasCamera)
+                ImGui::Text("Camera  FOV=%.1f", root.Camera.FOV);
+        }
+        ImGui::Spacing();
+        ImGui::TextDisabled("Double-click in Assets to instantiate.");
+        ImGui::End();
+        return;
+    }
+
+    // Texture selected in Asset Browser
+    if (selectedEntity < 0 && selectedGroup < 0 && selectedTexture >= 0)
+    {
+        DrawTextureInspector(scene, selectedTexture);
+        ImGui::End();
+        return;
+    }
+
+    // Material selected in Asset Browser -- show material editor
     if (selectedEntity < 0 && selectedGroup < 0 && selectedMaterial >= 0)
     {
         DrawMaterialEditor(scene, selectedMaterial);
@@ -1350,7 +1718,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     DrawTransformSection(scene.Transforms[selectedEntity]);
 
 
-    // --- Material module obrigatório sempre após Transform (exceto para GameCamera) ---
+    // --- Material module mandatory always after Transform (except for GameCamera) ---
     bool isCamera = (selectedEntity >= 0 && selectedEntity < (int)scene.GameCameras.size() && scene.GameCameras[selectedEntity].Active);
     if (!isCamera)
         DrawMaterialModule(scene, selectedEntity);

@@ -115,13 +115,45 @@ struct SceneGroup
 // Material asset (stored in the scene asset list)
 // ================================================================
 
+// ================================================================
+// TextureImportSettings — stored per imported texture
+// ================================================================
+struct TextureImportSettings
+{
+    bool  IsLinear   = false;  // linear load (normal/data maps); false = sRGB (albedo)
+    int   WrapS      = 0;      // 0=Repeat  1=Clamp  2=MirroredRepeat
+    int   WrapT      = 0;
+    int   Filter     = 0;      // 0=Linear+Mipmaps  1=Nearest
+    float Anisotropy = 4.0f;   // 1..16
+};
+
 struct MaterialAsset
 {
-    std::string Name = "Material";
-    int         Folder = -1; // index into scene-level folders, -1 = root
-    glm::vec3   Color = {1.0f, 1.0f, 1.0f};
-    std::string TexturePath; // optional, resolver/loader not implemented yet
-    unsigned int TextureID = 0; // GL texture handle if loaded
+    std::string  Name   = "Material";
+    int          Folder = -1;                   // index into scene-level folders, -1 = root
+    glm::vec3    Color  = {1.0f, 1.0f, 1.0f};  // tint applied on top of albedo
+
+    // ---- PBR texture paths (all optional) ----
+    std::string  AlbedoPath;      // replaces legacy TexturePath
+    std::string  NormalPath;
+    std::string  AOPath;          // source for ORM.R  (ambient occlusion, grey-scale)
+    std::string  RoughnessPath;   // source for ORM.G  (grey-scale)
+    std::string  MetallicPath;    // source for ORM.B  (grey-scale)
+
+    // ---- PBR scalar fallbacks (used when no texture is assigned) ----
+    float        Roughness = 0.5f;
+    float        Metallic  = 0.0f;
+    float        AOValue   = 1.0f;
+
+    // ---- Runtime GL handles (not serialised) ----
+    unsigned int AlbedoID  = 0;   // GL_TEXTURE0
+    unsigned int NormalID  = 0;   // GL_TEXTURE2
+    unsigned int ORMID     = 0;   // GL_TEXTURE3 — auto-packed from AO/Roughness/Metallic paths
+    bool         ORM_Dirty = true; // repack ORM before next draw
+
+    // ---- UV mapping ----
+    glm::vec2    Tiling      = {1.0f, 1.0f}; // UV repetitions: x scales XZ axes, y scales Y axis
+    bool         WorldSpaceUV = false;        // true = world-position triplanar (seamless across objects)
 };
 
 enum class ChannelVariableType { Boolean, Float, String };
@@ -244,6 +276,32 @@ struct LightComponent
 };
 
 // ================================================================
+// PrefabAsset  --  serialisable entity template stored in assets
+//   Nodes[0]  = root entity
+//   Nodes[n]  = child entity (ParentIdx points to index in Nodes)
+// ================================================================
+struct PrefabEntityData
+{
+    std::string         Name;
+    int                 ParentIdx    = -1;  // index in PrefabAsset::Nodes; -1 = root
+    std::string         MeshType;
+    std::string         MaterialName;
+    TransformComponent  Transform;
+    bool                HasLight     = false;
+    LightComponent      Light;
+    bool                HasCamera    = false;
+    GameCameraComponent Camera;
+};
+
+struct PrefabAsset
+{
+    std::string                   Name     = "Prefab";
+    std::string                   FilePath;
+    int                           Folder   = -1;
+    std::vector<PrefabEntityData> Nodes;   // Nodes[0] is root; empty = invalid
+};
+
+// ================================================================
 // Scene
 // ================================================================
 
@@ -280,7 +338,13 @@ public:
     std::vector<std::string>           Textures;       // imported texture file paths
     std::vector<unsigned int>          TextureIDs;     // GL texture IDs (parallel to Textures)
     std::vector<int>                   TextureFolders; // folder index per texture (-1 = root)
+    std::vector<TextureImportSettings>  TextureSettings; // import settings per texture (parallel)
     std::vector<ChannelVariable>       Channels;
+    std::vector<PrefabAsset>           Prefabs;                // prefab assets
+    std::vector<bool>                  EntityIsPrefabInstance; // parallel to Transforms
+    std::vector<int>                   EntityPrefabSource;     // parallel: index into Prefabs (-1 = none)
+    std::vector<std::string>           MeshAssets;             // OBJ file paths registered as assets
+    std::vector<int>                   MeshAssetFolders;       // folder index per mesh asset (-1 = root)
 
     // --- Entity API ---
     Entity CreateEntity(const std::string& name = "Entity");

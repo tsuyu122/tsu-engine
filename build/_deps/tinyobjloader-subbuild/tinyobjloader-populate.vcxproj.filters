@@ -1,0 +1,44 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\ee1eeaeb4935c3d8a236e5e7027f3c2c\tinyobjloader-populate-mkdir.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\ee1eeaeb4935c3d8a236e5e7027f3c2c\tinyobjloader-populate-download.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\ee1eeaeb4935c3d8a236e5e7027f3c2c\tinyobjloader-populate-update.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\ee1eeaeb4935c3d8a236e5e7027f3c2c\tinyobjloader-populate-patch.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\ee1eeaeb4935c3d8a236e5e7027f3c2c\tinyobjloader-populate-configure.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\ee1eeaeb4935c3d8a236e5e7027f3c2c\tinyobjloader-populate-build.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\ee1eeaeb4935c3d8a236e5e7027f3c2c\tinyobjloader-populate-install.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\ee1eeaeb4935c3d8a236e5e7027f3c2c\tinyobjloader-populate-test.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\7f3121b003351a8cfb0ed51be02cc04c\tinyobjloader-populate-complete.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\b8e297b26c39db5274b0661dfb185880\tinyobjloader-populate.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+    <CustomBuild Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="C:\Users\hm\Desktop\tsuEngine\build\_deps\tinyobjloader-subbuild\CMakeFiles\tinyobjloader-populate" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{0A6F983E-6F7E-37E6-9FEC-9689BE206469}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
