@@ -6,6 +6,7 @@
 #include <deque>
 
 struct GLFWwindow;
+struct ImDrawList;
 
 namespace tsu {
 
@@ -66,6 +67,15 @@ private:
     bool              m_DraggingRight = false;
     // Project settings left-category selection (0 = Channel System)
     int               m_PsCategory   = 0;
+    // Splash screen
+    float             m_SplashStart  = -1.0f; // < 0 = not started
+    void              DrawSplash(float t, int w, int h);
+    // Shared logo draw helper (col = IM_COL32 packed RGBA, i.e. unsigned int)
+    static void       DrawEngineLogo(ImDrawList* dl, float cx, float cy,
+                                     float sz, unsigned int col,
+                                     float ringProgress   = 1.0f,
+                                     float eyeAlpha       = 1.0f,
+                                     float smileProgress  = 1.0f);
 };
 
 } // namespace tsu

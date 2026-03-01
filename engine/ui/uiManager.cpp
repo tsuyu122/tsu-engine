@@ -7,6 +7,7 @@
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 
 namespace tsu {
 
@@ -51,9 +52,74 @@ void UIManager::BeginFrame()
     ImGui::NewFrame();
 }
 
+// ---------------------------------------------------------------------------
+// DrawEngineLogo  —  smiley-face logo drawn via ImDrawList
+//   cx/cy    : screen-space centre
+//   sz       : bounding square size (maps SVG viewBox 200x200 → sz×sz)
+//   col      : base colour (fully opaque), used with per-part alpha overrides
+//   ringProgress  : 0..1 how much of the outer ring is drawn (stroke)
+//   eyeAlpha      : 0..1 opacity of the two eye dots
+//   smileProgress : 0..1 how much of the smile arc is drawn
+// ---------------------------------------------------------------------------
+void UIManager::DrawEngineLogo(ImDrawList* dl, float cx, float cy,
+                               float sz,  unsigned int /*col*/,
+                               float ringProgress,
+                               float eyeAlpha,
+                               float smileProgress)
+{
+    static constexpr float kPi  = 3.14159265358979f;
+    const float s    = sz / 200.0f;
+    const float str  = std::max(1.0f, 12.0f * s);  // stroke width
+
+    // --- Outer ring (partial arc drawn from top, clockwise) ---
+    if (ringProgress > 0.0f)
+    {
+        float aMin = -kPi * 0.5f;                        // start at top
+        float aMax = aMin + ringProgress * 2.0f * kPi;  // clockwise
+        const int   segs  = 96;
+        const ImU32 white = IM_COL32(255, 255, 255, 255);
+        dl->PathClear();
+        dl->PathArcTo(ImVec2(cx, cy), 90.0f * s, aMin, aMax, segs);
+        dl->PathStroke(white, false, str);
+    }
+
+    // --- Eyes ---
+    if (eyeAlpha > 0.0f)
+    {
+        const ImU32 eCol = IM_COL32(255, 255, 255, (int)(eyeAlpha * 255.0f));
+        dl->AddCircleFilled(ImVec2(cx - 35.0f * s, cy - 20.0f * s), 14.0f * s, eCol, 32);
+        dl->AddCircleFilled(ImVec2(cx + 35.0f * s, cy - 20.0f * s), 14.0f * s, eCol, 32);
+    }
+
+    // --- Smile arc (centre ≈ 100,100 in SVG, r=60, 10°→170°) ---
+    // In ImGui Y-down coords: 0°=right, 90°=down  → arc 10°..170° is the bottom smile curve.
+    if (smileProgress > 0.0f)
+    {
+        const float aSmileMin = 10.0f  * kPi / 180.0f;
+        const float aSmileMax = aSmileMin + smileProgress * (160.0f * kPi / 180.0f);
+        const ImU32 sCol = IM_COL32(255, 255, 255,
+                                    (int)(std::min(smileProgress * 3.0f, 1.0f) * 255.0f));
+        dl->PathClear();
+        dl->PathArcTo(ImVec2(cx, cy), 60.0f * s, aSmileMin, aSmileMax, 48);
+        dl->PathStroke(sCol, false, str);
+    }
+}
+
 bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                        std::vector<std::string>& droppedFiles)
 {
+    // ---- Splash screen (runs for first 3.2 seconds) ----
+    {
+        if (m_SplashStart < 0.0f)
+            m_SplashStart = (float)ImGui::GetTime();
+
+        float t = (float)ImGui::GetTime() - m_SplashStart;
+        if (t < 3.2f)
+        {
+            DrawSplash(t, winW, winH);
+            return true; // capture all input during splash
+        }
+    }
     const int topMenuH  = k_MenuBarH;
     const int topToolH  = k_ToolbarH;
     const int topTabsH  = k_TopTabsH;
@@ -62,6 +128,17 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     // Main menu bar (File/Edit)
     if (ImGui::BeginMainMenuBar())
     {
+        // ---- Engine logo (top-left, before menu items) ----
+        {
+            const float barH = (float)k_MenuBarH;
+            const float sz   = barH - 4.0f;  // 2px padding top+bottom
+            ImDrawList* dl   = ImGui::GetWindowDrawList();
+            ImVec2      pos  = ImGui::GetCursorScreenPos();
+            float cx = pos.x + sz * 0.5f;
+            float cy = pos.y + sz * 0.5f;
+            DrawEngineLogo(dl, cx, cy, sz, IM_COL32(255,255,255,255));
+            ImGui::Dummy(ImVec2(sz + 4.0f, sz));
+        }
         if (ImGui::BeginMenu("File"))
         {
             ImGui::EndMenu();
@@ -698,6 +775,70 @@ void UIManager::EndFrame()
 bool UIManager::WantCaptureMouse() const
 {
     return ImGui::GetIO().WantCaptureMouse;
+}
+
+// ---------------------------------------------------------------------------
+// DrawSplash  —  full-screen animated splash for the first ~3.2 s
+// ---------------------------------------------------------------------------
+void UIManager::DrawSplash(float t, int w, int h)
+{
+    static constexpr float kDur         = 3.2f;
+    static constexpr float kRingEnd     = 1.5f;
+    static constexpr float kEyeStart    = 0.8f;
+    static constexpr float kEyeEnd      = 1.4f;
+    static constexpr float kSmileStart  = 1.4f;
+    static constexpr float kSmileEnd    = 2.0f;
+    static constexpr float kTextStart   = 2.0f;
+    static constexpr float kTextEnd     = 2.8f;
+    static constexpr float kFadeStart   = 2.9f;
+
+    auto clamp01 = [](float v) { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; };
+    float ringP  = clamp01(t / kRingEnd);
+    float eyeA   = clamp01((t - kEyeStart)  / (kEyeEnd   - kEyeStart));
+    float smileP = clamp01((t - kSmileStart) / (kSmileEnd - kSmileStart));
+    float textA  = clamp01((t - kTextStart)  / (kTextEnd  - kTextStart));
+    float fadeA  = 1.0f - clamp01((t - kFadeStart) / (kDur - kFadeStart));
+
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2((float)w, (float)h));
+    ImGui::SetNextWindowBgAlpha(fadeA);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, fadeA));
+    ImGui::Begin("##splash", nullptr,
+                 ImGuiWindowFlags_NoTitleBar   | ImGuiWindowFlags_NoResize    |
+                 ImGuiWindowFlags_NoMove       | ImGuiWindowFlags_NoScrollbar |
+                 ImGuiWindowFlags_NoInputs     | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleColor();
+
+    const float sz  = std::min((float)w, (float)h) * 0.38f;  // logo occupies 38% of the short edge
+    const float cx  = w * 0.5f;
+    const float cy  = h * 0.5f - sz * 0.15f;  // slightly above centre to leave room for text
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // background gradient-like dark rect (solid black at full alpha)
+    dl->AddRectFilled(ImVec2(0,0), ImVec2((float)w,(float)h),
+                      IM_COL32(0, 0, 0, (int)(fadeA * 255.0f)));
+
+    // ---- animated logo ----
+    DrawEngineLogo(dl, cx, cy, sz, IM_COL32(255,255,255,255),
+                   ringP, eyeA, smileP);
+
+    // ---- "TSU ENGINE" text ----
+    if (textA > 0.0f)
+    {
+        const char* label = "TSU ENGINE";
+        const float scale = sz / 100.0f * 0.6f;   // scale relative to logo
+        const float fontSz = ImGui::GetFontSize();
+        float textW = ImGui::CalcTextSize(label).x * scale;
+        float textX = cx - textW * 0.5f;
+        float textY = cy + sz * 0.56f;
+
+        const ImU32 textCol = IM_COL32(255, 255, 255, (int)(textA * fadeA * 255.0f));
+        // draw via DrawList so we can control alpha and scale manually
+        dl->AddText(nullptr, fontSz * scale, ImVec2(textX, textY), textCol, label);
+    }
+
+    ImGui::End();
 }
 
 void UIManager::Log(const std::string& msg)
