@@ -344,37 +344,6 @@ void Application::UpdatePlayerControllers(float dt)
         pc.IsRunning    = running;
         pc.IsCrouching  = crouching;
         pc.LastMoveAxis = axis;
-
-        // ----------------------------------------------------------------
-        // Built-in mouse look
-        // Yaw  = rotate this entity on world Y
-        // Pitch = rotate PitchTargetEntity (or this entity) on local Z
-        //         (Z-rotation = pitch for an X-forward entity)
-        // ----------------------------------------------------------------
-        if (pc.MouseLookEnabled)
-        {
-            const MouseDelta mdelta = InputManager::GetMouseDelta();
-            float mdx = mdelta.x * pc.MouseSensitivityX * (pc.MouseInvertX ? -1.0f :  1.0f);
-            float mdy = mdelta.y * pc.MouseSensitivityY * (pc.MouseInvertY ? -1.0f :  1.0f);
-
-            // --- Yaw: rotate the controller entity around world Y ---
-            pc.CurrentYaw += mdx;
-            m_Scene.Transforms[i].Rotation.y = pc.CurrentYaw;
-
-            // --- Pitch: rotate the pitch-target entity on its Z axis ---
-            // For an X-forward entity, Rotation.z tilts the nose up/down (true pitch).
-            // Rotation.x would roll sideways — that is NOT pitch.
-            int pitchEnt = (pc.PitchTargetEntity >= 0 &&
-                            pc.PitchTargetEntity < (int)m_Scene.Transforms.size())
-                           ? pc.PitchTargetEntity : i;
-            pc.CurrentPitch -= mdy;   // subtract: mouse up → positive tilt → look up
-            if (pc.MouseClampPitch)
-            {
-                if (pc.CurrentPitch < pc.MousePitchMin) pc.CurrentPitch = pc.MousePitchMin;
-                if (pc.CurrentPitch > pc.MousePitchMax) pc.CurrentPitch = pc.MousePitchMax;
-            }
-            m_Scene.Transforms[pitchEnt].Rotation.z = pc.CurrentPitch;
-        }
     }
 }
 
@@ -414,7 +383,7 @@ void Application::UpdateMouseLook(float dt)
                 if (ml.CurrentPitch > ml.PitchMax) ml.CurrentPitch = ml.PitchMax;
             }
             // Z-axis rotation = pitch for an entity whose local forward is +X
-            m_Scene.Transforms[pitchEnt].Rotation.z = ml.CurrentPitch;
+            m_Scene.Transforms[pitchEnt].Rotation.x = ml.CurrentPitch;
         }
     }
 }

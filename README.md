@@ -63,7 +63,7 @@ These conventions apply throughout the entire codebase.
 
 Rotations are stored in degrees and applied **Rx then Ry then Rz** (roll, yaw, pitch) as defined in `TransformComponent::GetMatrix()`.
 
-**Pitch** (looking up and down) is `Rotation.z`. For an X-forward entity, Z-rotation tilts the nose up or down in the XY plane - that is true pitch. Using `Rotation.x` instead would produce a sideways roll.
+**Pitch** (looking up and down) is `Rotation.x`.
 
 ---
 
@@ -234,24 +234,7 @@ Character controller with movement and optional built-in mouse look.
 
 Default local bindings: W forward, S back, A left, D right, Left Shift run, Left Control crouch.
 
-#### Built-in Mouse Look
-
-When `MouseLookEnabled = true`, yaw and pitch are handled by this component. A separate MouseLookComponent is not needed.
-
-| Field | Default | Description |
-|---|---|---|
-| `MouseLookEnabled` | false | Enable mouse look |
-| `PitchTargetEntity` | -1 | Entity to rotate on the Z-axis for pitch. -1 means this entity. Usually the child camera. |
-| `MouseSensitivityX` | 0.15 | Yaw (horizontal) sensitivity |
-| `MouseSensitivityY` | 0.15 | Pitch (vertical) sensitivity |
-| `MouseInvertX` / `MouseInvertY` | false | Flip the corresponding axis |
-| `MouseClampPitch` | true | Clamp pitch angle to min/max range |
-| `MousePitchMin` / `MousePitchMax` | -89 / 89 | Clamp range in degrees |
-
-**Yaw** rotates this entity around world Y.
-**Pitch** rotates the PitchTargetEntity around its **local Z axis**. For X-forward entities, Z-rotation tilts the nose up and down, which is true pitch. X-rotation would create a sideways roll.
-
-Runtime read-only fields: `IsRunning`, `IsCrouching`, `LastMoveAxis`, `CurrentPitch`, `CurrentYaw`.
+Runtime read-only fields: `IsRunning`, `IsCrouching`, `LastMoveAxis`.
 
 ---
 
@@ -264,7 +247,7 @@ Standalone mouse look for cases where yaw/pitch rotation is needed independent o
 | Field | Description |
 |---|---|
 | `YawTargetEntity` | Entity rotated around world Y for horizontal look |
-| `PitchTargetEntity` | Entity rotated around local Z for pitch. X-forward entities only. |
+| `PitchTargetEntity` | Entity rotated around **local X** for pitch. |
 | `SensitivityX` / `SensitivityY` | Per-axis mouse sensitivity |
 | `InvertX` / `InvertY` | Flip axis direction |
 | `ClampPitch` | Enable pitch angle clamping |
@@ -466,13 +449,6 @@ mesh = capsule
 player_controller = true
 pc_move_mode = 2
 pc_mode = local
-pc_mouse_look = true
-pc_pitch_target = 1
-pc_mouse_sens_x = 0.15
-pc_mouse_sens_y = 0.15
-pc_mouse_clamp = true
-pc_mouse_pitch_min = -89.0
-pc_mouse_pitch_max = 89.0
 pc_key_forward = 87
 pc_key_back = 83
 pc_key_left = 65

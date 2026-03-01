@@ -187,36 +187,10 @@ struct PlayerControllerComponent
     bool AllowRun    = true;
     bool AllowCrouch = true;
 
-    // ================================================================
-    // Built-in Mouse Look
-    //
-    //  When MouseLookEnabled = true the PlayerController handles full
-    //  first-person camera rotation internally — no separate
-    //  MouseLookComponent is required.
-    //
-    //  Yaw  (horizontal): rotates THIS entity around world Y.
-    //  Pitch (vertical) : rotates PitchTargetEntity around its LOCAL Z.
-    //    → For an X-forward entity, Z-rotation tilts the nose up/down
-    //      (true pitch).  X-rotation would roll sideways instead.
-    //    → Set PitchTargetEntity to the child camera entity.
-    //      PitchTargetEntity = -1 means rotate this entity for pitch too.
-    // ================================================================
-    bool  MouseLookEnabled  = false;
-    int   PitchTargetEntity = -1;      // index of entity to pitch-rotate on Z (-1 = self)
-    float MouseSensitivityX = 0.15f;   // yaw (horizontal) sensitivity
-    float MouseSensitivityY = 0.15f;   // pitch (vertical) sensitivity
-    bool  MouseInvertX      = false;
-    bool  MouseInvertY      = false;
-    bool  MouseClampPitch   = true;
-    float MousePitchMin     = -89.0f;
-    float MousePitchMax     =  89.0f;
-
     // Runtime state (readable by external systems)
     bool      IsRunning    = false;
     bool      IsCrouching  = false;
     glm::vec3 LastMoveAxis = {0.0f, 0.0f, 0.0f};
-    float     CurrentPitch = 0.0f;     // accumulated pitch angle (degrees)
-    float     CurrentYaw   = 0.0f;     // accumulated yaw   angle (degrees)
 };
 
 // ================================================================

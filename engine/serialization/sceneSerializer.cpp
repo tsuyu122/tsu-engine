@@ -71,16 +71,6 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         int         pcChCrouch   = 5;
         bool        pcAllowRun   = true;
         bool        pcAllowCrouch= true;
-        // Built-in PC mouse look
-        bool  pcMouseLook     = false;
-        int   pcPitchTarget   = -1;
-        float pcMouseSensX    = 0.15f;
-        float pcMouseSensY    = 0.15f;
-        bool  pcMouseInvX     = false;
-        bool  pcMouseInvY     = false;
-        bool  pcMouseClamp    = true;
-        float pcMousePitchMin = -89.0f;
-        float pcMousePitchMax =  89.0f;
 
         // Mouse Look Component (standalone)
         bool  hasMouseLook     = false;
@@ -179,16 +169,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             auto& pc = scene.PlayerControllers[id];
             pc.Active = true;
             pc.InputMode = (d.pcMode == "channels") ? PlayerInputMode::Channels : PlayerInputMode::Local;
-            pc.MovementMode      = (PlayerMovementMode)d.pcMovementMode;
-            pc.MouseLookEnabled  = d.pcMouseLook;
-            pc.PitchTargetEntity = d.pcPitchTarget;
-            pc.MouseSensitivityX = d.pcMouseSensX;
-            pc.MouseSensitivityY = d.pcMouseSensY;
-            pc.MouseInvertX      = d.pcMouseInvX;
-            pc.MouseInvertY      = d.pcMouseInvY;
-            pc.MouseClampPitch   = d.pcMouseClamp;
-            pc.MousePitchMin     = d.pcMousePitchMin;
-            pc.MousePitchMax     = d.pcMousePitchMax;
+            pc.MovementMode = (PlayerMovementMode)d.pcMovementMode;
             pc.WalkSpeed = d.pcWalkSpeed;
             pc.RunMultiplier = d.pcRunMultiplier;
             pc.CrouchMultiplier = d.pcCrouchMultiplier;
@@ -343,17 +324,8 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (k == "pc_ch_right")      cur.pcChRight = std::stoi(val);
             else if (k == "pc_ch_run")        cur.pcChRun = std::stoi(val);
             else if (k == "pc_ch_crouch")     cur.pcChCrouch = std::stoi(val);
-            else if (k == "pc_allow_run")       cur.pcAllowRun      = (val == "true");
-            else if (k == "pc_allow_crouch")    cur.pcAllowCrouch   = (val == "true");
-            else if (k == "pc_mouse_look")      cur.pcMouseLook     = (val == "true");
-            else if (k == "pc_pitch_target")    cur.pcPitchTarget   = std::stoi(val);
-            else if (k == "pc_mouse_sens_x")    cur.pcMouseSensX    = std::stof(val);
-            else if (k == "pc_mouse_sens_y")    cur.pcMouseSensY    = std::stof(val);
-            else if (k == "pc_mouse_inv_x")     cur.pcMouseInvX     = (val == "true");
-            else if (k == "pc_mouse_inv_y")     cur.pcMouseInvY     = (val == "true");
-            else if (k == "pc_mouse_clamp")     cur.pcMouseClamp    = (val == "true");
-            else if (k == "pc_mouse_pitch_min") cur.pcMousePitchMin = std::stof(val);
-            else if (k == "pc_mouse_pitch_max") cur.pcMousePitchMax = std::stof(val);
+            else if (k == "pc_allow_run")     cur.pcAllowRun    = (val == "true");
+            else if (k == "pc_allow_crouch")  cur.pcAllowCrouch = (val == "true");
             else if (k == "mouse_look")       cur.hasMouseLook  = (val == "true");
             else if (k == "ml_yaw_target")    cur.mlYawTarget   = std::stoi(val);
             else if (k == "ml_pitch_target")  cur.mlPitchTarget = std::stoi(val);
@@ -460,20 +432,8 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
         {
             const auto& pc = scene.PlayerControllers[i];
             file << "player_controller = true\n";
-            file << "pc_move_mode = "   << (int)pc.MovementMode                                      << "\n";
-            file << "pc_mode = "        << (pc.InputMode == PlayerInputMode::Channels ? "channels" : "local") << "\n";
-            file << "pc_mouse_look = "  << (pc.MouseLookEnabled  ? "true" : "false")                 << "\n";
-            if (pc.MouseLookEnabled)
-            {
-                file << "pc_pitch_target = "    << pc.PitchTargetEntity      << "\n";
-                file << "pc_mouse_sens_x = "    << pc.MouseSensitivityX      << "\n";
-                file << "pc_mouse_sens_y = "    << pc.MouseSensitivityY      << "\n";
-                file << "pc_mouse_inv_x = "     << (pc.MouseInvertX ? "true" : "false") << "\n";
-                file << "pc_mouse_inv_y = "     << (pc.MouseInvertY ? "true" : "false") << "\n";
-                file << "pc_mouse_clamp = "     << (pc.MouseClampPitch ? "true" : "false") << "\n";
-                file << "pc_mouse_pitch_min = " << pc.MousePitchMin          << "\n";
-                file << "pc_mouse_pitch_max = " << pc.MousePitchMax          << "\n";
-            }
+            file << "pc_move_mode = " << (int)pc.MovementMode << "\n";
+            file << "pc_mode = "      << (pc.InputMode == PlayerInputMode::Channels ? "channels" : "local") << "\n";
             file << "pc_walk_speed = " << pc.WalkSpeed << "\n";
             file << "pc_run_mult = " << pc.RunMultiplier << "\n";
             file << "pc_crouch_mult = " << pc.CrouchMultiplier << "\n";

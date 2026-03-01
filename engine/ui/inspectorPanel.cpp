@@ -704,50 +704,6 @@ bool InspectorPanel::DrawPlayerControllerSection(PlayerControllerComponent& pc,
         }
     }
 
-    // ---------------------------------------------------------------
-    // Built-in Mouse Look section
-    // ---------------------------------------------------------------
-    ImGui::SeparatorText("Mouse Look");
-    ImGui::Checkbox("Enabled##pcimlook", &pc.MouseLookEnabled);
-    if (pc.MouseLookEnabled)
-    {
-        ImGui::SetNextItemWidth(-1);
-        ImGui::InputInt("Pitch Entity", &pc.PitchTargetEntity);
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
-        {
-            ImGui::BeginTooltip();
-            ImGui::TextDisabled(
-                "Entity index to rotate on Z-axis for pitch.\n"
-                "-1 = rotate this entity for pitch too.\n"
-                "Usually the child camera entity.");
-            ImGui::EndTooltip();
-        }
-        if (ImGui::BeginTable("##pc_ml", 2))
-        {
-            ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-            ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
-            TableDragFloat1("Sensitivity X",  &pc.MouseSensitivityX, 0.01f, 0.01f, 5.0f);
-            TableDragFloat1("Sensitivity Y",  &pc.MouseSensitivityY, 0.01f, 0.01f, 5.0f);
-            ImGui::EndTable();
-        }
-        ImGui::Checkbox("Invert X##pciml", &pc.MouseInvertX);
-        ImGui::SameLine();
-        ImGui::Checkbox("Invert Y##pciml", &pc.MouseInvertY);
-        ImGui::Checkbox("Clamp Pitch##pciml", &pc.MouseClampPitch);
-        if (pc.MouseClampPitch)
-        {
-            if (ImGui::BeginTable("##pc_ml2", 2))
-            {
-                ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-                ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
-                TableDragFloat1("Pitch Min", &pc.MousePitchMin, 0.5f, -90.0f,  0.0f);
-                TableDragFloat1("Pitch Max", &pc.MousePitchMax, 0.5f,  0.0f,  90.0f);
-                ImGui::EndTable();
-            }
-        }
-        ImGui::TextDisabled("Yaw: %.1f  Pitch: %.1f", pc.CurrentYaw, pc.CurrentPitch);
-    }
-
     ImGui::Separator();
     ImGui::TextDisabled("Running: %s", pc.IsRunning ? "yes" : "no");
     ImGui::TextDisabled("Crouching: %s", pc.IsCrouching ? "yes" : "no");
