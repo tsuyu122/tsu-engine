@@ -12,6 +12,8 @@ namespace Key {
     constexpr int A           = 65;
     constexpr int S           = 83;
     constexpr int D           = 68;
+    constexpr int E           = 69;
+    constexpr int Q           = 81;
     constexpr int Space       = 32;
     constexpr int LeftShift   = 340;
     constexpr int LeftControl = 341;
@@ -47,6 +49,10 @@ public:
     static MouseDelta GetMouseDelta();
     static void GetMousePosition(double& x, double& y);
     static float GetScrollDelta();   // positive = scroll up/forward
+
+    // Key name <-> GLFW code helpers (shared between inspector and runtime)
+    static int         KeyNameToCode(const char* name);  // "W"->87, "Left Shift"->340 etc.
+    static const char* KeyCodeToName(int code);           // 87->"W", 0/unknown -> nullptr
 
 private:
     static GLFWwindow* s_Window;

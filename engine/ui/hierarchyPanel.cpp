@@ -38,10 +38,19 @@ void HierarchyPanel::CreateMeshEntity(Scene& scene, const std::string& type, int
     else if (type == "Pyramid")  mesh = new Mesh(Mesh::CreatePyramid(color));
     else if (type == "Cylinder") mesh = new Mesh(Mesh::CreateCylinder(color));
     else if (type == "Capsule")  mesh = new Mesh(Mesh::CreateCapsule(color));
+    else if (type == "Plane")    mesh = new Mesh(Mesh::CreatePlane(color));
     scene.MeshRenderers[id].MeshPtr = mesh;
 
-    if (m_SelectedGroup >= 0 && m_SelectedGroup < (int)scene.Groups.size())
+    // If an entity is selected, spawn at its position and make it a child
+    if (selectedEntity >= 0 && selectedEntity < (int)scene.Transforms.size())
+    {
+        scene.Transforms[id].Position = scene.Transforms[selectedEntity].Position;
+        scene.SetEntityParent(id, selectedEntity);
+    }
+    else if (m_SelectedGroup >= 0 && m_SelectedGroup < (int)scene.Groups.size())
+    {
         scene.SetEntityGroup(id, m_SelectedGroup);
+    }
 
     selectedEntity   = id;
     m_RenamingEntity = id;
@@ -56,8 +65,67 @@ void HierarchyPanel::CreateCameraEntity(Scene& scene, int& selectedEntity)
     int    id = (int)e.GetID();
     scene.GameCameras[id].Active = true;
 
-    if (m_SelectedGroup >= 0 && m_SelectedGroup < (int)scene.Groups.size())
+    if (selectedEntity >= 0 && selectedEntity < (int)scene.Transforms.size())
+    {
+        scene.Transforms[id].Position = scene.Transforms[selectedEntity].Position;
+        scene.SetEntityParent(id, selectedEntity);
+    }
+    else if (m_SelectedGroup >= 0 && m_SelectedGroup < (int)scene.Groups.size())
+    {
         scene.SetEntityGroup(id, m_SelectedGroup);
+    }
+
+    selectedEntity   = id;
+    m_RenamingEntity = id;
+    strncpy(m_RenameBuffer, name.c_str(), sizeof(m_RenameBuffer) - 1);
+    m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
+}
+
+void HierarchyPanel::CreateLightEntity(Scene& scene, LightType type, int& selectedEntity)
+{
+    static const char* typeNames[] = {
+        "Directional Light", "Point Light", "Spot Light", "Area Light"
+    };
+    std::string name = MakeUniqueName(scene, typeNames[(int)type]);
+    Entity e = scene.CreateEntity(name);
+    int    id = (int)e.GetID();
+
+    scene.Lights[id].Active  = true;
+    scene.Lights[id].Enabled = true;
+    scene.Lights[id].Type    = type;
+
+    switch (type)
+    {
+    case LightType::Point:
+        scene.Lights[id].Intensity = 1.5f;
+        scene.Lights[id].Range     = 10.0f;
+        break;
+    case LightType::Spot:
+        scene.Lights[id].Intensity   = 2.0f;
+        scene.Lights[id].Range       = 15.0f;
+        scene.Lights[id].InnerAngle  = 25.0f;
+        scene.Lights[id].OuterAngle  = 40.0f;
+        break;
+    case LightType::Area:
+        scene.Lights[id].Intensity = 2.0f;
+        scene.Lights[id].Range     = 10.0f;
+        scene.Lights[id].Width     = 2.0f;
+        scene.Lights[id].Height    = 1.0f;
+        break;
+    default:  // Directional
+        scene.Lights[id].Intensity = 1.0f;
+        break;
+    }
+
+    if (selectedEntity >= 0 && selectedEntity < (int)scene.Transforms.size())
+    {
+        scene.Transforms[id].Position = scene.Transforms[selectedEntity].Position;
+        scene.SetEntityParent(id, selectedEntity);
+    }
+    else if (m_SelectedGroup >= 0 && m_SelectedGroup < (int)scene.Groups.size())
+    {
+        scene.SetEntityGroup(id, m_SelectedGroup);
+    }
 
     selectedEntity   = id;
     m_RenamingEntity = id;
@@ -166,10 +234,16 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
 
     bool open = ImGui::TreeNodeEx(label.c_str(), flags);
 
-    if (ImGui::IsItemClicked(0) && !ImGui::IsItemToggledOpen())
+    // Select only on clean click-release; suppress selection when the user is
+    // dragging the item (e.g. onto an Inspector slot or rearranging hierarchy).
+    if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(0) && !ImGui::IsItemToggledOpen())
     {
-        selectedEntity = entityIdx;
-        selectedGroup  = -1;
+        ImVec2 dd = ImGui::GetMouseDragDelta(0);
+        if (fabsf(dd.x) + fabsf(dd.y) < 5.0f)
+        {
+            selectedEntity = entityIdx;
+            selectedGroup  = -1;
+        }
     }
 
     // ---- Drag source ----
@@ -208,17 +282,6 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
         }
         if (hasParent && ImGui::MenuItem("Unparent"))
             scene.SetEntityParent(entityIdx, -1);
-        if (ImGui::BeginMenu("Move to Group"))
-        {
-            if (ImGui::MenuItem("Root (no group/parent)")) scene.UnparentEntity(entityIdx);
-            for (size_t g = 0; g < scene.Groups.size(); g++)
-            {
-                if (scene.Groups[g].Name.empty()) continue;
-                if (ImGui::MenuItem(scene.Groups[g].Name.c_str()))
-                    scene.SetEntityGroup(entityIdx, (int)g);
-            }
-            ImGui::EndMenu();
-        }
         ImGui::Separator();
         if (ImGui::MenuItem("Apagar Entidade"))
         {
@@ -378,39 +441,59 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
         ImGui::EndDragDropTarget();
     }
 
+    // Left-click on empty hierarchy background deselects entity/group
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        !ImGui::IsAnyItemHovered())
+    {
+        selectedEntity = -1;
+        selectedGroup  = -1;
+    }
+
     // Right-click on empty area = create context menu
     if (ImGui::BeginPopupContextWindow("##hier_ctx",
         ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems))
     {
-        // -- Objects --
-        ImGui::TextDisabled("Objects");
-        ImGui::Separator();
-        if (ImGui::MenuItem("Cube"))     CreateMeshEntity(scene, "Cube",     selectedEntity);
-        if (ImGui::MenuItem("Sphere"))   CreateMeshEntity(scene, "Sphere",   selectedEntity);
-        if (ImGui::MenuItem("Pyramid"))  CreateMeshEntity(scene, "Pyramid",  selectedEntity);
-        if (ImGui::MenuItem("Cylinder")) CreateMeshEntity(scene, "Cylinder", selectedEntity);
-        if (ImGui::MenuItem("Capsule"))  CreateMeshEntity(scene, "Capsule",  selectedEntity);
-
-        ImGui::Spacing();
-        // -- Group --
-        ImGui::TextDisabled("Group");
-        ImGui::Separator();
-        if (ImGui::MenuItem("Group"))
+        if (ImGui::BeginMenu("3D Objects"))
         {
-            std::string gname = MakeUniqueName(scene, "Group");
-            int parent = (selectedGroup >= 0) ? selectedGroup : -1;
-            int gIdx   = scene.CreateGroup(gname, parent);
-            selectedGroup  = gIdx;
-            selectedEntity = -1;
-            m_RenamingGroup = gIdx;
-            strncpy(m_RenameBuffer, gname.c_str(), sizeof(m_RenameBuffer) - 1);
+            if (ImGui::MenuItem("Cube"))     CreateMeshEntity(scene, "Cube",     selectedEntity);
+            if (ImGui::MenuItem("Sphere"))   CreateMeshEntity(scene, "Sphere",   selectedEntity);
+            if (ImGui::MenuItem("Plane"))    CreateMeshEntity(scene, "Plane",    selectedEntity);
+            if (ImGui::MenuItem("Pyramid"))  CreateMeshEntity(scene, "Pyramid",  selectedEntity);
+            if (ImGui::MenuItem("Cylinder")) CreateMeshEntity(scene, "Cylinder", selectedEntity);
+            if (ImGui::MenuItem("Capsule"))  CreateMeshEntity(scene, "Capsule",  selectedEntity);
+            ImGui::EndMenu();
         }
 
-        ImGui::Spacing();
-        // -- Render --
-        ImGui::TextDisabled("Render");
-        ImGui::Separator();
-        if (ImGui::MenuItem("Camera"))   CreateCameraEntity(scene, selectedEntity);
+        if (ImGui::BeginMenu("Lights"))
+        {
+            if (ImGui::MenuItem("Directional Light")) CreateLightEntity(scene, LightType::Directional, selectedEntity);
+            if (ImGui::MenuItem("Point Light"))       CreateLightEntity(scene, LightType::Point,       selectedEntity);
+            if (ImGui::MenuItem("Spot Light"))        CreateLightEntity(scene, LightType::Spot,        selectedEntity);
+            if (ImGui::MenuItem("Area Light"))        CreateLightEntity(scene, LightType::Area,        selectedEntity);
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Hierarchy"))
+        {
+            if (ImGui::MenuItem("Group"))
+            {
+                std::string gname = MakeUniqueName(scene, "Group");
+                int parent = (selectedGroup >= 0) ? selectedGroup : -1;
+                int gIdx   = scene.CreateGroup(gname, parent);
+                selectedGroup  = gIdx;
+                selectedEntity = -1;
+                m_RenamingGroup = gIdx;
+                strncpy(m_RenameBuffer, gname.c_str(), sizeof(m_RenameBuffer) - 1);
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Render"))
+        {
+            if (ImGui::MenuItem("Camera"))   CreateCameraEntity(scene, selectedEntity);
+            ImGui::EndMenu();
+        }
 
         ImGui::EndPopup();
     }

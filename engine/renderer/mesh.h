@@ -19,6 +19,7 @@ public:
     static Mesh CreateCylinder(const std::string& hexColor = "#FFFFFF", int segments = 32);
     static Mesh CreateSphere  (const std::string& hexColor = "#FFFFFF", int stacks = 16, int slices = 32);
     static Mesh CreateCapsule (const std::string& hexColor = "#FFFFFF", float radius = 0.5f, float height = 1.0f, int segments = 32);
+    static Mesh CreatePlane   (const std::string& hexColor = "#FFFFFF");
 
     // Gizmos internos do editor (sem textura, cor fixa)
     static Mesh CreateGizmoSphere(float radius = 0.08f); // bolinha da game camera

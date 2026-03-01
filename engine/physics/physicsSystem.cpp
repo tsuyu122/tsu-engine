@@ -719,8 +719,8 @@ void PhysicsSystem::Update(Scene& scene, float dt)
 
         if (rb.UseGravity)
         {
-            rb.Velocity.y += Gravity * dt;
-            rb.Velocity.y  = std::max(rb.Velocity.y, MAX_FALL_SPEED);
+            rb.Velocity.y += Gravity * rb.FallSpeedMultiplier * dt;
+            rb.Velocity.y  = std::max(rb.Velocity.y, MAX_FALL_SPEED * rb.FallSpeedMultiplier);
         }
 
         rb.Velocity.x *= (1.0f - rb.Drag);
@@ -753,8 +753,14 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         if (!rb.HasRigidBodyMode || !rb.HasColliderModule) continue;
         if (rb.IsKinematic || !rb.UseGravity || !rb.IsGrounded) continue;
 
-        // Esferas não tombam — são rotacionalmente simétricas
+        // Esferas e cápsulas não usam o modelo de tipping (pivô em contato).
+        // Esferas: rotacionalmente simétricas — não tombam.
+        // Cápsulas: fundo arredondado — rolling vem da fricção na colisão,
+        // não de torque gravitacional. Se entrassem aqui, a constraint de
+        // pêndulo (velocity = cross(omega, -arm)) sobrescreveria a velocidade
+        // tangencial da rampa, fazendo a cápsula parar como um cubo.
         if (rb.Collider == ColliderType::Sphere) continue;
+        if (rb.Collider == ColliderType::Capsule) continue;
 
         OBB obb = BuildOBB(scene, (uint32_t)i);
 
@@ -775,32 +781,6 @@ void PhysicsSystem::Update(Scene& scene, float dt)
             }
             contact = sum / (float)cnt;
         }
-        else if (rb.Collider == ColliderType::Capsule)
-        {
-            // Capsule: find lowest surface point considering rotation
-            glm::mat4 wm = scene.GetEntityWorldMatrix((int)i);
-            glm::vec3 ax0 = glm::normalize(glm::vec3(wm[0]));
-            glm::vec3 capAxis = glm::normalize(glm::vec3(wm[1]));
-            glm::vec3 ax2 = glm::normalize(glm::vec3(wm[2]));
-            float radius = rb.ColliderRadius * glm::length(glm::vec3(wm[0]));
-            float height = rb.ColliderHeight * glm::length(glm::vec3(wm[1]));
-            float halfH = std::max(height * 0.5f - radius, 0.0f);
-            // Rotate ColliderOffset like BuildOBB does
-            glm::vec3 pos = glm::vec3(wm[3])
-                + ax0 * rb.ColliderOffset.x
-                + capAxis * rb.ColliderOffset.y
-                + ax2 * rb.ColliderOffset.z;
-            glm::vec3 top = pos + capAxis * halfH;
-            glm::vec3 bot = pos - capAxis * halfH;
-            // Pick lowest hemisphere center, or center if nearly horizontal
-            float dY = top.y - bot.y;
-            glm::vec3 lowestCenter;
-            if (std::abs(dY) < 1e-3f)
-                lowestCenter = pos; // horizontal — contact centroid at center
-            else
-                lowestCenter = (bot.y < top.y) ? bot : top;
-            contact = lowestCenter + glm::vec3(0.0f, -radius, 0.0f);
-        }
         else
         {
             // Box: vértice(s) mais baixo(s) do OBB
@@ -813,15 +793,36 @@ void PhysicsSystem::Update(Scene& scene, float dt)
             cm = obb.center - obb.axes[1] * (obb.half.y * 0.5f);
         glm::vec3 arm = contact - cm; // CM → contato
 
-        // Se braço é quase vertical → já está plano → desacelera e para
+        // Se braço é quase vertical → plano ou exatamente 45°
         float armHorizSq = arm.x*arm.x + arm.z*arm.z;
         if (armHorizSq < 0.0001f)
         {
-            rb.AngularVelocity *= 0.8f;
-            if (glm::length(rb.AngularVelocity) < 0.5f)
-                rb.AngularVelocity = glm::vec3(0);
-            rb.Velocity.x = 0.0f;
-            rb.Velocity.z = 0.0f;
+            // Distingue cubo plano (setteld) de cubo preso em 45°
+            const auto& rot = scene.Transforms[i].Rotation;
+            auto near45 = [](float deg) {
+                float d = std::fmod(std::abs(deg), 90.0f);
+                return d > 30.0f && d < 60.0f;
+            };
+            if ((near45(rot.x) || near45(rot.z)) &&
+                glm::length(rb.AngularVelocity) < 5.0f)
+            {
+                // Travado em 45° — chutar aleatoriamente para um lado (50/50)
+                static uint32_t rng45 = 0xDEADBEEFu;
+                rng45 = rng45 * 1664525u + 1013904223u;
+                float sx = (rng45 & 0x80000000u) ? 1.0f : -1.0f;
+                float sz = (rng45 & 0x40000000u) ? 1.0f : -1.0f;
+                rb.AngularVelocity.x += sx * 30.0f;
+                rb.AngularVelocity.z += sz * 15.0f;
+            }
+            else if (!near45(rot.x) && !near45(rot.z))
+            {
+                // Realmente plano — desacelera e para
+                rb.AngularVelocity *= 0.8f;
+                if (glm::length(rb.AngularVelocity) < 0.5f)
+                    rb.AngularVelocity = glm::vec3(0);
+                rb.Velocity.x = 0.0f;
+                rb.Velocity.z = 0.0f;
+            }
             continue;
         }
 
@@ -840,11 +841,6 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         glm::vec3 Icm;
         if (rb.Collider == ColliderType::Pyramid) {
             IcmInv = PyramidInertiaDiagInv(rb.Mass, obb.half);
-            Icm = glm::vec3(1.0f / std::max(IcmInv.x, 0.01f),
-                            1.0f / std::max(IcmInv.y, 0.01f),
-                            1.0f / std::max(IcmInv.z, 0.01f));
-        } else if (rb.Collider == ColliderType::Capsule) {
-            IcmInv = CapsuleInertiaDiagInv(rb.Mass, rb.ColliderRadius, rb.ColliderHeight);
             Icm = glm::vec3(1.0f / std::max(IcmInv.x, 0.01f),
                             1.0f / std::max(IcmInv.y, 0.01f),
                             1.0f / std::max(IcmInv.z, 0.01f));
@@ -882,20 +878,69 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         float spd = glm::length(rb.AngularVelocity);
         if (spd > 720.0f) rb.AngularVelocity *= 720.0f / spd;
 
+        // Gravidade nunca produz torque em Y: arm × (0,mg,0) → tau.y ≡ 0.
+        // Qualquer AngularVelocity.y quando grounded vem de impulsos de
+        // colisão ou acoplamento numérico do cross-product multi-eixo.
+        // Zeramos completamente para eliminar giro horizontal espúrio.
+        rb.AngularVelocity.y = 0.0f;
+
         // CONSTRAINT DE PÊNDULO: v_cm = ω_total × (-arm)
-        // Clamp resulting velocity to prevent explosions at steep angles
-        // where small rotation changes cause large arm jumps.
         glm::vec3 omegaRad = glm::radians(rb.AngularVelocity);
         glm::vec3 vPendulum = glm::cross(omegaRad, -arm);
 
-        // Limit pendulum velocity to a physically reasonable maximum
+        // Limita velocidade total do pêndulo
         float armLen = glm::length(arm);
         float maxPendulumSpeed = std::max(armLen * glm::radians(720.0f), 15.0f);
         float pendSpeed = glm::length(vPendulum);
         if (pendSpeed > maxPendulumSpeed)
             vPendulum *= maxPendulumSpeed / pendSpeed;
 
-        rb.Velocity = vPendulum;
+        // Aplica X e Z do pêndulo; Y apenas se for para baixo.
+        //
+        // Por que clampear Y:
+        //   Em inclinações multi-eixo (X+Y, X+Z), cross(ω,-arm).y pode ser positivo
+        //   porque ω acumula componentes em X e Z enquanto arm tem componente em Z:
+        //     vPendulum.y = ω.x*arm.z - ω.z*arm.x
+        //   Positivo → lança objeto para cima → salta do chão → ressalta.
+        //
+        // Aplica restrição de pêndulo: X e Z diretos, Y apenas para baixo.
+        // maxDOmega já limita variações bruscas de ω, portanto não precisamos
+        // suavizar X/Z aqui (suavização excessiva travava o cubo).
+        rb.Velocity.x = vPendulum.x;
+        rb.Velocity.z = vPendulum.z;
+        rb.Velocity.y = std::min(vPendulum.y, 0.0f);
+    }
+
+    // Cápsula em pé: equilíbrio instável → perturbar para tombar.
+    // Uma cápsula real em pé (height > diameter) tomba com qualquer perturbação.
+    // O fundo hemisférico faz o contato ficar sempre direto abaixo do centro
+    // do hemisfério, então o gravity torque loop não gera torque (arm vertical).
+    // Solução: detectar cápsula em pé e aplicar perturbação angular.
+    for (size_t i = 0; i < scene.RigidBodies.size(); i++)
+    {
+        auto& rb = scene.RigidBodies[i];
+        if (!rb.HasRigidBodyMode || !rb.HasColliderModule) continue;
+        if (rb.Collider != ColliderType::Capsule) continue;
+        if (rb.IsKinematic || !rb.IsGrounded) continue;
+
+        glm::mat4 wm = scene.GetEntityWorldMatrix((int)i);
+        glm::vec3 capAxis = glm::normalize(glm::vec3(wm[1]));
+        float axisVert = std::abs(capAxis.y);
+
+        float capRadius = rb.ColliderRadius * glm::length(glm::vec3(wm[0]));
+        float capHeight = rb.ColliderHeight * glm::length(glm::vec3(wm[1]));
+        float capHalfH = std::max(capHeight * 0.5f - capRadius, 0.0f);
+
+        // Cápsula em pé (eixo quase vertical, com segmento > 0)
+        if (axisVert > 0.85f && capHalfH > 0.01f)
+        {
+            // Aplicar perturbação uma vez para kickstart do tombamento
+            if (glm::length(rb.AngularVelocity) < 3.0f)
+            {
+                rb.AngularVelocity.x += 8.0f;
+                rb.AngularVelocity.z += 5.0f;
+            }
+        }
     }
 
     // Cancela velocidade residual de gravidade para objetos parados no chão.
@@ -909,7 +954,11 @@ void PhysicsSystem::Update(Scene& scene, float dt)
         if (rb.IsGrounded && rb.Velocity.y < 0.1f)
         {
             bool tipping = rb.HasRigidBodyMode && glm::length(rb.AngularVelocity) > 1.0f;
-            if (!tipping) rb.Velocity.y = 0.0f;
+            // Esferas em rampas precisam manter Velocity.y para rolar pela inclinação.
+            // A colisão já lida com a componente normal; zerar Y aqui mata a velocidade tangencial.
+            bool isSphere = rb.HasColliderModule && rb.Collider == ColliderType::Sphere;
+            bool isCapsule = rb.HasColliderModule && rb.Collider == ColliderType::Capsule;
+            if (!tipping && !isSphere && !isCapsule) rb.Velocity.y = 0.0f;
         }
     }
 }
@@ -1097,14 +1146,14 @@ void PhysicsSystem::ResolveCollisions(Scene& scene)
                         return centroid - pyrCM;
                     }
                     if (ct == ColliderType::Sphere)
-                        return n * (-rad); // contact at surface in collision direction
+                        return n * rad; // center → contact point (contact is in direction of n)
                     if (ct == ColliderType::Capsule) {
-                        // Closest point on capsule surface in direction n
+                        // Center → contact point on hemisphere surface
                         float halfH = std::max(h * 0.5f - rad, 0.0f);
                         glm::vec3 top = pos + capAxis * halfH;
                         glm::vec3 bot = pos - capAxis * halfH;
                         glm::vec3 bestPt = (glm::dot(bot, n) > glm::dot(top, n)) ? bot : top;
-                        return (bestPt + n * (-rad)) - pos;
+                        return (bestPt + n * rad) - pos;
                     }
                     return glm::vec3(0);
                 };

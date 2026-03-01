@@ -13,6 +13,9 @@ public:
     static constexpr int COMP_GRAVITY    = 1;
     static constexpr int COMP_COLLIDER   = 2;
     static constexpr int COMP_RIGIDBODY  = 3;
+    static constexpr int COMP_PLAYERCTRL = 4;
+    static constexpr int COMP_MOUSELOOK  = 5;
+    static constexpr int COMP_LIGHT      = 6;
 
     void Render(Scene& scene, int selectedEntity, int selectedGroup,
                 int winX, int winY, int panelW, int panelH,
@@ -26,6 +29,17 @@ private:
                                int orderIdx, std::vector<int>& order);
     bool DrawRigidBodySection (RigidBodyComponent& rb, int orderIdx, std::vector<int>& order);
     bool DrawCameraSection    (GameCameraComponent& gc, int orderIdx, std::vector<int>& order);
+    bool DrawPlayerControllerSection(PlayerControllerComponent& pc,
+                                     Scene& scene,
+                                     int orderIdx,
+                                     std::vector<int>& order);
+    bool DrawMouseLookSection       (MouseLookComponent& ml,
+                                     Scene& scene,
+                                     int orderIdx,
+                                     std::vector<int>& order);
+    bool DrawLightSection           (LightComponent& lc,
+                                     int orderIdx,
+                                     std::vector<int>& order);
 
     void DrawGroupSection     (SceneGroup& group, int groupIdx);
     void DrawAddComponentMenu (Scene& scene, int entityIdx, std::vector<int>& order);
@@ -35,7 +49,8 @@ private:
     std::vector<int>& GetOrBuildOrder     (Scene& scene, int entityIdx);
     std::vector<int>& GetOrBuildGroupOrder(SceneGroup& group, int groupIdx);
 
-    char m_NameBuffer[128] = {};
+    char m_NameBuffer[128]   = {};
+    char m_SearchBuffer[128] = {};  // Add Component search
     std::map<int, std::vector<int>> m_CompOrder;
     std::map<int, std::vector<int>> m_GroupCompOrder;
 };

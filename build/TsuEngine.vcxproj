@@ -146,7 +146,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkErrorReporting></LinkErrorReporting>
       <ProgramDataBaseFile>C:/Users/hm/Desktop/tsuEngine/build/Debug/TsuEngine.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -215,7 +215,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkErrorReporting></LinkErrorReporting>
       <ProgramDataBaseFile>C:/Users/hm/Desktop/tsuEngine/build/Release/TsuEngine.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -284,7 +284,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkErrorReporting></LinkErrorReporting>
       <ProgramDataBaseFile>C:/Users/hm/Desktop/tsuEngine/build/MinSizeRel/TsuEngine.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
@@ -352,7 +352,7 @@ if %errorlevel% neq 0 goto :VCEnd</Command>
       <LinkErrorReporting></LinkErrorReporting>
       <ProgramDataBaseFile>C:/Users/hm/Desktop/tsuEngine/build/RelWithDebInfo/TsuEngine.pdb</ProgramDataBaseFile>
       <RandomizedBaseAddress></RandomizedBaseAddress>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
     </Link>
     <ProjectReference>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>

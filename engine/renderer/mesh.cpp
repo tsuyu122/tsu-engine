@@ -370,4 +370,29 @@ Mesh Mesh::CreateGizmoArrow(float length, float rCol, float gCol, float bCol)
     return BuildFromVertices(verts);
 }
 
+// ----------------------------------------------------------------
+// PLANE (quad de 1x1 em XZ, visível dos dois lados)
+// ----------------------------------------------------------------
+
+Mesh Mesh::CreatePlane(const std::string& hexColor)
+{
+    glm::vec3 c = HexToRGB(hexColor);
+    float r = c.r, g = c.g, b = c.b;
+
+    std::vector<float> verts;
+    glm::vec3 p0 = {-0.5f, 0.0f, -0.5f};
+    glm::vec3 p1 = { 0.5f, 0.0f, -0.5f};
+    glm::vec3 p2 = { 0.5f, 0.0f,  0.5f};
+    glm::vec3 p3 = {-0.5f, 0.0f,  0.5f};
+
+    // Top face
+    addTri(verts, p0, p1, p2, r, g, b);
+    addTri(verts, p0, p2, p3, r, g, b);
+    // Bottom face (visible from below)
+    addTri(verts, p2, p1, p0, r, g, b);
+    addTri(verts, p3, p2, p0, r, g, b);
+
+    return BuildFromVertices(verts);
+}
+
 } // namespace tsu

@@ -48,7 +48,7 @@ include_directories(
     ${imgui_SOURCE_DIR}/backends
 )
 
-add_executable(TsuEngine
+add_executable(TsuEngine WIN32
     Engine/core/application.cpp
     Engine/core/window.cpp
     Engine/editor/editorCamera.cpp

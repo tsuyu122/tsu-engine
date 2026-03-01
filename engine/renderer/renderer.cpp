@@ -16,6 +16,13 @@ unsigned int Renderer::s_GizmoSphereCount = 0;
 unsigned int Renderer::s_GizmoLineVAO     = 0;
 unsigned int Renderer::s_GizmoLineCount   = 0;
 
+unsigned int Renderer::s_ShadowShader    = 0;
+unsigned int Renderer::s_ShadowFBO       = 0;
+unsigned int Renderer::s_ShadowDepthTex  = 0;
+glm::mat4    Renderer::s_ShadowLightSpace = glm::mat4(1.0f);
+glm::vec3    Renderer::s_ShadowLightDir  = {0.0f,-1.0f,0.0f};
+int          Renderer::s_HasShadow       = 0;
+
 static unsigned int CompileShader(unsigned int type, const char* src)
 {
     unsigned int id = glCreateShader(type);
@@ -64,36 +71,93 @@ void Renderer::Init()
         #version 330 core
         in vec3 vColor; in vec3 vNormal; in vec3 vFragPos; in vec3 vLocalPos;
         out vec4 FragColor;
-        uniform vec3 u_LightPos;
-        uniform vec3 u_MaterialColor;
+
+        #define MAX_LIGHTS 8
+        struct Light {
+            int   type;      // 0=off 1=directional 2=point 3=spot 4=area
+            vec3  position;
+            vec3  direction; // normalized, for directional/spot
+            vec3  color;     // pre-multiplied by intensity & temperature
+            float range;
+            float innerCos;
+            float outerCos;
+        };
+        uniform Light u_Lights[MAX_LIGHTS];
+        uniform int   u_NumLights;
+        uniform vec3  u_MaterialColor;
         uniform sampler2D u_Texture;
-        uniform int u_UseTexture;
+        uniform int       u_UseTexture;
+        // Shadow map (set when at least one Directional/Spot light exists)
+        uniform int       u_HasShadow;
+        uniform mat4      u_LightSpace;   // lightProj * lightView
+        uniform sampler2D u_ShadowMap;
+        uniform vec3      u_ShadowDir;    // normalised world-space light direction
+
         void main(){
-            vec3 ld=normalize(u_LightPos-vFragPos);
-            float d=max(dot(normalize(vNormal),ld),0.2);
+            vec3 norm=normalize(vNormal);
             vec3 base;
             if(u_UseTexture!=0){
-                // Triplanar mapping em espaço local: cada face recebe UV correto
-                vec3 n=abs(normalize(vNormal));
-                // Sharpness do blend entre eixos
-                n=pow(n,vec3(8.0));
-                float sum=n.x+n.y+n.z+0.0001;
-                n/=sum;
-                // UV de cada projeção (vLocalPos em [-0.5,0.5] -> UV em [0,1])
+                vec3 n=abs(norm); n=pow(n,vec3(8.0));
+                float sum=n.x+n.y+n.z+0.0001; n/=sum;
                 vec2 uvX=(vLocalPos.zy+0.5);
                 vec2 uvY=(vLocalPos.xz+0.5);
                 vec2 uvZ=(vLocalPos.xy+0.5);
-                vec4 cX=texture(u_Texture,uvX)*n.x;
-                vec4 cY=texture(u_Texture,uvY)*n.y;
-                vec4 cZ=texture(u_Texture,uvZ)*n.z;
-                vec4 tc=cX+cY+cZ;
+                vec4 tc=texture(u_Texture,uvX)*n.x+texture(u_Texture,uvY)*n.y+texture(u_Texture,uvZ)*n.z;
                 base=tc.rgb*u_MaterialColor;
             }else{
                 base=vColor*u_MaterialColor;
             }
-            FragColor=vec4(base*d,1.0);
+            vec3 outLight=vec3(0.07);
+            if(u_NumLights==0){
+                // Fallback: single soft default light when no lights are placed
+                vec3 dl=normalize(vec3(0.6,1.0,0.4));
+                outLight=vec3(max(dot(norm,dl),0.18));
+            } else {
+                for(int i=0;i<u_NumLights&&i<MAX_LIGHTS;i++){
+                    if(u_Lights[i].type==0) continue;
+                    vec3 ldir; float atten=1.0;
+                    if(u_Lights[i].type==1){
+                        ldir=normalize(-u_Lights[i].direction);
+                    } else {
+                        vec3 toL=u_Lights[i].position-vFragPos;
+                        float dist=length(toL);
+                        ldir=dist>0.0001?toL/dist:vec3(0.0,1.0,0.0);
+                        if(u_Lights[i].range>0.0){
+                            float t=clamp(1.0-dist/u_Lights[i].range,0.0,1.0);
+                            atten=t*t;
+                        }
+                        if(u_Lights[i].type==3){
+                            float theta=dot(ldir,-u_Lights[i].direction);
+                            float eps=u_Lights[i].innerCos-u_Lights[i].outerCos;
+                            atten*=clamp((theta-u_Lights[i].outerCos)/max(eps,0.0001),0.0,1.0);
+                        }
+                    }
+                    float diff=max(dot(norm,ldir),0.0);
+                    outLight+=u_Lights[i].color*diff*atten;
+                }
+            }
+            // --- Shadow ---
+            float shadowFactor = 1.0;
+            if (u_HasShadow != 0) {
+                vec4 fragLS = u_LightSpace * vec4(vFragPos, 1.0);
+                vec3 proj   = fragLS.xyz / fragLS.w * 0.5 + 0.5;
+                if (proj.z < 1.0) {
+                    // adaptive bias to avoid shadow acne
+                    float bias = max(0.005 * (1.0 - dot(norm, -u_ShadowDir)), 0.0005);
+                    float shadow = 0.0;
+                    vec2 ts = vec2(1.0 / 2048.0);
+                    for (int x = -1; x <= 1; x++)
+                        for (int y = -1; y <= 1; y++) {
+                            float d = texture(u_ShadowMap, proj.xy + vec2(x,y)*ts).r;
+                            shadow += (proj.z - bias > d) ? 1.0 : 0.0;
+                        }
+                    shadowFactor = 1.0 - shadow * (0.8 / 9.0); // max 80% shadow
+                }
+            }
+            FragColor=vec4(base*outLight*shadowFactor,1.0);
         }
     )");;
+
 
     // Shader de gizmo — sem iluminação, com alpha
     s_GizmoShader = LinkProgram(R"(
@@ -128,6 +192,35 @@ void Renderer::Init()
     )");
 
     InitGizmoMeshes();
+
+    // ----------------------------------------------------------------
+    // Shadow map: depth-only shader + FBO
+    // ----------------------------------------------------------------
+    s_ShadowShader = LinkProgram(
+        "#version 330 core\n"
+        "layout(location=0) in vec3 aPos;\n"
+        "uniform mat4 u_LightMVP;\n"
+        "void main(){ gl_Position = u_LightMVP * vec4(aPos,1.0); }",
+        "#version 330 core\nvoid main(){}"
+    );
+
+    glGenFramebuffers(1, &s_ShadowFBO);
+    glGenTextures(1, &s_ShadowDepthTex);
+    glBindTexture(GL_TEXTURE_2D, s_ShadowDepthTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, 2048, 2048,
+                 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    float borderCol[] = {1.0f, 1.0f, 1.0f, 1.0f}; // area outside map = no shadow
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderCol);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_ShadowFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+                           GL_TEXTURE_2D, s_ShadowDepthTex, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 void Renderer::InitGizmoMeshes()
@@ -165,15 +258,72 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
                          const glm::mat4& proj, unsigned int shader)
 {
     glUseProgram(shader);
-    glm::vec3 lightPos(3.0f, 6.0f, 3.0f);
-    unsigned int mvpLoc       = glGetUniformLocation(shader, "u_MVP");
-    unsigned int modelLoc     = glGetUniformLocation(shader, "u_Model");
-    unsigned int lightLoc     = glGetUniformLocation(shader, "u_LightPos");
-    unsigned int materialLoc  = glGetUniformLocation(shader, "u_MaterialColor");
-    unsigned int texLoc       = glGetUniformLocation(shader, "u_Texture");
-    unsigned int useTexLoc    = glGetUniformLocation(shader, "u_UseTexture");
-    glUniform3fv(lightLoc, 1, &lightPos[0]);
+    unsigned int mvpLoc      = glGetUniformLocation(shader, "u_MVP");
+    unsigned int modelLoc    = glGetUniformLocation(shader, "u_Model");
+    unsigned int materialLoc = glGetUniformLocation(shader, "u_MaterialColor");
+    unsigned int texLoc      = glGetUniformLocation(shader, "u_Texture");
+    unsigned int useTexLoc   = glGetUniformLocation(shader, "u_UseTexture");
     glUniform1i(texLoc, 0); // GL_TEXTURE0
+
+    // ---- Pass shadow map uniforms ----
+    glUniform1i(glGetUniformLocation(shader, "u_HasShadow"), s_HasShadow);
+    if (s_HasShadow)
+    {
+        glUniformMatrix4fv(glGetUniformLocation(shader, "u_LightSpace"), 1, GL_FALSE, &s_ShadowLightSpace[0][0]);
+        glUniform3fv(glGetUniformLocation(shader, "u_ShadowDir"), 1, &s_ShadowLightDir[0]);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, s_ShadowDepthTex);
+        glUniform1i(glGetUniformLocation(shader, "u_ShadowMap"), 1);
+        glActiveTexture(GL_TEXTURE0); // always restore to unit 0
+    }
+
+    // ---- Gather active lights and pass to shader (up to 8) ----
+    auto kelvinRGB = [](float T) -> glm::vec3 {
+        T = glm::clamp(T, 1000.0f, 12000.0f) / 100.0f;
+        float r = (T <= 66.0f) ? 1.0f : glm::clamp(329.698727f * powf(T-60.0f,-0.1332048f)/255.0f, 0.0f, 1.0f);
+        float g = (T <= 66.0f) ? glm::clamp((99.4708f*logf(T)-161.1196f)/255.0f, 0.0f,1.0f)
+                               : glm::clamp(288.1222f*powf(T-60.0f,-0.0755148f)/255.0f, 0.0f,1.0f);
+        float b = (T >= 66.0f) ? 1.0f : (T <= 19.0f) ? 0.0f
+                               : glm::clamp((138.5177f*logf(T-10.0f)-305.0448f)/255.0f, 0.0f,1.0f);
+        return {r, g, b};
+    };
+    struct LU { int type; glm::vec3 pos, dir, col; float range, ic, oc; };
+    std::vector<LU> luArr;
+    for (int li = 0; li < (int)scene.Lights.size() && (int)luArr.size() < 8; ++li)
+    {
+        const auto& lc = scene.Lights[li];
+        if (!lc.Active || !lc.Enabled) continue;
+        glm::mat4 wm  = scene.GetEntityWorldMatrix(li);
+        glm::vec3 pos = glm::vec3(wm[3]);
+        glm::vec3 fwd = glm::normalize(glm::vec3(wm * glm::vec4(1,0,0,0)));
+        LU lu;
+        lu.type  = (int)lc.Type + 1;
+        lu.pos   = pos;
+        lu.dir   = fwd;
+        lu.col   = lc.Color * kelvinRGB(lc.Temperature) * lc.Intensity;
+        lu.range = lc.Range;
+        lu.ic    = cosf(glm::radians(lc.InnerAngle));
+        lu.oc    = cosf(glm::radians(lc.OuterAngle));
+        luArr.push_back(lu);
+    }
+    {
+        char nb[64];
+        int nl = (int)luArr.size();
+        glUniform1i(glGetUniformLocation(shader, "u_NumLights"), nl);
+        for (int li = 0; li < 8; ++li)
+        {
+            snprintf(nb,sizeof(nb),"u_Lights[%d].type",li);
+            glUniform1i(glGetUniformLocation(shader,nb), li < nl ? luArr[li].type : 0);
+            if (li >= nl) continue;
+            const auto& lu = luArr[li];
+            snprintf(nb,sizeof(nb),"u_Lights[%d].position", li);  glUniform3fv(glGetUniformLocation(shader,nb),1,&lu.pos[0]);
+            snprintf(nb,sizeof(nb),"u_Lights[%d].direction",li);  glUniform3fv(glGetUniformLocation(shader,nb),1,&lu.dir[0]);
+            snprintf(nb,sizeof(nb),"u_Lights[%d].color",    li);  glUniform3fv(glGetUniformLocation(shader,nb),1,&lu.col[0]);
+            snprintf(nb,sizeof(nb),"u_Lights[%d].range",    li);  glUniform1f(glGetUniformLocation(shader,nb),lu.range);
+            snprintf(nb,sizeof(nb),"u_Lights[%d].innerCos", li);  glUniform1f(glGetUniformLocation(shader,nb),lu.ic);
+            snprintf(nb,sizeof(nb),"u_Lights[%d].outerCos", li);  glUniform1f(glGetUniformLocation(shader,nb),lu.oc);
+        }
+    }
 
     for (size_t i=0; i<scene.Transforms.size(); i++)
     {
@@ -309,15 +459,34 @@ void Renderer::DrawColliderGizmos(Scene& scene, const glm::mat4& view, const glm
         else if (rb.Collider == ColliderType::Capsule)
         {
             float halfH = hgt * 0.5f;
+            // --- Cylinder body ---
             for (int k = 0; k < CIRC_SEG; k++) {
                 float a0=2*3.14159f*k/CIRC_SEG, a1=2*3.14159f*(k+1)/CIRC_SEG;
                 glm::vec3 t0={sinf(a0)*rad, halfH, cosf(a0)*rad};
                 glm::vec3 t1={sinf(a1)*rad, halfH, cosf(a1)*rad};
                 glm::vec3 b0={sinf(a0)*rad,-halfH, cosf(a0)*rad};
                 glm::vec3 b1={sinf(a1)*rad,-halfH, cosf(a1)*rad};
-                addLine(toWorld(t0), toWorld(t1));
-                addLine(toWorld(b0), toWorld(b1));
-                if (k%4==0) addLine(toWorld(t0), toWorld(b0));
+                addLine(toWorld(t0), toWorld(t1));  // top ring
+                addLine(toWorld(b0), toWorld(b1));  // bottom ring
+                if (k%4==0) addLine(toWorld(t0), toWorld(b0));  // 4 vertical struts
+            }
+            // --- Hemisphere caps (4 meridian arcs each) ---
+            const int HEMI = CIRC_SEG / 2;
+            for (int arc = 0; arc < 4; arc++) {
+                float phi = arc * 3.14159f * 0.5f;
+                float cp = cosf(phi), sp = sinf(phi);
+                for (int k = 0; k < HEMI; k++) {
+                    float t0 = k * 3.14159f / (2 * HEMI);
+                    float t1 = (k+1) * 3.14159f / (2 * HEMI);
+                    // Top hemisphere: goes from equator (t=0) to pole (t=pi/2)
+                    glm::vec3 tp0 = {cp*cosf(t0)*rad,  halfH+sinf(t0)*rad, sp*cosf(t0)*rad};
+                    glm::vec3 tp1 = {cp*cosf(t1)*rad,  halfH+sinf(t1)*rad, sp*cosf(t1)*rad};
+                    // Bottom hemisphere: goes from equator down to pole
+                    glm::vec3 bp0 = {cp*cosf(t0)*rad, -halfH-sinf(t0)*rad, sp*cosf(t0)*rad};
+                    glm::vec3 bp1 = {cp*cosf(t1)*rad, -halfH-sinf(t1)*rad, sp*cosf(t1)*rad};
+                    addLine(toWorld(tp0), toWorld(tp1));
+                    addLine(toWorld(bp0), toWorld(bp1));
+                }
             }
         }
     }
@@ -401,6 +570,10 @@ void Renderer::RenderSceneEditor(Scene& scene, const EditorCamera& camera, int w
     glm::mat4 view       = camera.GetViewMatrix();
     glm::mat4 projection = camera.GetProjection(aspect);
 
+    RenderShadowPass(scene);
+    glViewport(0, 0, winW, winH);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
     DrawScene(scene, view, projection, s_ShaderProgram);
     DrawColliderGizmos(scene, view, projection);
     DrawGizmos(scene, view, projection);
@@ -413,7 +586,12 @@ void Renderer::RenderSceneEditor(Scene& scene, const EditorCamera& camera, int w
 void Renderer::RenderSceneGame(Scene& scene, int winW, int winH)
 {
     int camIdx = scene.GetActiveGameCamera();
-    if (camIdx < 0) return;
+    if (camIdx < 0)
+    {
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        return;
+    }
 
     float aspect        = (float)winW / (float)winH;
     auto& gc            = scene.GameCameras[camIdx];
@@ -426,54 +604,128 @@ void Renderer::RenderSceneGame(Scene& scene, int winW, int winH)
     glm::mat4 view      = glm::lookAt(pos, pos + camFwd, camUp);
     glm::mat4 proj      = gc.GetProjection(aspect);
 
+    RenderShadowPass(scene);
+    glViewport(0, 0, winW, winH);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
     DrawScene(scene, view, proj, s_ShaderProgram);
+}
+
+// ----------------------------------------------------------------
+// RenderShadowPass
+// ----------------------------------------------------------------
+
+void Renderer::RenderShadowPass(Scene& scene)
+{
+    s_HasShadow = 0;
+    for (int li = 0; li < (int)scene.Lights.size(); ++li)
+    {
+        const auto& lc = scene.Lights[li];
+        if (!lc.Active || !lc.Enabled) continue;
+        if (lc.Type != LightType::Directional && lc.Type != LightType::Spot) continue;
+
+        glm::mat4 wm  = scene.GetEntityWorldMatrix(li);
+        glm::vec3 pos = glm::vec3(wm[3]);
+        glm::vec3 fwd = glm::normalize(glm::vec3(wm * glm::vec4(1,0,0,0)));
+        glm::vec3 up  = (fabsf(glm::dot(fwd, glm::vec3(0,1,0))) < 0.99f)
+                        ? glm::vec3(0,1,0) : glm::vec3(1,0,0);
+
+        glm::mat4 lightView, lightProj;
+        if (lc.Type == LightType::Directional)
+        {
+            // Sun: orthographic from a far eye position, centred on world origin
+            glm::vec3 eye = -fwd * 40.0f;
+            lightView = glm::lookAt(eye, glm::vec3(0,0,0), up);
+            lightProj = glm::ortho(-30.0f, 30.0f, -30.0f, 30.0f, 0.1f, 100.0f);
+        }
+        else // Spot
+        {
+            lightView = glm::lookAt(pos, pos + fwd, up);
+            lightProj = glm::perspective(glm::radians(lc.OuterAngle * 2.0f), 1.0f, 0.1f,
+                                         lc.Range > 0.0f ? lc.Range : 50.0f);
+        }
+
+        s_ShadowLightSpace = lightProj * lightView;
+        s_ShadowLightDir   = fwd;
+        s_HasShadow        = 1;
+
+        // Render depth to the shadow FBO
+        glViewport(0, 0, 2048, 2048);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_ShadowFBO);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glCullFace(GL_FRONT);   // avoid peter-panning self-shadow artifacts
+
+        glUseProgram(s_ShadowShader);
+        unsigned int loc = glGetUniformLocation(s_ShadowShader, "u_LightMVP");
+        for (int i = 0; i < (int)scene.Transforms.size(); ++i)
+        {
+            if (!scene.MeshRenderers[i].MeshPtr) continue;
+            glm::mat4 m = s_ShadowLightSpace * scene.GetEntityWorldMatrix(i);
+            glUniformMatrix4fv(loc, 1, GL_FALSE, &m[0][0]);
+            scene.MeshRenderers[i].MeshPtr->Draw();
+        }
+
+        glCullFace(GL_BACK);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        break; // only the first matching light casts shadows
+    }
 }
 
 // ----------------------------------------------------------------
 // RenderToolbar — barra Play/Pause simples no topo
 // ----------------------------------------------------------------
 
-void Renderer::RenderToolbar(bool isPlaying, bool isPaused, int winW, int winH)
+void Renderer::RenderToolbar(bool isPlaying, bool isPaused, int winW, int winH,
+                             float topOffsetPx)
 {
-    // Desabilita depth test para desenhar por cima de tudo
     glDisable(GL_DEPTH_TEST);
 
-    // Fundo da toolbar (faixa escura no topo)
-    // Coordenadas NDC: y=1.0 topo, y=1.0-barH base da barra
-    float barH = 0.07f; // altura em NDC
-    float btnW = 0.06f;
-    float btnH = 0.05f;
-    float btnY = 1.0f - (barH - btnH) * 0.5f - btnH; // centro vertical da barra
+    const float barH = 34.0f;
+    const float btnW = 68.0f;
+    const float btnH = 24.0f;
+    const float spacing = 12.0f;
+    const float totalW = btnW * 2.0f + spacing;
+    const float centerX = (float)winW * 0.5f;
+    const float barY0 = topOffsetPx;
+    const float barY1 = barY0 + barH;
+    const float btnY0 = barY0 + (barH - btnH) * 0.5f;
+    const float btnY1 = btnY0 + btnH;
+    const float playX0 = centerX - totalW * 0.5f;
+    const float playX1 = playX0 + btnW;
+    const float pauseX0 = playX1 + spacing;
+    const float pauseX1 = pauseX0 + btnW;
 
     struct Vtx2D { float x, y, r, g, b; };
 
-    auto makeQuad = [](float x0, float y0, float x1, float y1,
-                       float r, float g, float b) -> std::vector<Vtx2D>
+    auto makeQuadPx = [winW, winH](float x0, float y0, float x1, float y1,
+                                    float r, float g, float b) -> std::vector<Vtx2D>
     {
+        float nx0 =  2.0f * x0 / (float)winW - 1.0f;
+        float nx1 =  2.0f * x1 / (float)winW - 1.0f;
+        float ny0 = -2.0f * y0 / (float)winH + 1.0f;
+        float ny1 = -2.0f * y1 / (float)winH + 1.0f;
         return {
-            {x0,y0, r,g,b}, {x1,y0, r,g,b}, {x1,y1, r,g,b},
-            {x0,y0, r,g,b}, {x1,y1, r,g,b}, {x0,y1, r,g,b},
+            {nx0,ny0, r,g,b}, {nx1,ny0, r,g,b}, {nx1,ny1, r,g,b},
+            {nx0,ny0, r,g,b}, {nx1,ny1, r,g,b}, {nx0,ny1, r,g,b},
         };
     };
 
     std::vector<Vtx2D> verts;
 
-    // Fundo cinza escuro
-    auto bg = makeQuad(-1.0f, 1.0f-barH, 1.0f, 1.0f, 0.18f, 0.18f, 0.18f);
+    auto bg = makeQuadPx(0.0f, barY0, (float)winW, barY1, 0.13f, 0.13f, 0.15f);
     verts.insert(verts.end(), bg.begin(), bg.end());
 
-    // Botão Play
-    float playR = isPlaying ? 0.2f : 0.25f;
-    float playG = isPlaying ? 0.8f : 0.9f;
-    float playB = isPlaying ? 0.2f : 0.25f;
-    auto playBtn = makeQuad(-btnW*0.5f - btnW, btnY, -btnW*0.5f, btnY+btnH, playR, playG, playB);
+    // Start: red when engine is running, green when idle
+    float playR = isPlaying ? 0.88f : 0.18f;
+    float playG = isPlaying ? 0.20f : 0.72f;
+    float playB = isPlaying ? 0.20f : 0.26f;
+    auto playBtn = makeQuadPx(playX0, btnY0, playX1, btnY1, playR, playG, playB);
     verts.insert(verts.end(), playBtn.begin(), playBtn.end());
 
-    // Botão Pause
-    float pauseR = isPaused ? 0.9f : 0.25f;
-    float pauseG = isPaused ? 0.9f : 0.25f;
-    float pauseB = isPaused ? 0.2f : 0.9f;
-    auto pauseBtn = makeQuad(btnW*0.5f, btnY, btnW*0.5f+btnW, btnY+btnH, pauseR, pauseG, pauseB);
+    float pauseR = isPaused ? 0.94f : 0.28f;
+    float pauseG = isPaused ? 0.84f : 0.30f;
+    float pauseB = isPaused ? 0.16f : 0.86f;
+    auto pauseBtn = makeQuadPx(pauseX0, btnY0, pauseX1, btnY1, pauseR, pauseG, pauseB);
     verts.insert(verts.end(), pauseBtn.begin(), pauseBtn.end());
 
     // Upload e draw
@@ -491,7 +743,7 @@ void Renderer::RenderToolbar(bool isPlaying, bool isPaused, int winW, int winH)
     glEnableVertexAttribArray(1);
 
     glUseProgram(s_HUDShader);
-    glUniform1f(glGetUniformLocation(s_HUDShader,"u_Alpha"), 0.92f);
+    glUniform1f(glGetUniformLocation(s_HUDShader,"u_Alpha"), 0.94f);
     glDisable(GL_DEPTH_TEST);
     glDrawArrays(GL_TRIANGLES, 0, (GLsizei)verts.size());
 
@@ -559,23 +811,26 @@ void Renderer::DrawTranslationGizmo(const glm::vec3& pos, int activeAxis,
 // Hit test da toolbar
 // ----------------------------------------------------------------
 
-bool Renderer::ToolbarClickPlay(int x, int y, int winW, int winH)
+bool Renderer::ToolbarClickPlay(int x, int y, int winW, int winH, float topOffsetPx)
 {
-    float nx =  2.0f * x / (float)winW - 1.0f;
-    float ny = -2.0f * y / (float)winH + 1.0f;
-    float barH=0.07f, btnW=0.06f, btnH=0.05f;
-    float btnY = 1.0f - (barH-btnH)*0.5f - btnH;
-    // Play button rendered at makeQuad(-btnW*1.5f, btnY, -btnW*0.5f, btnY+btnH)
-    return nx >= -btnW*1.5f && nx <= -btnW*0.5f && ny >= btnY && ny <= btnY+btnH;
+    const float barH=34.0f, btnW=68.0f, spacing=12.0f;
+    const float totalW = btnW * 2.0f + spacing;
+    const float centerX = (float)winW * 0.5f;
+    const float playX0 = centerX - totalW * 0.5f;
+    const float playX1 = playX0 + btnW;
+    return (float)x >= playX0 && (float)x <= playX1 &&
+           (float)y >= topOffsetPx && (float)y <= (topOffsetPx + barH);
 }
 
-bool Renderer::ToolbarClickPause(int x, int y, int winW, int winH)
+bool Renderer::ToolbarClickPause(int x, int y, int winW, int winH, float topOffsetPx)
 {
-    float nx =  2.0f * x / (float)winW - 1.0f;
-    float ny = -2.0f * y / (float)winH + 1.0f;
-    float barH=0.07f, btnW=0.06f, btnH=0.05f;
-    float btnY = 1.0f - (barH-btnH)*0.5f - btnH;
-    return nx >= btnW*0.5f && nx <= btnW*1.5f && ny >= btnY && ny <= btnY+btnH;
+    const float barH=34.0f, btnW=68.0f, spacing=12.0f;
+    const float totalW = btnW * 2.0f + spacing;
+    const float centerX = (float)winW * 0.5f;
+    const float pauseX0 = centerX - totalW * 0.5f + btnW + spacing;
+    const float pauseX1 = pauseX0 + btnW;
+    return (float)x >= pauseX0 && (float)x <= pauseX1 &&
+           (float)y >= topOffsetPx && (float)y <= (topOffsetPx + barH);
 }
 
 } // namespace tsu

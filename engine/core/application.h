@@ -23,7 +23,12 @@ public:
 private:
     void HandleToolbarInput();
     void HandleEditorInput(int winW, int winH);  // seleção + gizmo
+    void UpdatePlayerControllers(float dt);
+    void UpdateMouseLook(float dt);
     int  RaycastScene(float mx, float my, int winW, int winH);
+    glm::vec3 ComputeViewportSpawnPoint(float mx, float my, int winW, int winH) const;
+    void CreateViewportEntity(const std::string& type, int parentEntity, const glm::vec3& worldPos);
+    void CreateViewportLight  (LightType type,          int parentEntity, const glm::vec3& worldPos);
     void SaveEditorState();    // salva posições antes de rodar
     void RestoreEditorState(); // restaura ao parar
 
@@ -41,6 +46,13 @@ private:
         glm::vec3 position, velocity, rotation, angularVelocity;
     };
     std::vector<EntitySnapshot> m_Snapshot;
+
+    // Viewport right-click context menu
+    float m_RmbPressX    = 0.0f;
+    float m_RmbPressY    = 0.0f;
+    int   m_RmbHitEntity = -1;
+    glm::vec3 m_RmbWorldPos = glm::vec3(0.0f);
+    bool      m_OpenViewportMenu = false;
 };
 
 } // namespace tsu

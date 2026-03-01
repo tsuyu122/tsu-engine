@@ -17,6 +17,9 @@ Entity Scene::CreateEntity(const std::string& name)
     EntityGroups.push_back(-1);
     EntityMaterial.push_back(-1);
     EntityColors.push_back(glm::vec3(1.0f, 1.0f, 1.0f));
+    PlayerControllers.emplace_back();
+    MouseLooks.emplace_back();
+    Lights.emplace_back();
     EntityParents.push_back(-1);
     EntityChildren.emplace_back();       // empty children list
     RootOrder.push_back((int)id);        // new entity starts at root
@@ -246,6 +249,9 @@ void Scene::DeleteEntity(int idx)
     erase1(EntityChildren);
     erase1(EntityMaterial);
     erase1(EntityColors);
+    erase1(PlayerControllers);
+    erase1(MouseLooks);
+    erase1(Lights);
     // RootOrder was already cleaned manually — just fix remaining indices:
     fixList(RootOrder);
 
@@ -255,6 +261,74 @@ void Scene::DeleteEntity(int idx)
 
     // Fix group ChildEntities
     for (auto& g : Groups) fixList(g.ChildEntities);
+
+    // Fix MouseLook entity references
+    for (auto& ml : MouseLooks) { fixIdx(ml.YawTargetEntity); fixIdx(ml.PitchTargetEntity); }
+}
+
+void Scene::EnsureChannelCount(int count)
+{
+    if (count <= 0) return;
+    while ((int)Channels.size() < count)
+    {
+        ChannelVariable ch;
+        ch.Name = "Channel " + std::to_string((int)Channels.size() + 1);
+        Channels.push_back(ch);
+    }
+}
+
+bool Scene::GetChannelBool(int idx, bool fallback) const
+{
+    if (idx < 0 || idx >= (int)Channels.size()) return fallback;
+    const auto& ch = Channels[idx];
+    if (ch.Type == ChannelVariableType::Boolean) return ch.BoolValue;
+    if (ch.Type == ChannelVariableType::Float)   return ch.FloatValue > 0.5f;
+    return !ch.StringValue.empty();
+}
+
+float Scene::GetChannelFloat(int idx, float fallback) const
+{
+    if (idx < 0 || idx >= (int)Channels.size()) return fallback;
+    const auto& ch = Channels[idx];
+    if (ch.Type == ChannelVariableType::Float)   return ch.FloatValue;
+    if (ch.Type == ChannelVariableType::Boolean) return ch.BoolValue ? 1.0f : 0.0f;
+    return fallback;
+}
+
+std::string Scene::GetChannelString(int idx, const std::string& fallback) const
+{
+    if (idx < 0 || idx >= (int)Channels.size()) return fallback;
+    const auto& ch = Channels[idx];
+    if (ch.Type == ChannelVariableType::String) return ch.StringValue;
+    if (ch.Type == ChannelVariableType::Boolean) return ch.BoolValue ? "true" : "false";
+    return std::to_string(ch.FloatValue);
+}
+
+void Scene::SetChannelBool(int idx, bool value)
+{
+    if (idx < 0) return;
+    EnsureChannelCount(idx + 1);
+    auto& ch = Channels[idx];
+    ch.Type = ChannelVariableType::Boolean;
+    ch.BoolValue = value;
+}
+
+void Scene::SetChannelFloat(int idx, float value)
+{
+    if (idx < 0) return;
+    EnsureChannelCount(idx + 1);
+    auto& ch = Channels[idx];
+    ch.Type = ChannelVariableType::Float;
+    ch.FloatValue = value;
+}
+
+void Scene::SetChannelString(int idx, const std::string& value)
+{
+    if (idx < 0) return;
+    EnsureChannelCount(idx + 1);
+    auto& ch = Channels[idx];
+    ch.Type = ChannelVariableType::String;
+    ch.StringValue = value;
 }
 
 } // namespace tsu

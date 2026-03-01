@@ -1,8 +1,12 @@
 #include "ui/inspectorPanel.h"
+#include "input/inputManager.h"
 #include <imgui.h>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <cstdio>
+#include <cctype>
+#include <cstdlib>
 #include <unordered_map>
 
 namespace tsu {
@@ -48,9 +52,142 @@ static bool TableDragFloat1(const char* label, float* v, float speed,
 // the user selects "Remove Component" from the context menu.
 // ----------------------------------------------------------------
 
+// ----------------------------------------------------------------
+// GLFW key-code ↔ readable name helpers
+// ----------------------------------------------------------------
+
+struct KeyNameEntry { int code; const char* name; };
+static const KeyNameEntry kKeyNames[] = {
+    // Letters
+    {65,"A"},{66,"B"},{67,"C"},{68,"D"},{69,"E"},{70,"F"},{71,"G"},
+    {72,"H"},{73,"I"},{74,"J"},{75,"K"},{76,"L"},{77,"M"},{78,"N"},
+    {79,"O"},{80,"P"},{81,"Q"},{82,"R"},{83,"S"},{84,"T"},{85,"U"},
+    {86,"V"},{87,"W"},{88,"X"},{89,"Y"},{90,"Z"},
+    // Digits
+    {48,"0"},{49,"1"},{50,"2"},{51,"3"},{52,"4"},
+    {53,"5"},{54,"6"},{55,"7"},{56,"8"},{57,"9"},
+    // F-Keys
+    {290,"F1"},{291,"F2"},{292,"F3"},{293,"F4"},{294,"F5"},{295,"F6"},
+    {296,"F7"},{297,"F8"},{298,"F9"},{299,"F10"},{300,"F11"},{301,"F12"},
+    // Navigation
+    {256,"Escape"},{257,"Enter"},{258,"Tab"},{259,"Backspace"},
+    {260,"Insert"},{261,"Delete"},{262,"Right"},{263,"Left"},
+    {264,"Down"},{265,"Up"},{266,"Page Up"},{267,"Page Down"},
+    {268,"Home"},{269,"End"},
+    // Modifiers
+    {340,"Left Shift"},{341,"Left Ctrl"},{342,"Left Alt"},
+    {344,"Right Shift"},{345,"Right Ctrl"},{346,"Right Alt"},
+    {343,"Left Super"},{347,"Right Super"},
+    // Misc
+    {32,"Space"},{39,"Apostrophe"},{44,"Comma"},{45,"Minus"},
+    {46,"Period"},{47,"Slash"},{59,"Semicolon"},{61,"Equal"},
+    {91,"Left Bracket"},{92,"Backslash"},{93,"Right Bracket"},{96,"Grave"},
+    // Numpad
+    {320,"Num 0"},{321,"Num 1"},{322,"Num 2"},{323,"Num 3"},{324,"Num 4"},
+    {325,"Num 5"},{326,"Num 6"},{327,"Num 7"},{328,"Num 8"},{329,"Num 9"},
+    {330,"Num Decimal"},{331,"Num Divide"},{332,"Num Multiply"},
+    {333,"Num Subtract"},{334,"Num Add"},{335,"Num Enter"},
+    {0,nullptr}
+};
+
+static const char* GlfwKeyToName(int code)
+{
+    for (int i = 0; kKeyNames[i].name; ++i)
+        if (kKeyNames[i].code == code) return kKeyNames[i].name;
+    return nullptr;
+}
+
+static int GlfwKeyFromName(const char* str)
+{
+    if (!str || !str[0]) return 0;
+    for (int i = 0; kKeyNames[i].name; ++i)
+    {
+        // Case-insensitive compare
+        const char* a = kKeyNames[i].name;
+        const char* b = str;
+        bool eq = true;
+        while (*a && *b) {
+            if (std::tolower((unsigned char)*a) != std::tolower((unsigned char)*b)) { eq = false; break; }
+            ++a; ++b;
+        }
+        if (eq && !*a && !*b) return kKeyNames[i].code;
+    }
+    // Fallback: try parse as integer
+    char* end; long v = std::strtol(str, &end, 10);
+    if (end != str) return (int)v;
+    return 0;
+}
+
+// Widget: shows current key name; click to type a new name.
+// Internally stores the GLFW key code but displays "W", "Left Shift" etc.
+static void KeyNameField(const char* label, int& keyCode)
+{
+    ImGui::PushID(label);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine();
+
+    // Persistent edit buffer per-ID
+    static std::unordered_map<ImGuiID, std::array<char,64>> s_EditBufs;
+    static std::unordered_map<ImGuiID, bool>                s_Editing;
+    ImGuiID wid = ImGui::GetID("##kf");
+
+    auto& editing = s_Editing[wid];
+    auto& buf     = s_EditBufs[wid];
+
+    if (!editing)
+    {
+        const char* nm = GlfwKeyToName(keyCode);
+        char preview[64];
+        if (nm) snprintf(preview, sizeof(preview), "%s", nm);
+        else    snprintf(preview, sizeof(preview), "%d", keyCode);
+
+        ImGui::SetNextItemWidth(140.0f);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.22f, 0.22f, 0.25f, 1.0f));
+        if (ImGui::InputText("##kfdisp", preview, sizeof(preview),
+                             ImGuiInputTextFlags_ReadOnly))
+        {}
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemActivated())
+        {
+            // Enter edit mode
+            const char* nm2 = GlfwKeyToName(keyCode);
+            if (nm2) snprintf(buf.data(), buf.size(), "%s", nm2);
+            else     snprintf(buf.data(), buf.size(), "%d", keyCode);
+            editing = true;
+        }
+    }
+    else
+    {
+        ImGui::SetNextItemWidth(140.0f);
+        bool confirmed = ImGui::InputText("##kfedit", buf.data(), buf.size(),
+            ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+        ImGui::SetKeyboardFocusHere(-1);
+        if (confirmed || (!ImGui::IsItemActive() && !ImGui::IsItemFocused()))
+        {
+            int parsed = GlfwKeyFromName(buf.data());
+            if (parsed > 0) keyCode = parsed;
+            editing = false;
+        }
+    }
+
+    // Tooltip showing all available key names (on hover)
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+    {
+        ImGui::BeginTooltip();
+        ImGui::TextDisabled("Type: W, A, S, D, Space, Left Shift, F1 … or a GLFW code number.");
+        ImGui::EndTooltip();
+    }
+
+    ImGui::PopID();
+}
+
+// ----------------------------------------------------------------
+// pEnabled: if non-null, draws a green/grey toggle button to the RIGHT of the header.
+//            Mandatory components (Transform, Material) pass nullptr.
 static bool DrawCompHeader(const char* label, const char* uid,
                             int orderIdx, std::vector<int>& order,
-                            bool& removedOut)
+                            bool& removedOut, bool* pEnabled = nullptr)
 {
     removedOut = false;
 
@@ -58,8 +195,41 @@ static bool DrawCompHeader(const char* label, const char* uid,
     ImGui::Spacing();
     ImGui::Spacing();
 
+    // Dim the header text when disabled
+    if (pEnabled && !(*pEnabled))
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.52f, 0.52f, 0.55f, 1.0f));
+
     bool open = ImGui::CollapsingHeader(label,
         ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+
+    if (pEnabled && !(*pEnabled))
+        ImGui::PopStyleColor();
+
+    // ---------- Toggle button overlaid on the RIGHT of the header ----------
+    if (pEnabled != nullptr)
+    {
+        float frameH = ImGui::GetFrameHeight();
+        float btnW   = frameH * 1.15f;
+        ImVec2 hdrMin = ImGui::GetItemRectMin();
+        ImVec2 hdrMax = ImGui::GetItemRectMax();
+        // Place button at the right edge of the header, vertically centred
+        float bx = hdrMax.x - btnW - 4.0f;
+        float by = hdrMin.y + (hdrMax.y - hdrMin.y - frameH) * 0.5f;
+        ImGui::SetCursorScreenPos(ImVec2(bx, by));
+
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            *pEnabled ? ImVec4(0.20f, 0.72f, 0.26f, 1.0f) : ImVec4(0.38f, 0.38f, 0.40f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            *pEnabled ? ImVec4(0.30f, 0.85f, 0.35f, 1.0f) : ImVec4(0.50f, 0.50f, 0.52f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+            *pEnabled ? ImVec4(0.14f, 0.58f, 0.20f, 1.0f) : ImVec4(0.28f, 0.28f, 0.30f, 1.0f));
+        char btnId[64]; snprintf(btnId, sizeof(btnId), "##entog_%s", uid);
+        if (ImGui::Button(btnId, ImVec2(btnW, frameH)))
+            *pEnabled = !(*pEnabled);
+        ImGui::PopStyleColor(3);
+        // Restore cursor to below the header so content follows normally
+        ImGui::SetCursorScreenPos(ImVec2(hdrMin.x, hdrMax.y));
+    }
 
     // Right-click on header → Remove
     char ctxId[64]; snprintf(ctxId, sizeof(ctxId), "##rmctx_%s", uid);
@@ -69,7 +239,7 @@ static bool DrawCompHeader(const char* label, const char* uid,
         ImGui::EndPopup();
     }
 
-    // Drag the header itself to reorder (hold and drag to another header)
+    // Drag the header itself to reorder
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
     {
         ImGui::SetDragDropPayload("COMP_REORDER", &orderIdx, sizeof(int));
@@ -162,6 +332,9 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
             case COMP_GRAVITY:     return scene.RigidBodies[idx].HasGravityModule;
             case COMP_COLLIDER:    return scene.RigidBodies[idx].HasColliderModule;
             case COMP_RIGIDBODY:   return scene.RigidBodies[idx].HasRigidBodyMode;
+            case COMP_PLAYERCTRL:  return scene.PlayerControllers[idx].Active;
+            case COMP_MOUSELOOK:   return scene.MouseLooks[idx].Active;
+            case COMP_LIGHT:       return scene.Lights[idx].Active;
             default: return false;
         }
     };
@@ -180,6 +353,9 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
     addMissing(COMP_GRAVITY);
     addMissing(COMP_COLLIDER);
     addMissing(COMP_RIGIDBODY);
+    addMissing(COMP_PLAYERCTRL);
+    addMissing(COMP_MOUSELOOK);
+    addMissing(COMP_LIGHT);
 
     return stored;
 }
@@ -189,8 +365,10 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
 // ----------------------------------------------------------------
 
 // Helper: labeled DragFloat3 with colored X/Y/Z sub-labels
+// defaults[3]: if non-null, double right-click resets each component to its default.
 static bool TableDragFloat3XYZ(const char* label, float* v, float speed,
-                                float vmin = 0.0f, float vmax = 0.0f)
+                                float vmin = 0.0f, float vmax = 0.0f,
+                                const float* defaults = nullptr)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
@@ -210,6 +388,8 @@ static bool TableDragFloat3XYZ(const char* label, float* v, float speed,
     ImGui::SameLine(0, 2);
     ImGui::SetNextItemWidth(fieldW);
     if (ImGui::DragFloat("##x", &v[0], speed, vmin, vmax)) changed = true;
+    if (defaults && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right))
+        { v[0] = defaults[0]; changed = true; }
 
     ImGui::SameLine(0, spacing);
 
@@ -218,6 +398,8 @@ static bool TableDragFloat3XYZ(const char* label, float* v, float speed,
     ImGui::SameLine(0, 2);
     ImGui::SetNextItemWidth(fieldW);
     if (ImGui::DragFloat("##y", &v[1], speed, vmin, vmax)) changed = true;
+    if (defaults && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right))
+        { v[1] = defaults[1]; changed = true; }
 
     ImGui::SameLine(0, spacing);
 
@@ -226,6 +408,8 @@ static bool TableDragFloat3XYZ(const char* label, float* v, float speed,
     ImGui::SameLine(0, 2);
     ImGui::SetNextItemWidth(fieldW);
     if (ImGui::DragFloat("##z", &v[2], speed, vmin, vmax)) changed = true;
+    if (defaults && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Right))
+        { v[2] = defaults[2]; changed = true; }
 
     ImGui::PopID();
     return changed;
@@ -239,16 +423,20 @@ void InspectorPanel::DrawTransformSection(TransformComponent& t, const char* lab
     ImGui::TableSetupColumn("lbl", ImGuiTableColumnFlags_WidthFixed, 60.0f);
     ImGui::TableSetupColumn("val", ImGuiTableColumnFlags_WidthStretch);
 
+    static const float kPosDefault[3] = {0.0f, 0.0f, 0.0f};
+    static const float kRotDefault[3] = {0.0f, 0.0f, 0.0f};
+    static const float kSclDefault[3] = {1.0f, 1.0f, 1.0f};
+
     float pos[3] = { t.Position.x, t.Position.y, t.Position.z };
-    if (TableDragFloat3XYZ("Position", pos, 0.05f))
+    if (TableDragFloat3XYZ("Position", pos, 0.05f, 0.0f, 0.0f, kPosDefault))
         t.Position = { pos[0], pos[1], pos[2] };
 
     float rot[3] = { t.Rotation.x, t.Rotation.y, t.Rotation.z };
-    if (TableDragFloat3XYZ("Rotation", rot, 0.5f))
+    if (TableDragFloat3XYZ("Rotation", rot, 0.5f, 0.0f, 0.0f, kRotDefault))
         t.Rotation = { rot[0], rot[1], rot[2] };
 
     float scl[3] = { t.Scale.x, t.Scale.y, t.Scale.z };
-    if (TableDragFloat3XYZ("Scale", scl, 0.01f, 0.001f, 100.0f))
+    if (TableDragFloat3XYZ("Scale", scl, 0.01f, 0.001f, 100.0f, kSclDefault))
         t.Scale = { scl[0], scl[1], scl[2] };
 
     ImGui::EndTable();
@@ -262,9 +450,9 @@ bool InspectorPanel::DrawCameraSection(GameCameraComponent& gc,
                                         int orderIdx, std::vector<int>& order)
 {
     bool removed = false;
-    bool open    = DrawCompHeader("Game Camera", "cam", orderIdx, order, removed);
-    if (removed) { gc.Active = false; return false; }
-    if (!open)   return true;
+    bool open    = DrawCompHeader("Game Camera", "cam", orderIdx, order, removed, &gc.Enabled);
+    if (removed) { gc.Active = false; gc.Enabled = true; return false; }
+    if (!open || !gc.Enabled) return true;
 
     if (!ImGui::BeginTable("##cam", 2)) return true;
     ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 60.0f);
@@ -287,18 +475,19 @@ bool InspectorPanel::DrawGravitySection(RigidBodyComponent& rb,
                                          int orderIdx, std::vector<int>& order)
 {
     bool removed = false;
-    bool open    = DrawCompHeader("Gravity", "grav", orderIdx, order, removed);
-    if (removed) { rb.HasGravityModule = false; rb.Velocity = {0,0,0}; return false; }
-    if (!open)   return true;
+    bool open    = DrawCompHeader("Gravity", "grav", orderIdx, order, removed, &rb.GravityEnabled);
+    if (removed) { rb.HasGravityModule = false; rb.GravityEnabled = true; rb.Velocity = {0,0,0}; return false; }
+    if (!open || !rb.GravityEnabled) return true;
 
     ImGui::Checkbox("Use Gravity",  &rb.UseGravity);
     ImGui::Checkbox("Is Kinematic", &rb.IsKinematic);
 
     if (!ImGui::BeginTable("##grav", 2)) return true;
-    ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+    ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 75.0f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
-    TableDragFloat1("Mass", &rb.Mass, 0.05f, 0.001f, 1000.0f);
-    TableDragFloat1("Drag", &rb.Drag, 0.001f, 0.0f, 1.0f);
+    TableDragFloat1("Mass",      &rb.Mass,               0.05f,  0.001f, 1000.0f);
+    TableDragFloat1("Drag",      &rb.Drag,               0.001f, 0.0f,   1.0f);
+    TableDragFloat1("FallSpeed", &rb.FallSpeedMultiplier, 0.05f, 0.1f,   10.0f);
     ImGui::EndTable();
 
     ImGui::TextDisabled("Velocity: %.2f  %.2f  %.2f",
@@ -317,14 +506,27 @@ bool InspectorPanel::DrawColliderSection(Scene& scene, int entityIdx,
     RigidBodyComponent& rb = scene.RigidBodies[entityIdx];
 
     bool removed = false;
-    bool open    = DrawCompHeader("Collider", "col", orderIdx, order, removed);
-    if (removed) { rb.HasColliderModule = false; return false; }
-    if (!open)   return true;
+    bool open    = DrawCompHeader("Collider", "col", orderIdx, order, removed, &rb.ColliderEnabled);
+    if (removed) { rb.HasColliderModule = false; rb.ColliderEnabled = true; return false; }
+    if (!open || !rb.ColliderEnabled) return true;
 
-    int colliderIdx = (int)rb.Collider;
-    ImGui::SetNextItemWidth(-1);
-    if (ImGui::Combo("##coltype", &colliderIdx, ColliderTypeNames, 5))
-        rb.Collider = (ColliderType)colliderIdx;
+    if (rb.HasRigidBodyMode)
+    {
+        rb.Collider = ColliderType::Box;
+        ImGui::BeginDisabled();
+        int boxIdx = 1;
+        ImGui::SetNextItemWidth(-1);
+        ImGui::Combo("##coltype", &boxIdx, ColliderTypeNames, 5);
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("RigidBody requires Box collider");
+    }
+    else
+    {
+        int colliderIdx = (int)rb.Collider;
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##coltype", &colliderIdx, ColliderTypeNames, 5))
+            rb.Collider = (ColliderType)colliderIdx;
+    }
 
     if (!ImGui::BeginTable("##col", 2)) return true;
     ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 60.0f);
@@ -366,9 +568,9 @@ bool InspectorPanel::DrawRigidBodySection(RigidBodyComponent& rb,
                                            int orderIdx, std::vector<int>& order)
 {
     bool removed = false;
-    bool open    = DrawCompHeader("RigidBody", "rb", orderIdx, order, removed);
-    if (removed) { rb.HasRigidBodyMode = false; rb.AngularVelocity = {0,0,0}; return false; }
-    if (!open)   return true;
+    bool open    = DrawCompHeader("RigidBody", "rb", orderIdx, order, removed, &rb.RigidBodyModeEnabled);
+    if (removed) { rb.HasRigidBodyMode = false; rb.RigidBodyModeEnabled = true; rb.AngularVelocity = {0,0,0}; return false; }
+    if (!open || !rb.RigidBodyModeEnabled) return true;
 
     if (!ImGui::BeginTable("##rb", 2)) return true;
     ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 75.0f);
@@ -387,6 +589,174 @@ bool InspectorPanel::DrawRigidBodySection(RigidBodyComponent& rb,
     return true;
 }
 
+bool InspectorPanel::DrawPlayerControllerSection(PlayerControllerComponent& pc,
+                                                 Scene& scene,
+                                                 int orderIdx,
+                                                 std::vector<int>& order)
+{
+    bool removed = false;
+    bool open    = DrawCompHeader("Player Controller", "pc", orderIdx, order, removed, &pc.Enabled);
+    if (removed) { pc.Active = false; pc.Enabled = true; pc.IsRunning = false; pc.IsCrouching = false; return false; }
+    if (!open || !pc.Enabled) return true;
+
+    int mode = (pc.InputMode == PlayerInputMode::Local) ? 0 : 1;
+    if (ImGui::Combo("Input Mode", &mode, "Local\0Channels\0"))
+        pc.InputMode = (mode == 0) ? PlayerInputMode::Local : PlayerInputMode::Channels;
+
+    // --- Movement mode combo ---
+    // 1=World+Collision  2=Local+Collision  3=World Noclip  4=Local Noclip
+    static const char* movModes =
+        "1 - World (global axes, collision)\0"
+        "2 - Local (facing-relative, collision)\0"
+        "3 - World Noclip (global, no collision)\0"
+        "4 - Local Noclip (facing-relative, no collision)\0";
+    int mm = (int)pc.MovementMode - 1;   // enum 1-4 → combo 0-3
+    if (ImGui::Combo("Movement Mode", &mm, movModes))
+        pc.MovementMode = (PlayerMovementMode)(mm + 1);
+
+    if (!ImGui::BeginTable("##pc_move", 2)) return true;
+    ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+    TableDragFloat1("Walk Speed", &pc.WalkSpeed, 0.05f, 0.01f, 100.0f);
+    TableDragFloat1("Run Mult", &pc.RunMultiplier, 0.05f, 1.0f, 10.0f);
+    TableDragFloat1("Crouch Mult", &pc.CrouchMultiplier, 0.05f, 0.05f, 1.0f);
+    ImGui::EndTable();
+
+    ImGui::Checkbox("Allow Run", &pc.AllowRun);
+    ImGui::SameLine();
+    ImGui::Checkbox("Allow Crouch", &pc.AllowCrouch);
+
+    if (pc.InputMode == PlayerInputMode::Local)
+    {
+        ImGui::SeparatorText("Local Keys");
+        KeyNameField("Forward", pc.KeyForward);
+        KeyNameField("Back",    pc.KeyBack);
+        KeyNameField("Left",    pc.KeyLeft);
+        KeyNameField("Right",   pc.KeyRight);
+        KeyNameField("Run",     pc.KeyRun);
+        KeyNameField("Crouch",  pc.KeyCrouch);
+    }
+    else
+    {
+        // Channels mode: each channel stores a String with the key name (e.g. "W").
+        // Channels are created/deleted freely in Project Settings.
+        ImGui::SeparatorText("Input Channels");
+
+        if (scene.Channels.empty())
+        {
+            ImGui::TextDisabled("No channels. Create them in Project Settings.");
+        }
+        else
+        {
+            // Helper: combo to select a channel index, plus a text input for the key name
+            auto channelField = [&](const char* label, int& channelIdx)
+            {
+                ImGui::PushID(label);
+
+                // --- Channel selector
+                const char* chName = (channelIdx >= 0 && channelIdx < (int)scene.Channels.size())
+                    ? scene.Channels[channelIdx].Name.c_str() : "<none>";
+                ImGui::SetNextItemWidth(130.0f);
+                if (ImGui::BeginCombo("##chsel", chName))
+                {
+                    if (ImGui::Selectable("<none>", channelIdx < 0))
+                        channelIdx = -1;
+                    for (int k = 0; k < (int)scene.Channels.size(); ++k)
+                    {
+                        std::string item = std::to_string(k + 1) + " " + scene.Channels[k].Name;
+                        bool sel = (channelIdx == k);
+                        if (ImGui::Selectable(item.c_str(), sel)) channelIdx = k;
+                        if (sel) ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+                ImGui::SameLine();
+                ImGui::TextUnformatted(label);
+
+                // --- Key-name field for the selected channel's StringValue
+                if (channelIdx >= 0 && channelIdx < (int)scene.Channels.size())
+                {
+                    auto& ch = scene.Channels[channelIdx];
+                    ch.Type = ChannelVariableType::String;  // enforce String type
+                    char buf[64];
+                    strncpy(buf, ch.StringValue.c_str(), sizeof(buf) - 1);
+                    buf[sizeof(buf) - 1] = '\0';
+                    ImGui::SetNextItemWidth(-1.0f);
+                    if (ImGui::InputTextWithHint("##chkey", "Key name e.g. W", buf, sizeof(buf)))
+                        ch.StringValue = buf;
+                    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+                    {
+                        ImGui::BeginTooltip();
+                        ImGui::TextDisabled("Type the key name: W, A, Space, Left Shift \xe2\x80\xa6");
+                        ImGui::EndTooltip();
+                    }
+                }
+
+                ImGui::PopID();
+            };
+
+            channelField("Forward", pc.ChForward);
+            channelField("Back",    pc.ChBack);
+            channelField("Left",    pc.ChLeft);
+            channelField("Right",   pc.ChRight);
+            channelField("Run",     pc.ChRun);
+            channelField("Crouch",  pc.ChCrouch);
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Built-in Mouse Look section
+    // ---------------------------------------------------------------
+    ImGui::SeparatorText("Mouse Look");
+    ImGui::Checkbox("Enabled##pcimlook", &pc.MouseLookEnabled);
+    if (pc.MouseLookEnabled)
+    {
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputInt("Pitch Entity", &pc.PitchTargetEntity);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+        {
+            ImGui::BeginTooltip();
+            ImGui::TextDisabled(
+                "Entity index to rotate on Z-axis for pitch.\n"
+                "-1 = rotate this entity for pitch too.\n"
+                "Usually the child camera entity.");
+            ImGui::EndTooltip();
+        }
+        if (ImGui::BeginTable("##pc_ml", 2))
+        {
+            ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+            ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+            TableDragFloat1("Sensitivity X",  &pc.MouseSensitivityX, 0.01f, 0.01f, 5.0f);
+            TableDragFloat1("Sensitivity Y",  &pc.MouseSensitivityY, 0.01f, 0.01f, 5.0f);
+            ImGui::EndTable();
+        }
+        ImGui::Checkbox("Invert X##pciml", &pc.MouseInvertX);
+        ImGui::SameLine();
+        ImGui::Checkbox("Invert Y##pciml", &pc.MouseInvertY);
+        ImGui::Checkbox("Clamp Pitch##pciml", &pc.MouseClampPitch);
+        if (pc.MouseClampPitch)
+        {
+            if (ImGui::BeginTable("##pc_ml2", 2))
+            {
+                ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+                ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+                TableDragFloat1("Pitch Min", &pc.MousePitchMin, 0.5f, -90.0f,  0.0f);
+                TableDragFloat1("Pitch Max", &pc.MousePitchMax, 0.5f,  0.0f,  90.0f);
+                ImGui::EndTable();
+            }
+        }
+        ImGui::TextDisabled("Yaw: %.1f  Pitch: %.1f", pc.CurrentYaw, pc.CurrentPitch);
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Running: %s", pc.IsRunning ? "yes" : "no");
+    ImGui::TextDisabled("Crouching: %s", pc.IsCrouching ? "yes" : "no");
+    ImGui::TextDisabled("Last Move Axis: %.2f  %.2f  %.2f",
+                        pc.LastMoveAxis.x, pc.LastMoveAxis.y, pc.LastMoveAxis.z);
+
+    return true;
+}
+
 // ----------------------------------------------------------------
 // Add Component popup
 // ----------------------------------------------------------------
@@ -400,34 +770,336 @@ void InspectorPanel::DrawAddComponentMenu(Scene& scene, int entityIdx,
     ImGui::Spacing();
     ImGui::Separator();
     if (ImGui::Button("+ Add Component", ImVec2(-1, 0)))
+    {
         ImGui::OpenPopup("##addcomp");
+        m_SearchBuffer[0] = '\0';
+    }
 
     if (ImGui::BeginPopup("##addcomp"))
     {
+        // Search field
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputTextWithHint("##compsearch", "Search components...",
+                                 m_SearchBuffer, sizeof(m_SearchBuffer));
+        ImGui::Separator();
+
+        const char* q = m_SearchBuffer;
+        auto matches = [q](const char* name) -> bool {
+            if (q[0] == '\0') return true;
+            std::string hay = name, needle = q;
+            for (auto& c : hay)    c = (char)std::tolower((unsigned char)c);
+            for (auto& c : needle) c = (char)std::tolower((unsigned char)c);
+            return hay.find(needle) != std::string::npos;
+        };
+        const bool searchActive = (q[0] != '\0');
         bool any = false;
-        if (!gc.Active)
+
+        // ---- Camera ----
+        bool showCam = !gc.Active && matches("Game Camera");
+        if (showCam)
         {
-            if (ImGui::MenuItem("Game Camera")) { gc.Active = true; order.push_back(COMP_CAMERA); }
+            if (!searchActive)
+            {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.7f, 1.0f, 1.0f));
+                ImGui::TextUnformatted("  Camera");
+                ImGui::PopStyleColor();
+            }
+            if (ImGui::MenuItem("    Game Camera"))
+                { gc.Active = true; order.push_back(COMP_CAMERA); }
             any = true;
         }
-        if (!rb.HasGravityModule)
+
+        // ---- Physics ----
+        bool showGrav = !rb.HasGravityModule  && matches("Gravity");
+        bool showCol  = !rb.HasColliderModule  && matches("Collider");
+        bool showRb   = !rb.HasRigidBodyMode   && matches("RigidBody");
+        if (showGrav || showCol || showRb)
         {
-            if (ImGui::MenuItem("Gravity"))  { rb.HasGravityModule  = true; order.push_back(COMP_GRAVITY); }
+            if (!searchActive)
+            {
+                if (showCam) ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.7f, 1.0f, 1.0f));
+                ImGui::TextUnformatted("  Physics");
+                ImGui::PopStyleColor();
+            }
+            if (showGrav && ImGui::MenuItem("    Gravity"))
+                { rb.HasGravityModule  = true; order.push_back(COMP_GRAVITY); }
+            if (showCol  && ImGui::MenuItem("    Collider"))
+                { rb.HasColliderModule = true; order.push_back(COMP_COLLIDER); }
+            if (showRb   && ImGui::MenuItem("    RigidBody"))
+                { rb.HasRigidBodyMode  = true; order.push_back(COMP_RIGIDBODY); }
             any = true;
         }
-        if (!rb.HasColliderModule)
+
+        // ---- Gameplay ----
+        bool showPc = !scene.PlayerControllers[entityIdx].Active && matches("Player Controller");
+        bool showMl = !scene.MouseLooks[entityIdx].Active        && matches("Mouse Look");
+        if (showPc || showMl)
         {
-            if (ImGui::MenuItem("Collider")) { rb.HasColliderModule = true; order.push_back(COMP_COLLIDER); }
+            if (!searchActive)
+            {
+                if (showCam || showGrav || showCol || showRb) ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.7f, 1.0f, 1.0f));
+                ImGui::TextUnformatted("  Gameplay");
+                ImGui::PopStyleColor();
+            }
+            if (showPc && ImGui::MenuItem("    Player Controller"))
+            {
+                scene.PlayerControllers[entityIdx].Active = true;
+                order.push_back(COMP_PLAYERCTRL);
+            }
+            if (showMl && ImGui::MenuItem("    Mouse Look"))
+            {
+                scene.MouseLooks[entityIdx].Active = true;
+                order.push_back(COMP_MOUSELOOK);
+            }
             any = true;
         }
-        if (!rb.HasRigidBodyMode)
+
+        // ---- Lighting ----
+        bool showLt = !scene.Lights[entityIdx].Active && matches("Light");
+        if (showLt)
         {
-            if (ImGui::MenuItem("RigidBody")) { rb.HasRigidBodyMode = true; order.push_back(COMP_RIGIDBODY); }
+            if (!searchActive)
+            {
+                if (showCam || showGrav || showCol || showRb || showPc || showMl) ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.95f, 0.5f, 1.0f));
+                ImGui::TextUnformatted("  Lighting");
+                ImGui::PopStyleColor();
+            }
+            if (ImGui::MenuItem("    Directional Light"))
+            {
+                scene.Lights[entityIdx].Active = true;
+                scene.Lights[entityIdx].Type   = LightType::Directional;
+                order.push_back(COMP_LIGHT);
+            }
+            if (ImGui::MenuItem("    Point Light"))
+            {
+                scene.Lights[entityIdx].Active = true;
+                scene.Lights[entityIdx].Type   = LightType::Point;
+                scene.Lights[entityIdx].Range  = 10.0f;
+                order.push_back(COMP_LIGHT);
+            }
+            if (ImGui::MenuItem("    Spot Light"))
+            {
+                scene.Lights[entityIdx].Active      = true;
+                scene.Lights[entityIdx].Type        = LightType::Spot;
+                scene.Lights[entityIdx].Range       = 15.0f;
+                scene.Lights[entityIdx].InnerAngle  = 25.0f;
+                scene.Lights[entityIdx].OuterAngle  = 40.0f;
+                order.push_back(COMP_LIGHT);
+            }
+            if (ImGui::MenuItem("    Area Light"))
+            {
+                scene.Lights[entityIdx].Active  = true;
+                scene.Lights[entityIdx].Type    = LightType::Area;
+                scene.Lights[entityIdx].Range   = 10.0f;
+                scene.Lights[entityIdx].Width   = 2.0f;
+                scene.Lights[entityIdx].Height  = 1.0f;
+                order.push_back(COMP_LIGHT);
+            }
             any = true;
         }
-        if (!any) ImGui::TextDisabled("No more components available.");
+
+        if (!any)
+            ImGui::TextDisabled(searchActive ? "No results for \"%s\"." : "No more components available.", q);
+
         ImGui::EndPopup();
     }
+}
+
+// ----------------------------------------------------------------
+// Mouse Look section
+// ----------------------------------------------------------------
+
+// Helper: entity drop-slot used in Mouse Look
+static void EntityDropSlot(const char* label, int& targetIdx, const Scene& scene)
+{
+    ImGui::PushID(label);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine();
+
+    char preview[128];
+    if (targetIdx >= 0 && targetIdx < (int)scene.EntityNames.size())
+        snprintf(preview, sizeof(preview), "%s", scene.EntityNames[targetIdx].c_str());
+    else
+        snprintf(preview, sizeof(preview), "<None>");
+
+    float bw = ImGui::GetContentRegionAvail().x * 0.65f;
+    ImGui::PushStyleColor(ImGuiCol_Button,  ImVec4(0.18f,0.18f,0.21f,1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f,0.38f,0.60f,1.0f));
+    ImGui::Button(preview, ImVec2(bw, 0));
+    ImGui::PopStyleColor(2);
+
+    // Accept ENTITY drag from hierarchy
+    if (ImGui::BeginDragDropTarget())
+    {
+        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ENTITY"))
+            targetIdx = *(const int*)p->Data;
+        ImGui::EndDragDropTarget();
+    }
+
+    // Right-click to clear
+    if (ImGui::BeginPopupContextItem("##slotctx"))
+    {
+        if (ImGui::MenuItem("Clear")) targetIdx = -1;
+        ImGui::EndPopup();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::SmallButton("X##slotx")) targetIdx = -1;
+
+    ImGui::PopID();
+}
+
+bool InspectorPanel::DrawMouseLookSection(MouseLookComponent& ml,
+                                          Scene& scene,
+                                          int orderIdx,
+                                          std::vector<int>& order)
+{
+    bool removed = false;
+    bool open    = DrawCompHeader("Mouse Look", "ml", orderIdx, order, removed, &ml.Enabled);
+    if (removed) { ml.Active = false; ml.Enabled = true; ml.CurrentPitch = 0; ml.CurrentYaw = 0; return false; }
+    if (!open || !ml.Enabled) return true;
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Drag an entity from Hierarchy onto a slot.");
+    EntityDropSlot("Yaw   (Y)", ml.YawTargetEntity,   scene);
+    EntityDropSlot("Pitch (X)", ml.PitchTargetEntity, scene);
+    ImGui::Spacing();
+
+    if (!ImGui::BeginTable("##ml_tbl", 2)) return true;
+    ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+
+    // Sensitivity
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Sens X");
+    ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-1);
+    ImGui::DragFloat("##sensx", &ml.SensitivityX, 0.005f, 0.001f, 5.0f);
+
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Sens Y");
+    ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-1);
+    ImGui::DragFloat("##sensy", &ml.SensitivityY, 0.005f, 0.001f, 5.0f);
+
+    ImGui::EndTable();
+
+    ImGui::Checkbox("Invert X", &ml.InvertX); ImGui::SameLine();
+    ImGui::Checkbox("Invert Y", &ml.InvertY);
+    ImGui::Separator();
+    ImGui::Checkbox("Clamp Pitch", &ml.ClampPitch);
+    if (ml.ClampPitch)
+    {
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x * 0.5f);
+        ImGui::DragFloat("##pmin", &ml.PitchMin, 0.5f, -180.0f, 0.0f);
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-1);
+        ImGui::DragFloat("##pmax", &ml.PitchMax, 0.5f, 0.0f, 180.0f);
+        ImGui::TextDisabled("Pitch clamp: [%.1f, %.1f]", ml.PitchMin, ml.PitchMax);
+    }
+    ImGui::Separator();
+    ImGui::TextDisabled("Pitch: %.2f   Yaw: %.2f", ml.CurrentPitch, ml.CurrentYaw);
+
+    return true;
+}
+
+// ----------------------------------------------------------------
+// Light section
+// ----------------------------------------------------------------
+
+bool InspectorPanel::DrawLightSection(LightComponent& lc, int orderIdx, std::vector<int>& order)
+{
+    bool removedOut = false;
+    bool open = DrawCompHeader("Light", "light_sec", orderIdx, order, removedOut, &lc.Enabled);
+    if (removedOut)
+    {
+        lc.Active  = false;
+        lc.Enabled = true;
+        return false;
+    }
+    if (!open) return true;
+
+    if (!ImGui::BeginTable("##lt", 2)) return true;
+    ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+
+    // --- Type combo ---
+    {
+        static const char* typeNames[] = { "Directional", "Point", "Spot", "Area" };
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Type");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1);
+        int ti = (int)lc.Type;
+        if (ImGui::Combo("##ltype", &ti, typeNames, 4))
+            lc.Type = (LightType)ti;
+    }
+
+    // --- Color picker ---
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Color");
+        ImGui::TableSetColumnIndex(1);
+        float col[3] = {lc.Color.r, lc.Color.g, lc.Color.b};
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::ColorEdit3("##lcol", col))
+            lc.Color = {col[0], col[1], col[2]};
+    }
+
+    // --- Temperature with swatch ---
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Temp (K)");
+        ImGui::TableSetColumnIndex(1);
+        // Approximate preview color from Kelvin
+        float t = (lc.Temperature - 1000.0f) / 11000.0f;
+        float pr = t < 0.545f ? 1.0f : 1.0f - (t - 0.545f) * 0.55f;
+        float pg = t < 0.12f  ? t * 5.0f : (t > 0.727f ? 1.0f - (t - 0.727f)*0.7f : 1.0f);
+        float pb = t < 0.545f ? t * 1.65f : 1.0f;
+        pr = glm::clamp(pr, 0.0f, 1.0f);
+        pg = glm::clamp(pg, 0.0f, 1.0f);
+        pb = glm::clamp(pb, 0.0f, 1.0f);
+
+        ImGui::SetNextItemWidth(-38.0f);
+        ImGui::DragFloat("##ltemp", &lc.Temperature, 50.0f, 1000.0f, 12000.0f, "%.0f K");
+        ImGui::SameLine(0, 4);
+        ImGui::ColorButton("##tprev", ImVec4(pr, pg, pb, 1.0f),
+            ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoBorder,
+            ImVec2(30.0f, ImGui::GetFrameHeight()));
+    }
+
+    // --- Intensity ---
+    TableDragFloat1("Intensity", &lc.Intensity, 0.01f, 0.0f, 200.0f);
+
+    // --- Range (not for directional) ---
+    if (lc.Type != LightType::Directional)
+        TableDragFloat1("Range", &lc.Range, 0.1f, 0.0f, 2000.0f);
+
+    // --- Spot cone angles ---
+    if (lc.Type == LightType::Spot)
+    {
+        TableDragFloat1("Inner \xc2\xb0", &lc.InnerAngle, 0.5f, 0.0f, 89.9f);
+        TableDragFloat1("Outer \xc2\xb0", &lc.OuterAngle, 0.5f, 0.0f, 90.0f);
+        if (lc.InnerAngle > lc.OuterAngle) lc.InnerAngle = lc.OuterAngle;
+    }
+
+    // --- Area light dimensions ---
+    if (lc.Type == LightType::Area)
+    {
+        TableDragFloat1("Width",  &lc.Width,  0.05f, 0.01f, 200.0f);
+        TableDragFloat1("Height", &lc.Height, 0.05f, 0.01f, 200.0f);
+    }
+
+    ImGui::EndTable();
+    return true;
 }
 
 // ----------------------------------------------------------------
@@ -746,6 +1418,15 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                 break;
             case COMP_RIGIDBODY:
                 kept = DrawRigidBodySection(scene.RigidBodies[selectedEntity], i, order);
+                break;
+            case COMP_PLAYERCTRL:
+                kept = DrawPlayerControllerSection(scene.PlayerControllers[selectedEntity], scene, i, order);
+                break;
+            case COMP_MOUSELOOK:
+                kept = DrawMouseLookSection(scene.MouseLooks[selectedEntity], scene, i, order);
+                break;
+            case COMP_LIGHT:
+                kept = DrawLightSection(scene.Lights[selectedEntity], i, order);
                 break;
         }
         // ...existing code...

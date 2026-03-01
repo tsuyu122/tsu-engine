@@ -25,6 +25,15 @@ void EditorCamera::OnUpdate(float dt)
         UpdateVectors();
     }
 
+    // Middle mouse pan (hold MMB + drag)
+    if (InputManager::IsMousePressed(Mouse::Middle))
+    {
+        MouseDelta delta = InputManager::GetMouseDelta();
+        float panSpeed = MoveSpeed * 0.012f;
+        m_Position += m_Right * (delta.x * panSpeed);
+        m_Position += m_Up    * (delta.y * panSpeed);
+    }
+
     // Tick the scroll-speed display timer
     if (m_ScrollSpeedDisplayTimer > 0.0f)
         m_ScrollSpeedDisplayTimer -= dt;
@@ -58,7 +67,9 @@ void EditorCamera::OnUpdate(float dt)
     if (InputManager::IsKeyPressed(Key::A))           m_Position -= m_Right   * speed;
     if (InputManager::IsKeyPressed(Key::D))           m_Position += m_Right   * speed;
     if (InputManager::IsKeyPressed(Key::Space))       m_Position += m_WorldUp * speed;
+    if (InputManager::IsKeyPressed(Key::E))           m_Position += m_WorldUp * speed;
     if (InputManager::IsKeyPressed(Key::LeftControl)) m_Position -= m_WorldUp * speed;
+    if (InputManager::IsKeyPressed(Key::Q))           m_Position -= m_WorldUp * speed;
 }
 
 glm::mat4 EditorCamera::GetViewMatrix() const

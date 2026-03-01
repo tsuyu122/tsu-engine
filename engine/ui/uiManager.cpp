@@ -6,6 +6,7 @@
 #include <imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <cstring>
 
 namespace tsu {
 
@@ -53,6 +54,30 @@ void UIManager::BeginFrame()
 bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                        std::vector<std::string>& droppedFiles)
 {
+    const int topMenuH  = k_MenuBarH;
+    const int topToolH  = k_ToolbarH;
+    const int topTabsH  = k_TopTabsH;
+    const int topStackH = k_TopStackH;
+
+    // Main menu bar (File/Edit)
+    if (ImGui::BeginMainMenuBar())
+    {
+        if (ImGui::BeginMenu("File"))
+        {
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Edit"))
+        {
+            if (ImGui::MenuItem("Project Settings"))
+            {
+                m_ProjectSettingsOpen = true;
+                m_RequestViewportTab = 2;
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+
     // --- Processar arquivos arrastados (esta função conhece m_CurrentFolder) ---
     {
         static const char* imgExts[] = {".png",".jpg",".jpeg",".bmp",".tga",".hdr",nullptr};
@@ -73,26 +98,287 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         droppedFiles.clear();
     }
 
+    // Side panels start just below the OpenGL toolbar (same Y as the tab strip),
+    // filling the gap that previously appeared on the left/right of the camera tabs.
+    const int sideY = topMenuH + topToolH;  // k_MenuBarH + k_ToolbarH = 58px
+    const int sideH = winH - k_AssetH - sideY;
+
+    // --- Panel resize handles (run every frame before panels are drawn) ---
+    {
+        const float handleW = 4.0f;
+        const float hy0 = (float)sideY;
+        const float hy1 = (float)(winH - k_AssetH);
+        const float lx  = (float)m_PanelWidth;
+        const float rx  = (float)(winW - m_PanelWidth);
+        ImGuiIO& rio = ImGui::GetIO();
+        float mx2 = rio.MousePos.x;
+        float my2 = rio.MousePos.y;
+        bool nearLeft  = (mx2>=lx-handleW && mx2<=lx+handleW && my2>hy0 && my2<hy1);
+        bool nearRight = (mx2>=rx-handleW && mx2<=rx+handleW && my2>hy0 && my2<hy1);
+        if (rio.MouseDown[0] && !rio.WantCaptureMouseUnlessPopupClose)
+        {
+            if (nearLeft  && !m_DraggingRight) m_DraggingLeft  = true;
+            if (nearRight && !m_DraggingLeft)  m_DraggingRight = true;
+        }
+        if (!rio.MouseDown[0]) { m_DraggingLeft = false; m_DraggingRight = false; }
+        if (m_DraggingLeft)
+        {
+            int nw = (int)mx2;
+            m_PanelWidth = nw < 150 ? 150 : (nw > winW/3 ? winW/3 : nw);
+        }
+        if (m_DraggingRight)
+        {
+            int nw = winW - (int)mx2;
+            m_PanelWidth = nw < 150 ? 150 : (nw > winW/3 ? winW/3 : nw);
+        }
+        if (nearLeft || nearRight || m_DraggingLeft || m_DraggingRight)
+            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+
     // Hierarchy
     m_Hierarchy.Render(scene, selectedEntity,
-                       0, 0, k_PanelWidth, winH - k_AssetH);
+                       0, sideY, m_PanelWidth, sideH);
 
     int selectedGroup = m_Hierarchy.GetSelectedGroup();
 
     // Inspector
     int inspMat = (selectedEntity < 0 && selectedGroup < 0) ? m_SelectedMaterial : -1;
     m_Inspector.Render(scene, selectedEntity, selectedGroup,
-                       winW - k_PanelWidth, 0, k_PanelWidth, winH - k_AssetH,
+                       winW - m_PanelWidth, sideY, m_PanelWidth, sideH,
                        inspMat);
 
     // ---------------------------------------------------------------
-    // Asset Browser
+    // Top panel: camera tabs (same style as Assets/Console)
+    // ---------------------------------------------------------------
+    {
+        const float topH = (float)topTabsH;
+        const float y = (float)(topMenuH + topToolH);
+        ImGui::SetNextWindowPos (ImVec2((float)m_PanelWidth, y), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2((float)(winW - m_PanelWidth * 2), topH), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.90f);
+        ImGui::Begin("##cameratop", nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+
+        if (ImGui::BeginTabBar("##cameratabs"))
+        {
+            const int reqTab = m_RequestViewportTab;
+            if (ImGui::BeginTabItem("Editor Camera", nullptr,
+                (reqTab == 0) ? ImGuiTabItemFlags_SetSelected : 0))
+            {
+                m_ViewportTab = 0;
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Game Camera", nullptr,
+                (reqTab == 1) ? ImGuiTabItemFlags_SetSelected : 0))
+            {
+                m_ViewportTab = 1;
+                ImGui::EndTabItem();
+            }
+
+            if (m_ProjectSettingsOpen)
+            {
+                bool keepOpen = true;
+                if (ImGui::BeginTabItem("Project Settings", &keepOpen,
+                    (reqTab == 2) ? ImGuiTabItemFlags_SetSelected : 0))
+                {
+                    m_ViewportTab = 2;
+                    ImGui::EndTabItem();
+                }
+                if (!keepOpen)
+                {
+                    m_ProjectSettingsOpen = false;
+                    if (m_ViewportTab == 2) m_ViewportTab = 0;
+                }
+            }
+            m_RequestViewportTab = -1;
+            ImGui::EndTabBar();
+        }
+        ImGui::End();
+    }
+
+    // Project settings view (third viewport mode)
+    if (m_ViewportTab == 2)
+    {
+        const float vx = (float)m_PanelWidth;
+        const float vy = (float)topStackH;
+        const float vw = (float)(winW - m_PanelWidth * 2);
+        const float vh = (float)(winH - k_AssetH - topStackH);
+
+        ImGui::SetNextWindowPos(ImVec2(vx, vy), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(vw, vh), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.95f);
+        ImGui::Begin("##projectsettings_view", nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+
+        // Left: category list
+        ImGui::BeginChild("##ps_catlist", ImVec2(180.0f, 0), true);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.62f, 0.62f, 0.68f, 1.0f));
+        ImGui::TextUnformatted("Settings");
+        ImGui::PopStyleColor();
+        ImGui::Separator();
+        ImGui::Spacing();
+        if (ImGui::Selectable("Channel System", m_PsCategory == 0))
+            m_PsCategory = 0;
+        // (future categories can be added here)
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+
+        // Right: content area
+        ImGui::BeginChild("##ps_content", ImVec2(0, 0), false,
+                          ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
+        if (m_PsCategory == 0)
+        {
+            // ---- Channel System ----
+            float addBtnW = 106.0f;
+            ImGui::TextColored(ImVec4(0.75f, 0.82f, 1.0f, 1.0f), "Channel System");
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - addBtnW);
+            if (ImGui::Button("+ Add Channel", ImVec2(addBtnW, 0)))
+            {
+                ChannelVariable nch;
+                nch.Name = "Channel " + std::to_string(scene.Channels.size() + 1);
+                scene.Channels.push_back(nch);
+            }
+            ImGui::Separator();
+
+            if (scene.Channels.empty())
+            {
+                ImGui::Spacing();
+                ImGui::TextDisabled("No channels. Click '+ Add Channel' to create one.");
+            }
+
+            const float kDelW = ImGui::GetFrameHeight();
+
+            for (int ci = 0; ci < (int)scene.Channels.size(); )
+            {
+                auto& ch = scene.Channels[ci];
+                ImGui::PushID(ci);
+
+                char hdrLabel[160];
+                snprintf(hdrLabel, sizeof(hdrLabel), "%d.  %s##chsec%d",
+                         ci + 1,
+                         ch.Name.empty() ? "(unnamed)" : ch.Name.c_str(),
+                         ci);
+
+                float availW       = ImGui::GetContentRegionAvail().x;
+                ImVec2 hdrCursor   = ImGui::GetCursorPos();
+
+                bool open = ImGui::CollapsingHeader(hdrLabel,
+                    ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+
+                ImVec2 afterHdr = ImGui::GetCursorPos();
+
+                // Delete button overlaid on right of header row
+                ImGui::SetCursorPos(ImVec2(hdrCursor.x + availW - kDelW - 2.0f, hdrCursor.y));
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.60f, 0.14f, 0.14f, 0.80f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.26f, 0.26f, 1.00f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.48f, 0.10f, 0.10f, 1.00f));
+                bool doDelete = ImGui::Button("X", ImVec2(kDelW, kDelW));
+                ImGui::PopStyleColor(3);
+                ImGui::SetCursorPos(afterHdr);
+
+                if (open && !doDelete)
+                {
+                    ImGui::Indent(8.0f);
+                    if (ImGui::BeginTable("##chtbl", 2, ImGuiTableFlags_None))
+                    {
+                        ImGui::TableSetupColumn("lbl", ImGuiTableColumnFlags_WidthFixed, 55.0f);
+                        ImGui::TableSetupColumn("val", ImGuiTableColumnFlags_WidthStretch);
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Name");
+                        ImGui::TableSetColumnIndex(1);
+                        char nameBuf[128];
+                        strncpy(nameBuf, ch.Name.c_str(), sizeof(nameBuf) - 1);
+                        nameBuf[sizeof(nameBuf) - 1] = '\0';
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::InputText("##chname", nameBuf, sizeof(nameBuf)))
+                            ch.Name = nameBuf;
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Type");
+                        ImGui::TableSetColumnIndex(1);
+                        int typeIdx = (int)ch.Type;
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::Combo("##chtype", &typeIdx, "Boolean\0Float\0String\0"))
+                            ch.Type = (ChannelVariableType)typeIdx;
+
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Value");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::SetNextItemWidth(-1);
+                        if (ch.Type == ChannelVariableType::Boolean)
+                            ImGui::Checkbox("##chbool", &ch.BoolValue);
+                        else if (ch.Type == ChannelVariableType::Float)
+                            ImGui::DragFloat("##chfloat", &ch.FloatValue, 0.05f);
+                        else
+                        {
+                            char strBuf[256];
+                            strncpy(strBuf, ch.StringValue.c_str(), sizeof(strBuf) - 1);
+                            strBuf[sizeof(strBuf) - 1] = '\0';
+                            if (ImGui::InputText("##chstr", strBuf, sizeof(strBuf)))
+                                ch.StringValue = strBuf;
+                        }
+
+                        ImGui::EndTable();
+                    }
+                    ImGui::Unindent(8.0f);
+                    ImGui::Spacing();
+                }
+
+                ImGui::PopID();
+
+                if (doDelete)
+                    scene.Channels.erase(scene.Channels.begin() + ci);
+                else
+                    ++ci;
+            }
+        }
+
+        ImGui::EndChild();
+        ImGui::End();
+    }
+
+    // ---------------------------------------------------------------
+    // Bottom panel: Assets / Console tabs
     // ---------------------------------------------------------------
     ImGui::SetNextWindowPos (ImVec2(0.0f, (float)(winH - k_AssetH)), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2((float)winW, (float)k_AssetH),   ImGuiCond_Always);
-    ImGui::Begin("Assets", nullptr,
+    ImGui::Begin("##bottompanel", nullptr,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+
+    // Tab bar: Assets | Console
+    if (ImGui::BeginTabBar("##bottomtabs"))
+    {
+        if (ImGui::BeginTabItem("Assets")) { m_BottomTab = 0; ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Console")) { m_BottomTab = 1; ImGui::EndTabItem(); }
+        ImGui::EndTabBar();
+    }
+
+    if (m_BottomTab == 1)
+    {
+        // ---- Console ----
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.09f, 1.0f));
+        ImGui::BeginChild("##consoleview", ImVec2(-1, -1), false, ImGuiWindowFlags_HorizontalScrollbar);
+        for (const auto& line : m_ConsoleLogs)
+            ImGui::TextUnformatted(line.c_str());
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+            ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::End();
+        return ImGui::GetIO().WantCaptureMouse;
+    }
+
+    // ---- Assets (m_BottomTab == 0) ----
 
     // ---- Breadcrumb multi-nível ----
     // Garante que FolderParents esteja em sincronia com Folders
@@ -412,6 +698,13 @@ void UIManager::EndFrame()
 bool UIManager::WantCaptureMouse() const
 {
     return ImGui::GetIO().WantCaptureMouse;
+}
+
+void UIManager::Log(const std::string& msg)
+{
+    m_ConsoleLogs.push_back(msg);
+    if ((int)m_ConsoleLogs.size() > k_MaxConsoleLogs)
+        m_ConsoleLogs.pop_front();
 }
 
 } // namespace tsu

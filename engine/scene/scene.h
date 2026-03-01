@@ -23,6 +23,11 @@ struct RigidBodyComponent
     bool          HasGravityModule  = false;
     bool          HasColliderModule = false;
 
+    // --- Per-module enabled flags (toggled via inspector toggle button) ---
+    bool          GravityEnabled       = true;
+    bool          ColliderEnabled      = true;
+    bool          RigidBodyModeEnabled = true;
+
     // --- Gravity module ---
     bool          UseGravity      = true;
     bool          IsKinematic     = false;
@@ -38,6 +43,9 @@ struct RigidBodyComponent
     float         ColliderHeight  = 1.0f;
     glm::vec3     ColliderOffset  = { 0.0f, 0.0f, 0.0f };
     bool          ShowCollider    = false;   // draws green wireframe in editor
+
+    // --- Fall speed multiplier (applied to gravity acceleration) ---
+    float         FallSpeedMultiplier = 1.0f;
 
     // --- RigidBody full simulation mode ---
     // Requires HasGravityModule for gravity. Adds rotation from impacts.
@@ -57,7 +65,8 @@ struct GameCameraComponent
     float     FOV   = 75.0f;
     float     Near  = 0.1f;
     float     Far   = 500.0f;
-    bool      Active = false;
+    bool      Active  = false;
+    bool      Enabled = true;  // inspector enable/disable toggle
 
     glm::vec3 Front   = { 0.0f, 0.0f, -1.0f };
     glm::vec3 Up      = { 0.0f, 1.0f,  0.0f };
@@ -115,6 +124,151 @@ struct MaterialAsset
     unsigned int TextureID = 0; // GL texture handle if loaded
 };
 
+enum class ChannelVariableType { Boolean, Float, String };
+
+struct ChannelVariable
+{
+    std::string         Name        = "Channel";
+    ChannelVariableType Type        = ChannelVariableType::Boolean;
+    bool                BoolValue   = false;
+    float               FloatValue  = 0.0f;
+    std::string         StringValue = "";
+};
+
+enum class PlayerInputMode { Local, Channels };
+
+// ================================================================
+// PlayerMovementMode -- how the controller translates input into world movement
+//
+//  Mode 1 (WorldWithCollision)  : axes always point along WORLD X/Z (ignores player
+//                                  rotation).  Physics system resolves collisions.
+//  Mode 2 (LocalWithCollision)  : axes are relative to the entity's FACING DIRECTION.
+//                                  "Forward" always moves where the player is looking.
+//                                  Physics system resolves collisions.  (DEFAULT)
+//  Mode 3 (WorldNoCollision)    : same as mode 1 but skips physics collision (noclip).
+//  Mode 4 (LocalNoCollision)    : same as mode 2 but skips physics collision (noclip).
+// ================================================================
+enum class PlayerMovementMode {
+    WorldWithCollision = 1,   // mode 1: global-space, physics collision
+    LocalWithCollision = 2,   // mode 2: local-space,  physics collision  (default)
+    WorldNoCollision   = 3,   // mode 3: global-space, noclip
+    LocalNoCollision   = 4,   // mode 4: local-space,  noclip
+};
+
+struct PlayerControllerComponent
+{
+    bool            Active  = false;
+    bool            Enabled = true;  // inspector enable/disable toggle
+    PlayerInputMode InputMode    = PlayerInputMode::Local;
+    PlayerMovementMode MovementMode = PlayerMovementMode::LocalWithCollision;
+
+    float WalkSpeed        = 4.0f;
+    float RunMultiplier    = 1.8f;
+    float CrouchMultiplier = 0.45f;
+
+    // Local mode key bindings (GLFW key codes)
+    // Engine forward = +X, left = +Z
+    int KeyForward = 87;   // W
+    int KeyBack    = 83;   // S
+    int KeyLeft    = 65;   // A
+    int KeyRight   = 68;   // D
+    int KeyRun     = 340;  // Left Shift
+    int KeyCrouch  = 341;  // Left Control
+
+    // Channels mode bindings
+    int ChForward = 0;
+    int ChBack    = 1;
+    int ChLeft    = 2;
+    int ChRight   = 3;
+    int ChRun     = 4;
+    int ChCrouch  = 5;
+
+    // External systems may block actions by toggling these flags
+    bool AllowRun    = true;
+    bool AllowCrouch = true;
+
+    // ================================================================
+    // Built-in Mouse Look
+    //
+    //  When MouseLookEnabled = true the PlayerController handles full
+    //  first-person camera rotation internally — no separate
+    //  MouseLookComponent is required.
+    //
+    //  Yaw  (horizontal): rotates THIS entity around world Y.
+    //  Pitch (vertical) : rotates PitchTargetEntity around its LOCAL Z.
+    //    → For an X-forward entity, Z-rotation tilts the nose up/down
+    //      (true pitch).  X-rotation would roll sideways instead.
+    //    → Set PitchTargetEntity to the child camera entity.
+    //      PitchTargetEntity = -1 means rotate this entity for pitch too.
+    // ================================================================
+    bool  MouseLookEnabled  = false;
+    int   PitchTargetEntity = -1;      // index of entity to pitch-rotate on Z (-1 = self)
+    float MouseSensitivityX = 0.15f;   // yaw (horizontal) sensitivity
+    float MouseSensitivityY = 0.15f;   // pitch (vertical) sensitivity
+    bool  MouseInvertX      = false;
+    bool  MouseInvertY      = false;
+    bool  MouseClampPitch   = true;
+    float MousePitchMin     = -89.0f;
+    float MousePitchMax     =  89.0f;
+
+    // Runtime state (readable by external systems)
+    bool      IsRunning    = false;
+    bool      IsCrouching  = false;
+    glm::vec3 LastMoveAxis = {0.0f, 0.0f, 0.0f};
+    float     CurrentPitch = 0.0f;     // accumulated pitch angle (degrees)
+    float     CurrentYaw   = 0.0f;     // accumulated yaw   angle (degrees)
+};
+
+// ================================================================
+// MouseLookComponent – controls entity rotation via mouse in Game mode
+// ================================================================
+
+struct MouseLookComponent
+{
+    bool  Active  = false;
+    bool  Enabled = true;
+
+    // Yaw target (Y-axis): typically the player body / parent object
+    int   YawTargetEntity   = -1;
+    // Pitch target (Z-axis): typically the camera / child object
+    // Rotation.z = pitch for an X-forward entity (tilts nose up/down in XY plane)
+    int   PitchTargetEntity = -1;
+
+    float SensitivityX = 0.15f;   // horizontal sensitivity
+    float SensitivityY = 0.15f;   // vertical sensitivity
+    bool  InvertX      = false;
+    bool  InvertY      = false;
+
+    bool  ClampPitch   = true;
+    float PitchMin     = -89.0f;
+    float PitchMax     =  89.0f;
+
+    // Runtime accumulated angles (reset when component is activated)
+    float CurrentPitch = 0.0f;
+    float CurrentYaw   = 0.0f;
+};
+
+// ================================================================
+// LightComponent  --  scene lighting: Directional, Point, Spot, Area
+// ================================================================
+
+enum class LightType { Directional = 0, Point = 1, Spot = 2, Area = 3 };
+
+struct LightComponent
+{
+    bool      Active      = false;
+    bool      Enabled     = true;
+    LightType Type        = LightType::Directional;
+    glm::vec3 Color       = { 1.0f, 1.0f, 1.0f };
+    float     Temperature = 6500.0f;  // Kelvin: 1000-12000; 2700=warm, 6500=daylight
+    float     Intensity   = 1.0f;
+    float     Range       = 10.0f;    // Point / Spot / Area attenuation distance
+    float     InnerAngle  = 30.0f;    // Spot inner cone angle (degrees)
+    float     OuterAngle  = 45.0f;    // Spot outer cone angle (degrees)
+    float     Width       = 1.0f;     // Area light width
+    float     Height      = 1.0f;     // Area light height
+};
+
 // ================================================================
 // Scene
 // ================================================================
@@ -136,6 +290,9 @@ public:
     std::vector<std::vector<int>>      EntityChildren; // entity-children per entity
     std::vector<int>                   EntityMaterial; // per-entity material index (-1 = none)
     std::vector<glm::vec3>             EntityColors;   // per-entity color override (used when no material)
+    std::vector<PlayerControllerComponent> PlayerControllers;
+    std::vector<MouseLookComponent>         MouseLooks;
+    std::vector<LightComponent>             Lights;
 
     // --- Hierarchy display order ---
     std::vector<int>                   RootOrder;      // root-level entity display order
@@ -149,6 +306,7 @@ public:
     std::vector<std::string>           Textures;       // imported texture file paths
     std::vector<unsigned int>          TextureIDs;     // GL texture IDs (parallel to Textures)
     std::vector<int>                   TextureFolders; // folder index per texture (-1 = root)
+    std::vector<ChannelVariable>       Channels;
 
     // --- Entity API ---
     Entity CreateEntity(const std::string& name = "Entity");
@@ -173,6 +331,15 @@ public:
     glm::mat4 GetEntityWorldMatrix(int entityIdx) const;
     glm::mat4 GetGroupWorldMatrix (int groupIdx)  const;
     glm::vec3 GetEntityWorldPos   (int entityIdx) const;
+
+    // --- Channels ---
+    void EnsureChannelCount(int count);
+    bool GetChannelBool(int idx, bool fallback = false) const;
+    float GetChannelFloat(int idx, float fallback = 0.0f) const;
+    std::string GetChannelString(int idx, const std::string& fallback = "") const;
+    void SetChannelBool(int idx, bool value);
+    void SetChannelFloat(int idx, float value);
+    void SetChannelString(int idx, const std::string& value);
 };
 
 } // namespace tsu
