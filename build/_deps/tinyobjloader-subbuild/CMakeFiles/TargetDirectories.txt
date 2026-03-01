@@ -1,3 +1,0 @@
-C:/Users/hm/Desktop/tsuEngine/build/_deps/tinyobjloader-subbuild/CMakeFiles/tinyobjloader-populate.dir
-C:/Users/hm/Desktop/tsuEngine/build/_deps/tinyobjloader-subbuild/CMakeFiles/ALL_BUILD.dir
-C:/Users/hm/Desktop/tsuEngine/build/_deps/tinyobjloader-subbuild/CMakeFiles/ZERO_CHECK.dir
