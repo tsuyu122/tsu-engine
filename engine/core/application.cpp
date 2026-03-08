@@ -61,7 +61,7 @@ static std::string MakeUniqueEntityName(const Scene& scene, const std::string& b
 }
 
 Application::Application()
-    : m_Window(1280, 720, "tsuEngine")
+    : m_Window(1280, 720, "TSU Engine  |  ALPHA 1.1.0 - NOT RELEASE VERSION, EXPECT BUGS")
 {
 }
 
@@ -243,7 +243,7 @@ void Application::SaveProject()
     }
 }
 
-void Application::ExportGame(const std::string& outputFolder)
+void Application::ExportGame(const std::string& outputFolder, const std::string& gameNameOverride)
 {
     namespace fs = std::filesystem;
     try {
@@ -257,15 +257,17 @@ void Application::ExportGame(const std::string& outputFolder)
         exeSrc = buf;
 #endif
 
-        std::string gameName = m_ProjectName.empty() ? "Game" : m_ProjectName;
+        std::string gameName = !gameNameOverride.empty() ? gameNameOverride
+                               : (!m_ProjectName.empty() ? m_ProjectName : "Game");
 
-        // 2. Copy GameRuntime.exe (the lean player binary, sibling of the editor)
-        //    Falls back to the editor exe only if GameRuntime is not found.
+        // 2. Copy GameRuntime.exe — look first in _engine/ subdirectory (hidden location),
+        //    then fall back to the sibling directory for older builds.
         if (!exeSrc.empty()) {
-            fs::path runtimeExe = fs::path(exeSrc).parent_path() / "GameRuntime.exe";
-            std::string srcExe  = fs::exists(runtimeExe)
-                                  ? runtimeExe.string()
-                                  : exeSrc;  // fallback
+            fs::path exeDir     = fs::path(exeSrc).parent_path();
+            fs::path runtimeExe = exeDir / "_engine" / "GameRuntime.exe";
+            if (!fs::exists(runtimeExe))
+                runtimeExe = exeDir / "GameRuntime.exe"; // fallback: old location
+            std::string srcExe  = fs::exists(runtimeExe) ? runtimeExe.string() : exeSrc;
             std::string exeDest = outputFolder + "/" + gameName + ".exe";
             fs::copy_file(srcExe, exeDest, fs::copy_options::overwrite_existing);
         }
@@ -1702,6 +1704,18 @@ void Application::Run()
     // ---- Editor mode ----
     m_UIManager.Init(m_Window.GetNativeWindow());
 
+    // Wire up the Win32 timer render callback so the splash animation
+    // keeps playing while the user drags the title bar.
+    m_Window.SetRenderCallback([&]() {
+        int w = m_Window.GetWidth(), h = m_Window.GetHeight();
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        m_UIManager.BeginFrame();
+        std::vector<std::string> noDrops;
+        m_UIManager.Render(m_Scene, m_SelectedEntity, w, h, noDrops, m_GizmoMode);
+        m_UIManager.EndFrame();
+        glfwSwapBuffers(m_Window.GetNativeWindow());
+    });
+
     // Register callback for external file drag & drop
     glfwSetDropCallback(m_Window.GetNativeWindow(), OnGLFWDrop);
 
@@ -1732,9 +1746,9 @@ void Application::Run()
             SaveProject();
         }
         if (m_UIManager.HasPendingExportGame()) {
-            std::string outPath;
-            m_UIManager.ConsumeExportGame(outPath);
-            if (!outPath.empty()) ExportGame(outPath);
+            std::string outPath, gameName;
+            m_UIManager.ConsumeExportGame(outPath, gameName);
+            if (!outPath.empty()) ExportGame(outPath, gameName);
         }
 
         // s_DroppedFiles is processed in UIManager::Render (which knows the current folder)

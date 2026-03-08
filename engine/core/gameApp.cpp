@@ -17,6 +17,7 @@
 #include <cmath>
 #include <fstream>
 #include <string>
+#include <vector>
 #include <filesystem>
 
 #ifndef M_PI
@@ -28,6 +29,165 @@ namespace tsu {
 GameApplication::GameApplication()
     : m_Window(1280, 720, "Game")
 {
+}
+
+// ================================================================
+// RenderEngineSplash — animated logo displayed before the game loop
+// Matches the editor splash (ring draws in, then eyes, then smile).
+// Uses a self-contained 2-D OpenGL shader and triangle geometry.
+// ================================================================
+static void RenderEngineSplash(GLFWwindow* win)
+{
+    // --- Minimal 2-D shader (square-normalised coords, X divided by aspect) ---
+    auto compileShader = [](GLenum type, const char* src) -> GLuint {
+        GLuint s = glCreateShader(type);
+        glShaderSource(s, 1, &src, nullptr);
+        glCompileShader(s);
+        return s;
+    };
+    const char* vsrc =
+        "#version 460 core\n"
+        "layout(location=0) in vec2 aPos;\n"
+        "uniform float uAspect;\n"
+        "void main(){gl_Position=vec4(aPos.x/uAspect,aPos.y,0.0,1.0);}\n";
+    const char* fsrc =
+        "#version 460 core\n"
+        "uniform vec4 uColor;\n"
+        "out vec4 fragColor;\n"
+        "void main(){fragColor=uColor;}\n";
+    GLuint vs   = compileShader(GL_VERTEX_SHADER,   vsrc);
+    GLuint fs   = compileShader(GL_FRAGMENT_SHADER, fsrc);
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs); glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    glDeleteShader(vs); glDeleteShader(fs);
+    GLint locAspect = glGetUniformLocation(prog, "uAspect");
+    GLint locColor  = glGetUniformLocation(prog, "uColor");
+
+    // --- Geometry constants (SVG 200x200 normalised to ±1 square-space) ---
+    const float kScale  = 0.38f;          // matches editor: 38% of half-height
+    const float kPI     = (float)M_PI;
+    const float kHalfSW = 0.06f * kScale; // half stroke width  (12 / 200 * 0.38)
+    const float kRingR  = 0.90f * kScale;
+    const float kEyeR   = 0.14f * kScale;
+    const float kSmileR = 0.60f * kScale;
+
+    const int kRingSegs  = 96;
+    const int kEyeSegs   = 32;
+    const int kSmileSegs = 48;
+
+    // Thick-arc helper: triangle-strip outer/inner interleaved.
+    // Angles follow ImGui convention (0=+X, Y-down), Y is flipped for OpenGL Y-up.
+    auto buildArc = [&](std::vector<float>& v, float cx, float cy,
+                        float r, float hsw, float aMin, float aMax, int segs)
+    {
+        float rO = r + hsw, rI = r - hsw;
+        for (int i = 0; i <= segs; ++i) {
+            float a = aMin + (float)i / segs * (aMax - aMin);
+            float ca = cosf(a), sa = -sinf(a); // flip Y
+            v.push_back(cx + rO * ca);  v.push_back(cy + rO * sa);
+            v.push_back(cx + rI * ca);  v.push_back(cy + rI * sa);
+        }
+    };
+    // Filled-circle helper: triangle-fan (centre + N+1 perimeter vertices).
+    auto buildCircle = [&](std::vector<float>& v, float cx, float cy, float r, int segs)
+    {
+        v.push_back(cx); v.push_back(cy);
+        for (int i = 0; i <= segs; ++i) {
+            float a = (float)i / segs * 2.0f * kPI;
+            v.push_back(cx + r * cosf(a));
+            v.push_back(cy + r * sinf(a));
+        }
+    };
+
+    std::vector<float> ringV, eyeLV, eyeRV, smileV;
+    // Ring: full circle starting at top (-PI/2), clockwise
+    buildArc(ringV, 0.0f, 0.0f, kRingR, kHalfSW,
+             -kPI * 0.5f, -kPI * 0.5f + 2.0f * kPI, kRingSegs);
+    // Eyes (OpenGL Y-up: positive Y = up)
+    buildCircle(eyeLV, -0.35f * kScale,  0.20f * kScale, kEyeR,  kEyeSegs);
+    buildCircle(eyeRV,  0.35f * kScale,  0.20f * kScale, kEyeR,  kEyeSegs);
+    // Smile: ImGui arc 10deg->170deg, Y flipped -> curves downward in OpenGL Y-up
+    buildArc(smileV, 0.0f, 0.0f, kSmileR, kHalfSW,
+             10.0f * kPI / 180.0f, 170.0f * kPI / 180.0f, kSmileSegs);
+
+    // --- Upload to GPU ---
+    GLuint vao[4], vbo[4];
+    glGenVertexArrays(4, vao); glGenBuffers(4, vbo);
+    auto upload = [&](int i, const std::vector<float>& v) {
+        glBindVertexArray(vao[i]);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo[i]);
+        glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(v.size() * sizeof(float)), v.data(), GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    };
+    upload(0, ringV); upload(1, eyeLV); upload(2, eyeRV); upload(3, smileV);
+
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    // --- Animation timing (mirrors editor DrawSplash) ---
+    const float kDur        = 3.2f;
+    const float kRingEnd    = 1.5f;
+    const float kEyeStart   = 0.8f,  kEyeEnd   = 1.4f;
+    const float kSmileStart = 1.4f,  kSmileEnd  = 2.0f;
+    const float kFadeStart  = 2.9f;
+    auto clamp01 = [](float v) -> float { return v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; };
+
+    int scrW, scrH;
+    glfwGetFramebufferSize(win, &scrW, &scrH);
+    float aspect = (float)scrW / std::max(scrH, 1);
+
+    glUseProgram(prog);
+    glUniform1f(locAspect, aspect);
+
+    const double startT = glfwGetTime();
+    while (!glfwWindowShouldClose(win)) {
+        float t = (float)(glfwGetTime() - startT);
+        if (t >= kDur) break;
+
+        float ringP  = clamp01(t / kRingEnd);
+        float eyeA   = clamp01((t - kEyeStart)  / (kEyeEnd  - kEyeStart));
+        float smileP = clamp01((t - kSmileStart) / (kSmileEnd - kSmileStart));
+        float fadeA  = 1.0f - clamp01((t - kFadeStart) / (kDur - kFadeStart));
+
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Ring (partial — grows clockwise from top)
+        if (ringP > 0.0f) {
+            int verts = 2 * ((int)(ringP * kRingSegs) + 1);
+            glUniform4f(locColor, 1.0f, 1.0f, 1.0f, fadeA);
+            glBindVertexArray(vao[0]);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, verts);
+        }
+        // Eyes (fade in)
+        if (eyeA > 0.0f) {
+            glUniform4f(locColor, 1.0f, 1.0f, 1.0f, eyeA * fadeA);
+            glBindVertexArray(vao[1]);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, kEyeSegs + 2);
+            glBindVertexArray(vao[2]);
+            glDrawArrays(GL_TRIANGLE_FAN, 0, kEyeSegs + 2);
+        }
+        // Smile (partial arc grows left to right)
+        if (smileP > 0.0f) {
+            float sAlpha = std::min(smileP * 3.0f, 1.0f) * fadeA;
+            int   verts  = 2 * ((int)(smileP * kSmileSegs) + 1);
+            glUniform4f(locColor, 1.0f, 1.0f, 1.0f, sAlpha);
+            glBindVertexArray(vao[3]);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, verts);
+        }
+
+        glfwSwapBuffers(win);
+        glfwPollEvents();
+    }
+
+    // --- Cleanup ---
+    glDeleteVertexArrays(4, vao);
+    glDeleteBuffers(4, vbo);
+    glDeleteProgram(prog);
+    glDisable(GL_BLEND);
+    glBindVertexArray(0);
 }
 
 // ================================================================
@@ -66,12 +226,15 @@ void GameApplication::Run()
     if (std::filesystem::exists("assets/scenes/default.tscene"))
         SceneSerializer::Load(m_Scene, "assets/scenes/default.tscene");
 
-    // Capture mouse cursor for first-person controls, etc.
-    glfwSetInputMode(m_Window.GetNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
-
     // Start Lua scripting
     LuaSystem::Init(m_Scene);
     LuaSystem::StartScripts();
+
+    // Show the engine splash animation before the game loop begins
+    RenderEngineSplash(m_Window.GetNativeWindow());
+
+    // Capture mouse cursor for first-person controls (after splash so cursor is visible during logo)
+    glfwSetInputMode(m_Window.GetNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     m_LastFrameTime = (float)glfwGetTime();
 

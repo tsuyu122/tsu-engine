@@ -19,6 +19,33 @@
 #include <fstream>
 #include <functional>
 
+#ifdef _WIN32
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <shlobj.h>
+static std::string PickFolderDialog(const char* title)
+{
+    std::string result;
+    BROWSEINFOA bi    = {};
+    char         disp[MAX_PATH] = {};
+    bi.lpszTitle      = title;
+    bi.pszDisplayName = disp;
+    bi.ulFlags        = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    PIDLIST_ABSOLUTE pidl = SHBrowseForFolderA(&bi);
+    if (pidl) {
+        char path[MAX_PATH] = {};
+        if (SHGetPathFromIDListA(pidl, path))
+            result = path;
+        CoTaskMemFree(pidl);
+    }
+    return result;
+}
+#endif
+
 namespace tsu {
 
 void UIManager::Init(GLFWwindow* window)
@@ -141,13 +168,13 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         // ---- Engine logo (top-left, before menu items) ----
         {
             const float barH = (float)k_MenuBarH;
-            const float sz   = barH - 4.0f;  // 2px padding top+bottom
+            const float sz   = (barH - 4.0f) * 0.70f;  // 70% of full height — less obtrusive
             ImDrawList* dl   = ImGui::GetWindowDrawList();
             ImVec2      pos  = ImGui::GetCursorScreenPos();
             float cx = pos.x + sz * 0.5f;
-            float cy = pos.y + sz * 0.5f;
+            float cy = pos.y + (barH - 4.0f) * 0.5f;
             DrawEngineLogo(dl, cx, cy, sz, IM_COL32(255,255,255,255));
-            ImGui::Dummy(ImVec2(sz + 4.0f, sz));
+            ImGui::Dummy(ImVec2(sz + 6.0f, barH - 4.0f));
         }
         if (ImGui::BeginMenu("File"))
         {
@@ -159,7 +186,12 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 m_PendingSaveProject = true;
             ImGui::Separator();
             if (ImGui::MenuItem("Export Game..."))
-            { m_DlgExportPath[0] = '\0'; m_ShowExportGameDlg = true; }
+            {
+                m_DlgExportPath[0] = '\0';
+                strncpy(m_DlgGameName, m_ProjectDisplayName.c_str(), sizeof(m_DlgGameName) - 1);
+                m_DlgGameName[sizeof(m_DlgGameName) - 1] = '\0';
+                m_ShowExportGameDlg = true;
+            }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit"))
@@ -181,12 +213,12 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             ImGui::EndMenu();
         }
 
-        // Project name indicator (right-aligned in menu bar)
+        // Right side: project name
         {
-            float avail = ImGui::GetContentRegionAvail().x;
-            std::string label = "\xf0\x9f\x97\x80 " + m_ProjectDisplayName; // folder emoji + name
-            float textW = ImGui::CalcTextSize(label.c_str()).x + 16.f;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - textW);
+            std::string label = "\xf0\x9f\x97\x80 " + m_ProjectDisplayName;
+            float labelW = ImGui::CalcTextSize(label.c_str()).x + 20.0f;
+            float avail  = ImGui::GetContentRegionAvail().x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - labelW);
             ImGui::TextDisabled("%s", label.c_str());
         }
 
@@ -207,8 +239,21 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         ImGui::InputText("##pname", m_DlgProjName, sizeof(m_DlgProjName));
         ImGui::Spacing();
         ImGui::TextUnformatted("Location (parent folder):");
-        ImGui::SetNextItemWidth(-1.f);
-        ImGui::InputText("##ploc", m_DlgProjParent, sizeof(m_DlgProjParent));
+        {
+            float bw = ImGui::GetContentRegionAvail().x;
+            ImGui::SetNextItemWidth(bw - 90.0f);
+            ImGui::InputText("##ploc", m_DlgProjParent, sizeof(m_DlgProjParent));
+            ImGui::SameLine();
+#ifdef _WIN32
+            if (ImGui::Button("Browse...##np", ImVec2(85.0f, 0))) {
+                auto r = PickFolderDialog("Select project location");
+                if (!r.empty()) {
+                    strncpy(m_DlgProjParent, r.c_str(), sizeof(m_DlgProjParent) - 1);
+                    m_DlgProjParent[sizeof(m_DlgProjParent) - 1] = '\0';
+                }
+            }
+#endif
+        }
         ImGui::TextDisabled("A sub-folder <Name> will be created at this path.");
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         if (ImGui::Button("Create", ImVec2(120, 0))) {
@@ -223,10 +268,23 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Always);
     if (ImGui::BeginPopupModal("Open Project##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Path to project folder or .tsproj file:");
-        ImGui::SetNextItemWidth(-1.f);
-        ImGui::InputText("##opath", m_DlgOpenPath, sizeof(m_DlgOpenPath));
-        ImGui::TextDisabled("Example: C:/Projects/MyGame  or  C:/Projects/MyGame/MyGame.tsproj");
+        ImGui::TextUnformatted("Project folder:");
+        {
+            float bw = ImGui::GetContentRegionAvail().x;
+            ImGui::SetNextItemWidth(bw - 90.0f);
+            ImGui::InputText("##opath", m_DlgOpenPath, sizeof(m_DlgOpenPath));
+            ImGui::SameLine();
+#ifdef _WIN32
+            if (ImGui::Button("Browse...##op", ImVec2(85.0f, 0))) {
+                auto r = PickFolderDialog("Select project folder");
+                if (!r.empty()) {
+                    strncpy(m_DlgOpenPath, r.c_str(), sizeof(m_DlgOpenPath) - 1);
+                    m_DlgOpenPath[sizeof(m_DlgOpenPath) - 1] = '\0';
+                }
+            }
+#endif
+        }
+        ImGui::TextDisabled("You can also type a path to a .tsproj file directly.");
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         if (ImGui::Button("Open", ImVec2(120, 0))) {
             if (m_DlgOpenPath[0] != '\0') { m_PendingOpenProject = true; ImGui::CloseCurrentPopup(); }
@@ -237,12 +295,29 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     }
 
     // Export Game
-    ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Always);
     if (ImGui::BeginPopupModal("Export Game##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Output folder:");
+        ImGui::TextUnformatted("Game Name:");
         ImGui::SetNextItemWidth(-1.f);
-        ImGui::InputText("##epath", m_DlgExportPath, sizeof(m_DlgExportPath));
+        ImGui::InputText("##gname", m_DlgGameName, sizeof(m_DlgGameName));
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Output folder:");
+        {
+            float bw = ImGui::GetContentRegionAvail().x;
+            ImGui::SetNextItemWidth(bw - 90.0f);
+            ImGui::InputText("##epath", m_DlgExportPath, sizeof(m_DlgExportPath), ImGuiInputTextFlags_ReadOnly);
+            ImGui::SameLine();
+#ifdef _WIN32
+            if (ImGui::Button("Browse...##eg", ImVec2(85.0f, 0))) {
+                auto r = PickFolderDialog("Select output folder");
+                if (!r.empty()) {
+                    strncpy(m_DlgExportPath, r.c_str(), sizeof(m_DlgExportPath) - 1);
+                    m_DlgExportPath[sizeof(m_DlgExportPath) - 1] = '\0';
+                }
+            }
+#endif
+        }
         ImGui::TextDisabled("The game .exe and assets/ will be placed in this folder.");
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         if (ImGui::Button("Export", ImVec2(120, 0))) {

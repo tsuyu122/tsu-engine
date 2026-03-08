@@ -93,8 +93,9 @@ public:
     bool HasPendingSaveProject() const { return m_PendingSaveProject; }
     void ConsumeSaveProject()          { m_PendingSaveProject = false; }
     bool HasPendingExportGame()  const { return m_PendingExportGame; }
-    void ConsumeExportGame(std::string& outputPath) {
+    void ConsumeExportGame(std::string& outputPath, std::string& gameName) {
         outputPath = m_DlgExportPath;
+        gameName   = m_DlgGameName;
         m_PendingExportGame = false;
     }
     void SetProjectDisplayName(const std::string& n) { m_ProjectDisplayName = n; }
@@ -174,6 +175,7 @@ private:
     char        m_DlgProjParent[512]   = {};
     char        m_DlgOpenPath[512]     = {};
     char        m_DlgExportPath[512]   = {};
+    char        m_DlgGameName[256]     = {};
     std::string m_ProjectDisplayName   = "Untitled";
 };
 

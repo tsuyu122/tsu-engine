@@ -150,6 +150,14 @@ target_include_directories(GameRuntime PRIVATE
 # No imgui — runtime is lean
 target_link_libraries(GameRuntime glfw glad opengl32 lua54)
 
+# Place GameRuntime in a hidden _engine/ subdirectory so it does not appear
+# alongside TsuEngine.exe in the Release folder.
+set_target_properties(GameRuntime PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG          "${CMAKE_BINARY_DIR}/Debug/_engine"
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE        "${CMAKE_BINARY_DIR}/Release/_engine"
+    RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}/RelWithDebInfo/_engine"
+    RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL     "${CMAKE_BINARY_DIR}/MinSizeRel/_engine")
+
 add_custom_command(TARGET GameRuntime POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/assets"

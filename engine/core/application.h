@@ -47,7 +47,7 @@ private:
     void NewProject(const std::string& name, const std::string& parentFolder);
     void OpenProject(const std::string& path);
     void SaveProject();
-    void ExportGame(const std::string& outputFolder);
+    void ExportGame(const std::string& outputFolder, const std::string& gameNameOverride = "");
 
     // ---- Room Editor Undo/Redo ----
     struct RoomEditState {
