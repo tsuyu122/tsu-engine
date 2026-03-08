@@ -1,32 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
-  <!-- Background circle -->
-  <circle cx="60" cy="60" r="56" fill="#1a1a2e" stroke="#4a9eff" stroke-width="2"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Black background matching the engine splash screen -->
+  <circle cx="100" cy="100" r="100" fill="#000000"/>
 
-  <!-- Star/burst rays -->
-  <g stroke="#4a9eff" stroke-width="1.5" opacity="0.6">
-    <line x1="60" y1="12" x2="60" y2="26"/>
-    <line x1="60" y1="94" x2="60" y2="108"/>
-    <line x1="12" y1="60" x2="26" y2="60"/>
-    <line x1="94" y1="60" x2="108" y2="60"/>
-    <line x1="24" y1="24" x2="34" y2="34"/>
-    <line x1="86" y1="86" x2="96" y2="96"/>
-    <line x1="96" y1="24" x2="86" y2="34"/>
-    <line x1="24" y1="96" x2="34" y2="86"/>
-  </g>
+  <!-- Outer ring  (radius 90, stroke 12 — matches DrawEngineLogo source) -->
+  <circle cx="100" cy="100" r="90" fill="none" stroke="white" stroke-width="12"/>
 
-  <!-- Outer ring -->
-  <circle cx="60" cy="60" r="32" fill="none" stroke="#4a9eff" stroke-width="1.5" opacity="0.5"/>
+  <!-- Left eye  (cx-35, cy-20, r14) -->
+  <circle cx="65" cy="80" r="14" fill="white"/>
 
-  <!-- Face circle -->
-  <circle cx="60" cy="60" r="24" fill="#0f3460" stroke="#4a9eff" stroke-width="2"/>
+  <!-- Right eye  (cx+35, cy-20, r14) -->
+  <circle cx="135" cy="80" r="14" fill="white"/>
 
-  <!-- Eyes -->
-  <circle cx="52" cy="54" r="3.5" fill="#4a9eff"/>
-  <circle cx="68" cy="54" r="3.5" fill="#4a9eff"/>
-
-  <!-- Smile arc -->
-  <path d="M 48 66 Q 60 76 72 66" fill="none" stroke="#4a9eff" stroke-width="2.5" stroke-linecap="round"/>
-
-  <!-- Center dot -->
-  <circle cx="60" cy="60" r="1.5" fill="#4a9eff" opacity="0.4"/>
+  <!-- Smile arc: radius 60, 10deg -> 170deg clockwise (Y-down)          -->
+  <!--   start = (100 + 60*cos10,  100 + 60*sin10)  = (159.09, 110.42)  -->
+  <!--   end   = (100 + 60*cos170, 100 + 60*sin170) = ( 40.91, 110.42)  -->
+  <path d="M 159.09 110.42 A 60 60 0 0 1 40.91 110.42"
+        fill="none" stroke="white" stroke-width="12" stroke-linecap="round"/>
 </svg>
