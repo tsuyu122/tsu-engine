@@ -55,7 +55,7 @@ GameApplication (runtime)
 ## Building
 
 ```bash
-git clone https://github.com/tsuyu122/-tsu-engine
+git clone https://github.com/tsuyu122/tsu-engine
 cd tsuEngine
 cmake -S . -B build
 cmake --build build --config Release

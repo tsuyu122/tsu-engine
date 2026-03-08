@@ -6,7 +6,7 @@ Thank you for your interest in contributing! TSU Engine is in active **Alpha** d
 
 ## Reporting Bugs
 
-Open an issue on [GitHub Issues](https://github.com/tsuyu122/-tsu-engine/issues) with the following:
+Open an issue on [GitHub Issues](https://github.com/tsuyu122/tsu-engine/issues) with the following:
 
 - A clear, descriptive title
 - Steps to reproduce the bug
@@ -41,7 +41,7 @@ Alternatively, send an email to [vhmarchiore@gmail.com](mailto:vhmarchiore@gmail
 ### Building
 
 ```bash
-git clone https://github.com/tsuyu122/-tsu-engine
+git clone https://github.com/tsuyu122/tsu-engine
 cd tsuEngine
 cmake -S . -B build
 cmake --build build --config Release

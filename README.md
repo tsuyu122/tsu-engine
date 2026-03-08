@@ -89,7 +89,7 @@ The codebase is organized to be readable, extensible, and contributor-friendly.
 - OpenGL 4.6 capable GPU
 
 ```bash
-git clone https://github.com/tsuyu122/-tsu-engine
+git clone https://github.com/tsuyu122/tsu-engine
 cd tsuEngine
 cmake -S . -B build
 cmake --build build --config Release
