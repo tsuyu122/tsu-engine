@@ -4,15 +4,6 @@ Thank you for your interest in contributing! TSU Engine is in active **Alpha** d
 
 ---
 
-## Getting Started
-
-1. **Fork** the repository and clone your fork locally
-2. Create a **feature branch** from `master` (`git checkout -b feature/my-feature`)
-3. Make your changes
-4. Push your branch and open a **Pull Request** against `master`
-
----
-
 ## Reporting Bugs
 
 Open an issue on [GitHub Issues](https://github.com/tsuyu122/-tsu-engine/issues) with the following:
@@ -23,6 +14,8 @@ Open an issue on [GitHub Issues](https://github.com/tsuyu122/-tsu-engine/issues)
 - Your OS and GPU (e.g., Windows 11, NVIDIA RTX 3060)
 - Any relevant console output or error messages
 
+If you prefer not to use GitHub, you can also send an email to [vhmarchiore@gmail.com](mailto:vhmarchiore@gmail.com) with the subject **"github tsu engine sugestion"** and describe the bug there.
+
 ---
 
 ## Suggesting Features
@@ -32,6 +25,8 @@ Open an issue with the label `enhancement`. Describe:
 - What problem the feature solves
 - How you envision it working
 - Any alternatives you have considered
+
+Alternatively, send an email to [vhmarchiore@gmail.com](mailto:vhmarchiore@gmail.com) with the subject **"github tsu engine sugestion"**.
 
 ---
 
