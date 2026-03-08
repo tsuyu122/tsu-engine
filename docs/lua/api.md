@@ -1,6 +1,39 @@
 # Lua API Reference
 
-All functions listed here are accessible from any Lua script via the `scene` global table and other automatically injected globals.
+This page documents every function available to Lua scripts in TSU Engine, covering transforms, entity queries, input channels, post-processing, and time utilities.
+
+## How the API Works
+
+All bindings are registered into a global Lua table called **`scene`** by `LuaSystem::Init()` before `OnStart()` is ever called. Every function in this table maps directly to a C++ function in `engine/lua/luaSystem.cpp`.
+
+Scripts run in **per-entity sandboxed environments** — each script gets its own environment table whose `__index` metatable falls back to `_G`. This means all Lua standard library globals (`math`, `string`, `table`, `print`, etc.) are available, while `entity_idx` and `--@expose` variables are injected per-entity without polluting other scripts.
+
+---
+
+## Quick Example Script
+
+```lua
+--@expose speed   number  3.0
+--@expose channel number  0
+
+function OnStart()
+    print("Entity " .. scene.getName(entity_idx) .. " is ready.")
+end
+
+function OnUpdate(dt)
+    -- Move forward only when channel 0 is true
+    if scene.getChannel(channel) then
+        local x, y, z = scene.getPos(entity_idx)
+        scene.setPos(entity_idx, x + speed * dt, y, z)
+    end
+end
+
+function OnStop()
+    scene.setChannel(channel, false)
+end
+```
+
+For more complete examples see [`docs/lua/examples.md`](examples.md).
 
 ---
 
@@ -9,6 +42,31 @@ All functions listed here are accessible from any Lua script via the `scene` glo
 | Global | Type | Description |
 |---|---|---|
 | `entity_idx` | `number` | 0-based index of the entity that owns this script |
+
+---
+
+## Function Index
+
+| Function | Returns | Summary |
+|---|---|---|
+| `scene.getPos(idx)` | `x, y, z` | World position of entity |
+| `scene.setPos(idx, x, y, z)` | — | Set local position |
+| `scene.getRot(idx)` | `x, y, z` | Local Euler rotation (degrees) |
+| `scene.setRot(idx, x, y, z)` | — | Set local rotation (degrees) |
+| `scene.getScale(idx)` | `x, y, z` | Local scale |
+| `scene.setScale(idx, x, y, z)` | — | Set local scale |
+| `scene.getName(idx)` | `string` | Display name of entity |
+| `scene.findEntity(name)` | `number` | Index of entity by name, or `-1` |
+| `scene.getEntityCount()` | `number` | Total entity count in scene |
+| `scene.getChannel(idx)` | `boolean` | Boolean value of input channel |
+| `scene.setChannel(idx, value)` | — | Set boolean value of input channel |
+| `scene.getPostEnabled()` | `boolean` | Whether post-processing is on |
+| `scene.setPostEnabled(enabled)` | — | Enable / disable post-processing |
+| `scene.setExposure(value)` | — | Linear brightness multiplier |
+| `scene.setSaturation(value)` | — | Color saturation (0 = grayscale) |
+| `scene.setContrast(value)` | — | Midtone contrast |
+| `scene.setBrightness(value)` | — | Additive brightness offset |
+| `scene.elapsed()` | `number` | Seconds since Play began |
 
 ---
 

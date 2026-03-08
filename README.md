@@ -1,8 +1,17 @@
-﻿# TSU Engine
+﻿<div align="center">
+  <img src="docs/images/tsu_engine_logo.svg" width="100" alt="TSU Engine Logo"/>
+  <h1>TSU Engine</h1>
 
->  **ALPHA  This project is under active development.** Many systems are incomplete, untested, or subject to change. See the [alpha notice](#alpha-notice) below.
+  [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+  [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
+  [![OpenGL 4.6](https://img.shields.io/badge/OpenGL-4.6-red.svg)](https://www.opengl.org/)
+  [![Status: Alpha](https://img.shields.io/badge/Status-Alpha%201.0-orange.svg)]()
+  [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)]()
+</div>
 
-TSU Engine is a custom 3D game engine built from scratch in C++17, using OpenGL 4.6 as its rendering backend. It features a fully integrated editor environment, a forward PBR rendering pipeline, a Lua 5.4 scripting system, a physics simulation, a prefab system, procedural room generation, and a standalone game export workflow  all written without any large third-party engine frameworks.
+> ⚠ **ALPHA — This project is under active development.** Many systems are incomplete, untested, or subject to change. See the [alpha notice](#alpha-notice) below.
+
+TSU Engine is a custom 3D game engine built from scratch in C++17, using OpenGL 4.6 as its rendering backend. It features a fully integrated editor environment, a forward PBR rendering pipeline, a Lua 5.4 scripting system, a physics simulation, a prefab system, procedural room generation, and a standalone game export workflow — all written without any large third-party engine frameworks.
 
 ---
 
@@ -20,7 +29,7 @@ The project has since evolved into a structured general-purpose 3D engine with:
 
 - A complete in-editor workflow (create, configure, export)
 - A lean standalone **GameRuntime** binary that contains only what the exported game needs
-- Planned full Linux support  both for running the editor and for exporting games to Linux targets
+- Planned full Linux support — both for running the editor and for exporting games to Linux targets
 
 The codebase is organized to be readable, extensible, and contributor-friendly.
 
@@ -31,44 +40,44 @@ The codebase is organized to be readable, extensible, and contributor-friendly.
 ## Features
 
 ### Rendering
-- Forward PBR pipeline  Cook-Torrance BRDF (GGX distribution, Smith geometry, Schlick Fresnel)
-- Multi-light system  up to 8 simultaneous lights: Directional, Point, Spot, Area
-- Dual shadow mapping  PCF-filtered 2D shadow maps + cubemap shadows for point lights
-- PBR material system  Albedo, Normal, and packed ORM (AO / Roughness / Metallic) textures with triplanar UV mapping
-- Post-processing pipeline  GL_RGBA16F FBO pass with bloom, vignette, film grain, chromatic aberration, and full color grading
-- Procedural gradient sky  zenith/horizon/ground gradient with a configurable sun disc
-- Atmospheric fog  Linear, Exponential, and Exp modes
-- Frustum culling  Gribb-Hartmann plane extraction, bounding-sphere test per entity
+- Forward PBR pipeline — Cook-Torrance BRDF (GGX distribution, Smith geometry, Schlick Fresnel)
+- Multi-light system — up to 8 simultaneous lights: Directional, Point, Spot, Area
+- Dual shadow mapping — PCF-filtered 2D shadow maps + cubemap shadows for point lights
+- PBR material system — Albedo, Normal, and packed ORM (AO / Roughness / Metallic) textures with triplanar UV mapping
+- Post-processing pipeline — GL_RGBA16F FBO pass with bloom, vignette, film grain, chromatic aberration, and full color grading
+- Procedural gradient sky — zenith/horizon/ground gradient with a configurable sun disc
+- Atmospheric fog — Linear, Exponential, and Exp modes
+- Frustum culling — Gribb-Hartmann plane extraction, bounding-sphere test per entity
 
 ### Editor
-- Full editor environment  Hierarchy, Inspector, Asset Browser, Console
-- Transform gizmos  Move, Rotate, and Scale with multi-axis handles
-- Viewport tabs  Editor Camera, Game Camera, Project Settings, Prefab Editor, Room Editor
-- Prefab system  create, edit, instantiate, and sync reusable entity templates
-- Project management  New Project, Open Project, Save Project, Export Game
+- Full editor environment — Hierarchy, Inspector, Asset Browser, Console
+- Transform gizmos — Move, Rotate, and Scale with multi-axis handles
+- Viewport tabs — Editor Camera, Game Camera, Project Settings, Prefab Editor, Room Editor
+- Prefab system — create, edit, instantiate, and sync reusable entity templates
+- Project management — New Project, Open Project, Save Project, Export Game
 
 ### Gameplay Systems
-- Entity Component System  parallel-array architecture
-- Physics system  gravity, OBB/Sphere/Capsule/Pyramid collision with SAT, rigid body angular dynamics
-- Player controller  4 movement modes (world/local, collision/noclip), headbob
-- Mouse look  standalone first-person look component
-- Trigger volumes  AABB overlap detection firing boolean channels
-- Keyframe animator  Position / Rotation / Scale interpolation with multiple modes and easings
-- Input channel system  runtime-configurable key bindings without recompilation
+- Entity Component System — parallel-array architecture
+- Physics system — gravity, OBB/Sphere/Capsule/Pyramid collision with SAT, rigid body angular dynamics
+- Player controller — 4 movement modes (world/local, collision/noclip), headbob
+- Mouse look — standalone first-person look component
+- Trigger volumes — AABB overlap detection firing boolean channels
+- Keyframe animator — Position / Rotation / Scale interpolation with multiple modes and easings
+- Input channel system — runtime-configurable key bindings without recompilation
 
 ### Scripting
-- Lua 5.4 scripting  per-entity scripts with `OnStart` / `OnUpdate` / `OnStop` lifecycle
-- Scene API  full Lua bindings for reading and writing entity transforms, channels, and post-processing
-- `--@expose` annotations  expose script variables to the editor inspector with automatic type detection
+- Lua 5.4 scripting — per-entity scripts with `OnStart` / `OnUpdate` / `OnStop` lifecycle
+- Scene API — full Lua bindings for reading and writing entity transforms, channels, and post-processing
+- `--@expose` annotations — expose script variables to the editor inspector with automatic type detection
 
 ### Asset & Scene Pipeline
-- OBJ import  drag-and-drop with automatic AABB computation and mesh normalization
-- Scene serialization  complete round-trip save/load in human-readable plain-text `.tscene` format
-- Prefab serialization  `.tprefab` files with full node hierarchy
+- OBJ import — drag-and-drop with automatic AABB computation and mesh normalization
+- Scene serialization — complete round-trip save/load in human-readable plain-text `.tscene` format
+- Prefab serialization — `.tprefab` files with full node hierarchy
 
 ### Export
-- Standalone game export  copies `GameRuntime.exe` (editor-free lean binary) + assets to an output folder
-- `game.mode` marker  runtime detection of standalone mode, automatic fullscreen, Lua autostart
+- Standalone game export — copies `GameRuntime.exe` (editor-free lean binary) + assets to an output folder
+- `game.mode` marker — runtime detection of standalone mode, automatic fullscreen, Lua autostart
 
 ---
 
@@ -143,7 +152,7 @@ The editor opens with the default scene. Use the Hierarchy to create entities, t
 ### Exporting a Game
 
 1. Build your scene in the editor
-2. Open **File  Export Game...**
+2. Open **File → Export Game...**
 3. Enter the output folder path and confirm
 4. The exporter copies `GameRuntime.exe` (lean player, no editor code) and all assets
 5. Distribute the output folder  the `.exe` is self-contained
@@ -222,7 +231,7 @@ Components are toggled by their `Active` flag, not removed from the array. All s
 | Binary | Contents |
 |---|---|
 | `TsuEngine.exe` | Full editor (ImGui, gizmos, panels, UIManager) |
-| `GameRuntime.exe` | Lean player  rendering, physics, Lua, input only. Zero ImGui. |
+| `GameRuntime.exe` | Lean player — rendering, physics, Lua, input only. Zero ImGui. |
 
 `ExportGame` copies `GameRuntime.exe`, not the editor.
 
@@ -256,7 +265,7 @@ Components are toggled by their `Active` flag, not removed from the array. All s
 
 ## Contributing
 
-Contributions, bug reports, and feature suggestions are welcome. Open an issue or pull request on the repository.
+Contributions, bug reports, and feature suggestions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on submitting issues, pull requests, and code style conventions.
 
 ---
 
