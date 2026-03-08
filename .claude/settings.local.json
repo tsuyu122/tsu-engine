@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(\"/c/Program Files/CMake/bin/cmake.exe\" --build . --config Release)"
-    ]
-  }
-}
