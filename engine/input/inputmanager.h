@@ -13,14 +13,23 @@ namespace Key {
     constexpr int S           = 83;
     constexpr int D           = 68;
     constexpr int E           = 69;
+    constexpr int F           = 70;
     constexpr int R           = 82;
     constexpr int Q           = 81;
+    constexpr int Y           = 89;
+    constexpr int Z           = 90;
     constexpr int Space       = 32;
+    constexpr int Delete      = 261;
     constexpr int LeftShift   = 340;
     constexpr int LeftControl = 341;
+    constexpr int RightShift  = 344;
+    constexpr int RightControl= 345;
     constexpr int Escape      = 256;
     constexpr int F1          = 290;
     constexpr int F2          = 291;
+    constexpr int F3          = 292;
+    constexpr int F4          = 293;
+    constexpr int F5          = 294;
 }
 
 namespace Mouse {

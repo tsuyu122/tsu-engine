@@ -1,6 +1,8 @@
 #include "input/inputManager.h"
 #include <GLFW/glfw3.h>
-#include <imgui_impl_glfw.h>
+#ifdef TSU_EDITOR
+#  include <imgui_impl_glfw.h>
+#endif
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
@@ -27,8 +29,10 @@ static float g_ScrollAccum = 0.0f;   // file-local accumulator fed by callback
 static void ScrollCallback(GLFWwindow* w, double xoff, double yoff)
 {
     g_ScrollAccum += (float)yoff;
+#ifdef TSU_EDITOR
     // Forward to ImGui so inspector/panels can scroll with mouse wheel
     ImGui_ImplGlfw_ScrollCallback(w, xoff, yoff);
+#endif
 }
 
 void InputManager::Update(GLFWwindow* window)

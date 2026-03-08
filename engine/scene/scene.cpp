@@ -20,9 +20,14 @@ Entity Scene::CreateEntity(const std::string& name)
     PlayerControllers.emplace_back();
     MouseLooks.emplace_back();
     Lights.emplace_back();
+    Triggers.emplace_back();
+    Animators.emplace_back();
+    LuaScripts.emplace_back();
     EntityParents.push_back(-1);
     EntityChildren.emplace_back();       // empty children list
     EntityIsPrefabInstance.push_back(false);
+    EntityPrefabSource.push_back(-1);
+    MazeGenerators.emplace_back();
     RootOrder.push_back((int)id);        // new entity starts at root
     return Entity(id, this);
 }
@@ -253,8 +258,14 @@ void Scene::DeleteEntity(int idx)
     erase1(PlayerControllers);
     erase1(MouseLooks);
     erase1(Lights);
+    if (idx < (int)Triggers.size()) Triggers.erase(Triggers.begin() + idx);
+    if (idx < (int)Animators.size()) Animators.erase(Animators.begin() + idx);
     if (idx < (int)EntityIsPrefabInstance.size())
         EntityIsPrefabInstance.erase(EntityIsPrefabInstance.begin() + idx);
+    if (idx < (int)EntityPrefabSource.size())
+        EntityPrefabSource.erase(EntityPrefabSource.begin() + idx);
+    if (idx < (int)MazeGenerators.size())
+        MazeGenerators.erase(MazeGenerators.begin() + idx);
     // RootOrder was already cleaned manually — just fix remaining indices:
     fixList(RootOrder);
 

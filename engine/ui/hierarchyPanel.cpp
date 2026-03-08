@@ -701,25 +701,38 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
     ImGui::Begin("Hierarchy", nullptr, wf);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
 
-    // ---- Prefab editor mode: show prefab nodes instead of scene hierarchy ----
-    if (m_PrefabEditorActive && m_PrefabEditorIdx >= 0 &&
-        m_PrefabEditorIdx < (int)scene.Prefabs.size())
+    // ---- Prefab / Room editor mode: show prefab nodes instead of scene hierarchy ----
+    if (m_PrefabEditorActive &&
+        (m_PrefabOverride || (m_PrefabEditorIdx >= 0 && m_PrefabEditorIdx < (int)scene.Prefabs.size())))
     {
-        PrefabAsset& prefab = scene.Prefabs[m_PrefabEditorIdx];
+        PrefabAsset& prefab = m_PrefabOverride ? *m_PrefabOverride
+                                               : scene.Prefabs[m_PrefabEditorIdx];
 
-        // Sync / Save buttons at the top of the hierarchy
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.82f, 1.0f));
-        if (ImGui::Button("Sync Instances", ImVec2(-1, 0)) && m_SyncCallback)
-            m_SyncCallback();
-        ImGui::PopStyleColor();
+        // Sync / Save buttons (only for real prefab editor, not room override)
+        if (!m_PrefabOverride)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.55f, 0.82f, 1.0f));
+            if (ImGui::Button("Sync Instances", ImVec2(-1, 0)) && m_SyncCallback)
+                m_SyncCallback();
+            ImGui::PopStyleColor();
 
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.65f, 0.35f, 1.0f));
-        if (ImGui::Button("Save to Disk", ImVec2(-1, 0)) && m_SaveCallback)
-            m_SaveCallback();
-        ImGui::PopStyleColor();
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.65f, 0.35f, 1.0f));
+            if (ImGui::Button("Save to Disk", ImVec2(-1, 0)) && m_SaveCallback)
+                m_SaveCallback();
+            ImGui::PopStyleColor();
 
+            ImGui::Separator();
+            ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Prefab: %s", prefab.Name.c_str());
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(0.75f, 0.82f, 1.0f, 1.0f), "Room: %s", prefab.Name.c_str());
+            ImGui::Separator();
+            ImGui::TextDisabled("Blocks: %d  Doors: -- ", (int)prefab.Nodes.size());
+        }
         ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Prefab: %s", prefab.Name.c_str());
+        ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                           m_PrefabOverride ? "Interior Nodes" : "Nodes");
         ImGui::Separator();
 
         // Draw prefab node tree starting from root nodes

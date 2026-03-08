@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <string>
+#include <map>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
@@ -223,6 +224,18 @@ struct PlayerControllerComponent
     bool      IsRunning    = false;
     bool      IsCrouching  = false;
     glm::vec3 LastMoveAxis = {0.0f, 0.0f, 0.0f};
+
+    // ---- Headbob ----
+    bool  HeadbobEnabled       = true;
+    float HeadbobFrequency     = 2.2f;    // cycles per second at walk speed
+    float HeadbobAmplitudeY    = 0.055f;  // vertical bob amplitude (world units)
+    float HeadbobAmplitudeX    = 0.030f;  // lateral roll amplitude (world units)
+    int   HeadbobCameraEntity  = -1;      // entity to apply bob to (-1 = disabled)
+    // Runtime (not serialised)
+    float _HeadbobPhase    = 0.0f;
+    float _HeadbobBlend    = 0.0f;   // 0=still 1=fullbob (smoothed)
+    float _HeadbobBaseY    = 0.0f;   // captures the camera's rest Y on first move
+    bool  _HeadbobBaseSet  = false;
 };
 
 // ================================================================
@@ -293,6 +306,251 @@ struct PrefabEntityData
     GameCameraComponent Camera;
 };
 
+// ================================================================
+// Procedural Maze System  -- room templates, sets & generator config
+// ================================================================
+
+// A single 1×1×1 block in a room grid
+struct RoomBlock
+{
+    int X = 0, Y = 0, Z = 0;  // grid position (can be negative)
+};
+
+// Which face of a block and at which grid coord the door sits
+enum class DoorFace { PosX = 0, NegX = 1, PosZ = 2, NegZ = 3 };
+
+struct DoorPlacement
+{
+    int      BlockX = 0, BlockZ = 0;   // which block column
+    int      BlockY = 0;               // vertical layer (floor level)
+    DoorFace Face   = DoorFace::PosX;
+};
+
+// Room editor gizmo: one exposed-face arrow per block face (rebuilt each frame)
+struct BlockFaceArrow {
+    glm::vec3 pos;      // world position (block center + 0.6 * faceNormal)
+    int       dir;      // 0=+X 1=-X 2=+Z 3=-Z 4=+Y 5=-Y
+    int       blockIdx; // index into RoomTemplate::Blocks
+};
+
+// Room template: a set of blocks + doors + optional interior prefab nodes
+struct RoomTemplate
+{
+    std::string  Name = "Room";
+    std::vector<RoomBlock>       Blocks;       // occupied grid cells
+    std::vector<DoorPlacement>   Doors;        // door locations
+    std::vector<PrefabEntityData> Interior;    // decoration / props (prefab-style nodes)
+    float Rarity = 1.0f;                       // weight used during random selection
+
+    // ---- Prebaked lightmap ----
+    std::string  LightmapPath;   // relative path to baked .tga file; "" = not baked
+    glm::vec4    LightmapST = {1,1,0,0}; // xy=scale, zw=offset to convert world-XZ → UV
+};
+
+// Room set: named collection of room templates
+struct RoomSet
+{
+    std::string                Name = "Room Set";
+    std::vector<RoomTemplate>  Rooms;
+};
+
+// Maze generator component (attached to "generator" entities)
+struct MazeGeneratorComponent
+{
+    bool  Active  = false;
+    bool  Enabled = true;
+    int   RoomSetIndex  = -1;       // which RoomSet to use (-1 = none)
+    float GenerateRadius = 50.0f;   // spawn rooms within this radius of the player
+    float DespawnRadius  = 80.0f;   // destroy rooms beyond this radius
+    float BlockSize      = 2.0f;    // world-space size of one grid block
+
+    // Runtime state (not serialised)
+    struct LiveRoom
+    {
+        int   TemplateIdx = -1;     // index in RoomSet::Rooms
+        int   GridX = 0, GridZ = 0; // room anchor in world-grid coords
+        int   Rotation = 0;         // 0/90/180/270
+        std::vector<int> EntityIds; // spawned entity indices in the scene
+        std::string LightmapPath;   // "" = no lightmap (for release on despawn)
+        // Grid cells registered as pending door exits when this room was spawned.
+        // Removed from PendingDoorSlots when this room despawns.
+        std::vector<std::pair<int,int>> DoorExitCells;
+    };
+
+    // A pending door exit: a grid position that needs a connecting room with a
+    // specific door on one of its faces (the opposite face to the outgoing door).
+    struct DoorSlot
+    {
+        int      gridX        = 0;
+        int      gridZ        = 0;
+        DoorFace requiredFace = DoorFace::PosX; // the face the new room must have a door on
+    };
+
+    std::vector<LiveRoom>            SpawnedRooms;
+    // Occupied world-grid cells (for overlap prevention). Key = packed (gx,gz).
+    std::vector<std::pair<int,int>>  OccupiedCells;
+    // Open door exits: grid positions awaiting connection by a matching room.
+    std::vector<DoorSlot>            PendingDoorSlots;
+};
+
+// ================================================================
+// FogSettings  --  per-scene atmospheric fog
+// ================================================================
+enum class FogType { None = 0, Linear = 1, Exponential = 2, Exp2 = 3 };
+
+struct FogSettings
+{
+    FogType   Type    = FogType::None;
+    glm::vec3 Color   = { 0.5f, 0.5f, 0.5f };
+    float     Density = 0.05f;   // for Exp / Exp2 modes
+    float     Start   = 10.0f;  // for Linear mode
+    float     End     = 60.0f;  // for Linear mode
+};
+
+// ================================================================
+// SkySettings  --  procedural gradient sky + sun disk
+// ================================================================
+struct SkySettings
+{
+    bool      Enabled      = false;
+    glm::vec3 ZenithColor  = { 0.09f, 0.20f, 0.45f };  // top of sky
+    glm::vec3 HorizonColor = { 0.60f, 0.75f, 0.90f };  // horizon band
+    glm::vec3 GroundColor  = { 0.15f, 0.13f, 0.10f };  // below horizon
+    glm::vec3 SunDirection = { 0.40f, 0.80f, 0.30f };  // sun direction (world space, normalized)
+    glm::vec3 SunColor     = { 1.5f, 1.4f, 1.0f };     // HDR sun color
+    float     SunSize      = 0.015f;                    // cos of half-angle (smaller = tighter disc)
+    float     SunBloom     = 0.12f;                     // glow radius around the disc
+};
+
+// ================================================================
+// PostProcessSettings  --  fullscreen FBO post-processing
+// ================================================================
+struct PostProcessSettings
+{
+    bool  Enabled         = false;
+
+    // Bloom
+    bool  BloomEnabled    = true;
+    float BloomThreshold  = 0.85f;
+    float BloomIntensity  = 0.40f;
+    float BloomRadius     = 1.5f;    // texel spread multiplier
+
+    // Vignette
+    bool  VignetteEnabled = true;
+    float VignetteRadius  = 0.70f;   // 0=center 1=corners fully dark
+    float VignetteStrength= 0.55f;
+
+    // Film grain
+    bool  GrainEnabled    = false;
+    float GrainStrength   = 0.04f;
+
+    // Chromatic aberration
+    bool  ChromaEnabled   = false;
+    float ChromaStrength  = 0.003f;
+
+    // Color grading
+    bool  ColorGradeEnabled = true;
+    float Exposure        = 1.0f;
+    float Saturation      = 1.0f;   // 0=greyscale 1=normal >1=vivid
+    float Contrast        = 1.0f;
+    float Brightness      = 0.0f;   // additive offset
+
+    // Sharpen (unsharp mask kernel)
+    bool  SharpenEnabled  = false;
+    float SharpenStrength = 0.5f;
+
+    // Lens distortion (barrel / pincushion)
+    bool  LensDistortEnabled  = false;
+    float LensDistortStrength = 0.3f;  // positive = barrel, negative = pincushion
+
+    // Sepia tone
+    bool  SepiaEnabled    = false;
+    float SepiaStrength   = 1.0f;
+
+    // Posterize (quantise color levels)
+    bool  PosterizeEnabled = false;
+    float PosterizeLevels  = 5.0f;   // number of discrete levels per channel
+
+    // Scanlines
+    bool  ScanlinesEnabled   = false;
+    float ScanlinesStrength  = 0.35f;
+    float ScanlinesFrequency = 800.0f; // lines per screen height
+
+    // Pixelate
+    bool  PixelateEnabled  = false;
+    float PixelateSize     = 4.0f;   // pixel block size in screen pixels
+};
+
+// ================================================================
+// LuaScriptComponent  --  Lua script attached to an entity
+// ================================================================
+struct LuaScriptComponent
+{
+    bool        Active     = false;
+    bool        Enabled    = true;
+    std::string ScriptPath;   // path relative to assets/scripts/ (or absolute)
+    std::map<std::string, std::string> ExposedVars; // variables exposed to inspector via --@expose
+};
+
+// ================================================================
+// TriggerComponent  --  an AABB that fires channel events on player overlap
+// ================================================================
+struct TriggerComponent
+{
+    bool      Active          = false;
+    bool      Enabled         = true;
+    glm::vec3 Size            = { 1.0f, 2.0f, 1.0f }; // box extents (half-size)
+    glm::vec3 Offset          = { 0.0f, 0.0f, 0.0f };
+
+    // A single channel is set while the player is inside / outside
+    int       Channel         = -1;   // -1 = no action
+    bool      InsideValue     = true;  // value to set when inside
+    bool      OutsideValue    = false; // value to set when outside
+
+    // One-shot: only fires once, re-armed with Reset
+    bool      OneShot         = false;
+    bool      _HasFired       = false; // runtime
+
+    // Visual debug
+    bool      ShowTrigger     = false;
+
+    // Runtime overlap tracking
+    bool      _PlayerInside   = false;
+};
+
+// ================================================================
+// AnimatorComponent  --  simple keyframe animator for position / rotation / scale
+// ================================================================
+enum class AnimatorProperty { Position = 0, Rotation = 1, Scale = 2 };
+enum class AnimatorEasing   { Linear = 0, EaseIn = 1, EaseOut = 2, EaseInOut = 3 };
+enum class AnimatorMode     { Oscillate = 0, OneShot = 1, Loop = 2 };
+
+struct AnimatorComponent
+{
+    bool              Active    = false;
+    bool              Enabled   = true;
+    bool              Playing   = false; // set to true to start
+    bool              AutoPlay  = false; // starts playing when game mode begins
+
+    AnimatorProperty  Property  = AnimatorProperty::Position;
+    AnimatorMode      Mode      = AnimatorMode::Oscillate;
+    AnimatorEasing    Easing    = AnimatorEasing::EaseInOut;
+
+    glm::vec3         From      = { 0.0f, 0.0f, 0.0f };
+    glm::vec3         To        = { 0.0f, 1.0f, 0.0f };
+    float             Duration  = 1.0f;   // seconds for one half-cycle
+    float             Delay     = 0.0f;   // initial delay before starting
+
+    // Runtime state (not serialised)
+    float             _Phase    = 0.0f;  // [0,1] animated parameter
+    float             _Dir      = 1.0f;  // +1 / -1 for oscillate
+    float             _Timer    = 0.0f;  // accumulated time
+    bool              _DelayDone = false;
+};
+
+// ================================================================
+// PrefabAsset  --  serialisable entity template stored in assets
+// ================================================================
 struct PrefabAsset
 {
     std::string                   Name     = "Prefab";
@@ -325,6 +583,14 @@ public:
     std::vector<PlayerControllerComponent> PlayerControllers;
     std::vector<MouseLookComponent>         MouseLooks;
     std::vector<LightComponent>             Lights;
+    std::vector<TriggerComponent>           Triggers;
+    std::vector<AnimatorComponent>          Animators;
+    std::vector<LuaScriptComponent>         LuaScripts;
+
+    // --- Scene-level settings ---
+    FogSettings         Fog;
+    SkySettings         Sky;
+    PostProcessSettings PostProcess;
 
     // --- Hierarchy display order ---
     std::vector<int>                   RootOrder;      // root-level entity display order
@@ -345,6 +611,12 @@ public:
     std::vector<int>                   EntityPrefabSource;     // parallel: index into Prefabs (-1 = none)
     std::vector<std::string>           MeshAssets;             // OBJ file paths registered as assets
     std::vector<int>                   MeshAssetFolders;       // folder index per mesh asset (-1 = root)
+    std::vector<std::string>           ScriptAssets;           // Lua script file paths registered as assets
+    std::vector<int>                   ScriptAssetFolders;     // folder index per script asset (-1 = root)
+
+    // --- Maze system ---
+    std::vector<MazeGeneratorComponent> MazeGenerators;        // parallel per-entity
+    std::vector<RoomSet>                RoomSets;              // scene-level room set assets
 
     // --- Entity API ---
     Entity CreateEntity(const std::string& name = "Entity");

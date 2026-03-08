@@ -3,6 +3,7 @@
 #include "renderer/textureLoader.h"
 #include "editor/editorGizmo.h"
 #include <glad/glad.h>
+#include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -13,6 +14,17 @@ namespace tsu {
 unsigned int Renderer::s_ShaderProgram    = 0;
 unsigned int Renderer::s_GizmoShader      = 0;
 unsigned int Renderer::s_HUDShader        = 0;
+unsigned int Renderer::s_SkyShader        = 0;
+unsigned int Renderer::s_PostShader       = 0;
+unsigned int Renderer::s_SkyVAO           = 0;
+unsigned int Renderer::s_ScreenQuadVAO    = 0;
+unsigned int Renderer::s_PostFBO          = 0;
+unsigned int Renderer::s_PostColorTex     = 0;
+unsigned int Renderer::s_PostDepthRBO     = 0;
+int          Renderer::s_PostW            = 0;
+int          Renderer::s_PostH            = 0;
+Renderer::SkyLocs  Renderer::s_SkyLocs   = {};
+Renderer::PostLocs Renderer::s_PostLocs  = {};
 unsigned int Renderer::s_GizmoSphereVAO   = 0;
 unsigned int Renderer::s_GizmoSphereCount = 0;
 unsigned int Renderer::s_GizmoLineVAO     = 0;
@@ -36,6 +48,7 @@ float        Renderer::s_PointShadowFar      = 25.0f;
 
 Renderer::ShaderLocs Renderer::s_Locs = {};
 std::vector<glm::mat4> Renderer::s_CachedWorldMats;
+bool Renderer::s_EditorPostEnabled = false;
 
 // Build world matrix cache once per frame — avoids redundant recursive parent traversal
 void Renderer::CacheWorldMatrices(Scene& scene)
@@ -136,6 +149,18 @@ void Renderer::Init()
         uniform float     u_AOValue;
         uniform vec2      u_Tiling;
         uniform int       u_WorldSpaceUV;
+
+        // ---------- Lightmap (prebaked indirect, unit 5) ----------
+        uniform int       u_UseLightmap;
+        uniform sampler2D u_LightmapTex;  // unit 5
+        uniform vec4      u_LightmapST;   // xy=scale, zw=offset (world XZ → UV)
+
+        // ---------- Fog ----------
+        uniform int   u_FogType;     // 0=off 1=linear 2=exp 3=exp2
+        uniform vec3  u_FogColor;
+        uniform float u_FogDensity;
+        uniform float u_FogStart;
+        uniform float u_FogEnd;
 
         // ---------- Camera ----------
         uniform vec3      u_ViewPos;
@@ -319,9 +344,28 @@ void Renderer::Init()
             // Ambient
             vec3 kS_amb = FresnelRoughness(NdotV, F0, roughness);
             vec3 kD_amb = (1.0 - kS_amb) * (1.0 - metallic);
-            vec3 ambient = kD_amb * albedo * 0.08 * ao;
+            vec3 indirectColor;
+            if (u_UseLightmap != 0) {
+                vec2 lmUV = clamp(vFragPos.xz * u_LightmapST.xy + u_LightmapST.zw, 0.0, 1.0);
+                indirectColor = texture(u_LightmapTex, lmUV).rgb;
+            } else {
+                indirectColor = vec3(0.08 * ao);
+            }
+            vec3 ambient = kD_amb * albedo * indirectColor;
 
             vec3 color = ambient + Lo;
+
+            // ---- Atmospheric fog (applied in linear HDR space) ----
+            if (u_FogType != 0) {
+                float dist      = length(vFragPos - u_ViewPos);
+                float fogFactor = 0.0;
+                if      (u_FogType == 1) fogFactor = clamp((dist - u_FogStart) / (u_FogEnd - u_FogStart + 0.0001), 0.0, 1.0);
+                else if (u_FogType == 2) fogFactor = 1.0 - exp(-u_FogDensity * dist);
+                else if (u_FogType == 3) { float fd = u_FogDensity * dist; fogFactor = 1.0 - exp(-fd * fd); }
+                // Bring fog colour into linear space for blending
+                vec3 fogLinear = pow(max(u_FogColor, vec3(0.0)), vec3(2.2));
+                color = mix(color, fogLinear, fogFactor);
+            }
 
             // Tone-mapping: Reinhard
             color = color / (color + vec3(1.0));
@@ -366,6 +410,264 @@ void Renderer::Init()
     )");
 
     InitGizmoMeshes();
+
+    // ----------------------------------------------------------------
+    // Empty VAOs for fullscreen triangle draws (no vertex buffer needed)
+    // ----------------------------------------------------------------
+    glGenVertexArrays(1, &s_SkyVAO);
+    glGenVertexArrays(1, &s_ScreenQuadVAO);
+
+    // ----------------------------------------------------------------
+    // Procedural sky shader (fullscreen triangle, depth=0.9999)
+    // ----------------------------------------------------------------
+    s_SkyShader = LinkProgram(
+        // Vertex — emit a fullscreen triangle (3 verts, no VBO)
+        "#version 460 core\n"
+        "out vec2 vUV;\n"
+        "void main() {\n"
+        "  float x = float((gl_VertexID & 1) * 2) * 2.0 - 1.0;\n"
+        "  float y = float((gl_VertexID >> 1) * 2) * 2.0 - 1.0;\n"
+        "  vUV = vec2(x, y) * 0.5 + 0.5;\n"
+        "  gl_Position = vec4(x, y, 0.9999, 1.0);\n"
+        "}\n",
+        // Fragment — reconstruct world direction from NDC
+        "#version 460 core\n"
+        "in vec2 vUV;\n"
+        "out vec4 FragColor;\n"
+        "uniform mat4 u_InvProj;\n"
+        "uniform mat4 u_InvView;\n"
+        "uniform vec3 u_ZenithColor;\n"
+        "uniform vec3 u_HorizonColor;\n"
+        "uniform vec3 u_GroundColor;\n"
+        "uniform vec3 u_SunDir;\n"
+        "uniform vec3 u_SunColor;\n"
+        "uniform float u_SunSize;\n"
+        "uniform float u_SunBloom;\n"
+        "void main() {\n"
+        "  vec4 ndcPos  = vec4(vUV * 2.0 - 1.0, 1.0, 1.0);\n"
+        "  vec4 viewDir = u_InvProj * ndcPos;\n"
+        "  viewDir /= viewDir.w;\n"
+        "  vec3 dir = normalize(mat3(u_InvView) * viewDir.xyz);\n"
+        "  float up  = clamp(dir.y, 0.0, 1.0);\n"
+        "  float dwn = clamp(-dir.y, 0.0, 1.0);\n"
+        "  float hz  = pow(1.0 - abs(dir.y), 6.0);\n"
+        "  vec3 sky  = mix(u_HorizonColor, u_ZenithColor, up);\n"
+        "  sky       = mix(sky, u_GroundColor, dwn);\n"
+        "  sky       = mix(sky, u_HorizonColor, hz * 0.6);\n"
+        "  float sunD = dot(dir, normalize(u_SunDir));\n"
+        "  float disc = smoothstep(u_SunSize, u_SunSize + 0.002, sunD);\n"
+        "  float glow = smoothstep(u_SunSize - u_SunBloom, u_SunSize + u_SunBloom * 0.5, sunD);\n"
+        "  sky += u_SunColor * disc;\n"
+        "  sky += u_SunColor * glow * 0.25;\n"
+        "  // Tone-map + gamma\n"
+        "  sky = sky / (sky + vec3(1.0));\n"
+        "  sky = pow(sky, vec3(1.0/2.2));\n"
+        "  FragColor = vec4(sky, 1.0);\n"
+        "}\n"
+    );
+    {
+        auto SL = [](const char* n){ return glGetUniformLocation(s_SkyShader, n); };
+        s_SkyLocs.invProj   = SL("u_InvProj");
+        s_SkyLocs.invView   = SL("u_InvView");
+        s_SkyLocs.zenith    = SL("u_ZenithColor");
+        s_SkyLocs.horizon   = SL("u_HorizonColor");
+        s_SkyLocs.ground    = SL("u_GroundColor");
+        s_SkyLocs.sunDir    = SL("u_SunDir");
+        s_SkyLocs.sunColor  = SL("u_SunColor");
+        s_SkyLocs.sunSize   = SL("u_SunSize");
+        s_SkyLocs.sunBloom  = SL("u_SunBloom");
+    }
+
+    // ----------------------------------------------------------------
+    // Post-process shader (fullscreen quad)
+    // ----------------------------------------------------------------
+    s_PostShader = LinkProgram(
+        // Vertex
+        "#version 460 core\n"
+        "out vec2 vUV;\n"
+        "void main() {\n"
+        "  float x = float((gl_VertexID & 1) * 2) * 2.0 - 1.0;\n"
+        "  float y = float((gl_VertexID >> 1) * 2) * 2.0 - 1.0;\n"
+        "  vUV = vec2(x, y) * 0.5 + 0.5;\n"
+        "  gl_Position = vec4(x, y, 0.0, 1.0);\n"
+        "}\n",
+        // Fragment
+        "#version 460 core\n"
+        "in  vec2 vUV;\n"
+        "out vec4 FragColor;\n"
+        "uniform sampler2D u_SceneTex;\n"
+        "uniform vec2  u_TexelSize;\n"
+        "// Bloom\n"
+        "uniform int   u_BloomEnabled;\n"
+        "uniform float u_BloomThreshold;\n"
+        "uniform float u_BloomIntensity;\n"
+        "uniform float u_BloomRadius;\n"
+        "// Vignette\n"
+        "uniform int   u_VignetteEnabled;\n"
+        "uniform float u_VignetteRadius;\n"
+        "uniform float u_VignetteStrength;\n"
+        "// Film grain\n"
+        "uniform int   u_GrainEnabled;\n"
+        "uniform float u_GrainStrength;\n"
+        "uniform float u_GrainTime;\n"
+        "// Chromatic aberration\n"
+        "uniform int   u_ChromaEnabled;\n"
+        "uniform float u_ChromaStrength;\n"
+        "// Color grading\n"
+        "uniform float u_Exposure;\n"
+        "uniform float u_Saturation;\n"
+        "uniform float u_Contrast;\n"
+        "uniform float u_Brightness;\n"
+        "// Sharpen\n"
+        "uniform int   u_SharpenEnabled;\n"
+        "uniform float u_SharpenStrength;\n"
+        "// Lens distortion\n"
+        "uniform int   u_LensDistortEnabled;\n"
+        "uniform float u_LensDistortStrength;\n"
+        "// Sepia\n"
+        "uniform int   u_SepiaEnabled;\n"
+        "uniform float u_SepiaStrength;\n"
+        "// Posterize\n"
+        "uniform int   u_PosterizeEnabled;\n"
+        "uniform float u_PosterizeLevels;\n"
+        "// Scanlines\n"
+        "uniform int   u_ScanlinesEnabled;\n"
+        "uniform float u_ScanlinesStrength;\n"
+        "uniform float u_ScanlinesFrequency;\n"
+        "// Pixelate\n"
+        "uniform int   u_PixelateEnabled;\n"
+        "uniform float u_PixelateSize;\n"
+        "float rand(vec2 co){ return fract(sin(dot(co, vec2(12.9898,78.233))) * 43758.5453); }\n"
+        "void main() {\n"
+        "  vec2 uv = vUV;\n"
+        // Pixelate (applied to UV before sampling)
+        "  if (u_PixelateEnabled != 0) {\n"
+        "    vec2 res = vec2(1.0) / u_TexelSize;\n"
+        "    float px = max(1.0, u_PixelateSize);\n"
+        "    uv = floor(uv * res / px) * px / res;\n"
+        "  }\n"
+        // Lens distortion (barrel / pincushion)
+        "  if (u_LensDistortEnabled != 0) {\n"
+        "    vec2 p = uv * 2.0 - 1.0;\n"
+        "    float r2 = dot(p, p);\n"
+        "    p *= 1.0 + u_LensDistortStrength * r2;\n"
+        "    uv = p * 0.5 + 0.5;\n"
+        "  }\n"
+        "  vec3 col;\n"
+        // Chromatic aberration
+        "  if (u_ChromaEnabled != 0) {\n"
+        "    vec2 off = (uv - 0.5) * u_ChromaStrength;\n"
+        "    col.r = texture(u_SceneTex, uv + off).r;\n"
+        "    col.g = texture(u_SceneTex, uv      ).g;\n"
+        "    col.b = texture(u_SceneTex, uv - off).b;\n"
+        "  } else {\n"
+        "    col = texture(u_SceneTex, uv).rgb;\n"
+        "  }\n"
+        // Clamp UV-out-of-bounds to black
+        "  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) col = vec3(0.0);\n"
+        // Sharpen (3x3 unsharp mask)
+        "  if (u_SharpenEnabled != 0) {\n"
+        "    vec3 blur = vec3(0.0);\n"
+        "    blur += texture(u_SceneTex, uv + vec2(-1,-1)*u_TexelSize).rgb;\n"
+        "    blur += texture(u_SceneTex, uv + vec2( 0,-1)*u_TexelSize).rgb;\n"
+        "    blur += texture(u_SceneTex, uv + vec2( 1,-1)*u_TexelSize).rgb;\n"
+        "    blur += texture(u_SceneTex, uv + vec2(-1, 0)*u_TexelSize).rgb;\n"
+        "    blur += texture(u_SceneTex, uv                           ).rgb;\n"
+        "    blur += texture(u_SceneTex, uv + vec2( 1, 0)*u_TexelSize).rgb;\n"
+        "    blur += texture(u_SceneTex, uv + vec2(-1, 1)*u_TexelSize).rgb;\n"
+        "    blur += texture(u_SceneTex, uv + vec2( 0, 1)*u_TexelSize).rgb;\n"
+        "    blur += texture(u_SceneTex, uv + vec2( 1, 1)*u_TexelSize).rgb;\n"
+        "    blur /= 9.0;\n"
+        "    col = col + (col - blur) * u_SharpenStrength;\n"
+        "  }\n"
+        // Bloom (5x5 bright-pass)
+        "  if (u_BloomEnabled != 0) {\n"
+        "    vec3 bloom = vec3(0.0);\n"
+        "    float wt = 0.0;\n"
+        "    for (int bx = -2; bx <= 2; bx++) {\n"
+        "      for (int by = -2; by <= 2; by++) {\n"
+        "        vec2 uv2 = uv + vec2(bx, by) * u_TexelSize * u_BloomRadius;\n"
+        "        vec3 samp = texture(u_SceneTex, uv2).rgb;\n"
+        "        float lum = dot(samp, vec3(0.2126, 0.7152, 0.0722));\n"
+        "        float excess = max(0.0, lum - u_BloomThreshold);\n"
+        "        bloom += samp * excess;\n"
+        "        wt += 1.0;\n"
+        "      }\n"
+        "    }\n"
+        "    col += bloom / wt * u_BloomIntensity * 8.0;\n"
+        "  }\n"
+        // Exposure
+        "  col *= max(u_Exposure, 0.01);\n"
+        // Color grading
+        "  col += u_Brightness;\n"
+        "  col = (col - 0.5) * u_Contrast + 0.5;\n"
+        "  float luma = dot(col, vec3(0.2126, 0.7152, 0.0722));\n"
+        "  col = mix(vec3(luma), col, u_Saturation);\n"
+        // Sepia
+        "  if (u_SepiaEnabled != 0) {\n"
+        "    float grey = dot(col, vec3(0.299, 0.587, 0.114));\n"
+        "    vec3 sepia = vec3(grey * 1.2, grey * 1.0, grey * 0.8);\n"
+        "    col = mix(col, sepia, u_SepiaStrength);\n"
+        "  }\n"
+        // Posterize
+        "  if (u_PosterizeEnabled != 0) {\n"
+        "    float levels = max(2.0, u_PosterizeLevels);\n"
+        "    col = floor(col * levels) / levels;\n"
+        "  }\n"
+        // Film grain
+        "  if (u_GrainEnabled != 0) {\n"
+        "    float noise = rand(uv + fract(u_GrainTime)) * 2.0 - 1.0;\n"
+        "    col += noise * u_GrainStrength;\n"
+        "  }\n"
+        // Scanlines
+        "  if (u_ScanlinesEnabled != 0) {\n"
+        "    float line = sin(uv.y * u_ScanlinesFrequency * 3.14159265) * 0.5 + 0.5;\n"
+        "    col *= mix(1.0 - u_ScanlinesStrength, 1.0, line);\n"
+        "  }\n"
+        // Vignette
+        "  if (u_VignetteEnabled != 0) {\n"
+        "    vec2 uvc = vUV - 0.5;\n"
+        "    float vig = 1.0 - smoothstep(u_VignetteRadius * 0.5, u_VignetteRadius, length(uvc));\n"
+        "    col *= mix(1.0, vig, u_VignetteStrength);\n"
+        "  }\n"
+        "  col = clamp(col, 0.0, 1.0);\n"
+        "  FragColor = vec4(col, 1.0);\n"
+        "}\n"
+    );
+    {
+        auto PL = [](const char* n){ return glGetUniformLocation(s_PostShader, n); };
+        s_PostLocs.sceneTex              = PL("u_SceneTex");
+        s_PostLocs.texelSize             = PL("u_TexelSize");
+        s_PostLocs.bloomEnabled          = PL("u_BloomEnabled");
+        s_PostLocs.bloomThreshold        = PL("u_BloomThreshold");
+        s_PostLocs.bloomIntensity        = PL("u_BloomIntensity");
+        s_PostLocs.bloomRadius           = PL("u_BloomRadius");
+        s_PostLocs.vignetteEnabled       = PL("u_VignetteEnabled");
+        s_PostLocs.vignetteRadius        = PL("u_VignetteRadius");
+        s_PostLocs.vignetteStrength      = PL("u_VignetteStrength");
+        s_PostLocs.grainEnabled          = PL("u_GrainEnabled");
+        s_PostLocs.grainStrength         = PL("u_GrainStrength");
+        s_PostLocs.grainTime             = PL("u_GrainTime");
+        s_PostLocs.chromaEnabled         = PL("u_ChromaEnabled");
+        s_PostLocs.chromaStrength        = PL("u_ChromaStrength");
+        s_PostLocs.exposure              = PL("u_Exposure");
+        s_PostLocs.saturation            = PL("u_Saturation");
+        s_PostLocs.contrast              = PL("u_Contrast");
+        s_PostLocs.brightness            = PL("u_Brightness");
+        s_PostLocs.sharpenEnabled        = PL("u_SharpenEnabled");
+        s_PostLocs.sharpenStrength       = PL("u_SharpenStrength");
+        s_PostLocs.lensDistortEnabled    = PL("u_LensDistortEnabled");
+        s_PostLocs.lensDistortStrength   = PL("u_LensDistortStrength");
+        s_PostLocs.sepiaEnabled          = PL("u_SepiaEnabled");
+        s_PostLocs.sepiaStrength         = PL("u_SepiaStrength");
+        s_PostLocs.posterizeEnabled      = PL("u_PosterizeEnabled");
+        s_PostLocs.posterizeLevels       = PL("u_PosterizeLevels");
+        s_PostLocs.scanlinesEnabled      = PL("u_ScanlinesEnabled");
+        s_PostLocs.scanlinesStrength     = PL("u_ScanlinesStrength");
+        s_PostLocs.scanlinesFrequency    = PL("u_ScanlinesFrequency");
+        s_PostLocs.pixelateEnabled       = PL("u_PixelateEnabled");
+        s_PostLocs.pixelateSize          = PL("u_PixelateSize");
+    }
 
     // ----------------------------------------------------------------
     // Shadow map: depth-only shader + FBO (1024x1024)
@@ -483,6 +785,14 @@ void Renderer::Init()
         s_Locs.aoValue       = L("u_AOValue");
         s_Locs.tiling        = L("u_Tiling");
         s_Locs.worldSpaceUV  = L("u_WorldSpaceUV");
+        s_Locs.useLightmap   = L("u_UseLightmap");
+        s_Locs.lightmapTex   = L("u_LightmapTex");
+        s_Locs.lightmapST    = L("u_LightmapST");
+        s_Locs.fogType       = L("u_FogType");
+        s_Locs.fogColor      = L("u_FogColor");
+        s_Locs.fogDensity    = L("u_FogDensity");
+        s_Locs.fogStart      = L("u_FogStart");
+        s_Locs.fogEnd        = L("u_FogEnd");
         char nb[64];
         for (int i = 0; i < 8; i++) {
             auto& ll = s_Locs.lights[i];
@@ -540,6 +850,7 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
     glUniform1i(L.normalMap, 2);   // normal  → unit 2
     glUniform1i(L.ormMap,    3);   // ORM     → unit 3
     glUniform1i(L.pointShadowMap, 4); // point shadow cubemap → unit 4
+    glUniform1i(L.lightmapTex,   5); // lightmap            → unit 5
 
     // ---- Camera world position ----
     glm::vec3 viewPos = glm::vec3(glm::inverse(view)[3]);
@@ -576,6 +887,13 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
     }
     glActiveTexture(GL_TEXTURE0);
 
+    // ---- Fog uniforms ----
+    glUniform1i(L.fogType,    (int)scene.Fog.Type);
+    glUniform3fv(L.fogColor,  1, &scene.Fog.Color[0]);
+    glUniform1f(L.fogDensity, scene.Fog.Density);
+    glUniform1f(L.fogStart,   scene.Fog.Start);
+    glUniform1f(L.fogEnd,     scene.Fog.End);
+
     // ---- Gather active lights (up to 8) ----
     auto kelvinRGB = [](float T) -> glm::vec3 {
         T = glm::clamp(T, 1000.0f, 12000.0f) / 100.0f;
@@ -611,12 +929,49 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
         glUniform1i(L.lights[li].type, 0);
     glUniform1i(L.numLights, nl);
 
+    // ---- Build frustum planes (Gribb-Hartmann from VP matrix) ----
+    struct Plane { glm::vec3 n; float d; };
+    Plane frustum[6];
+    {
+        glm::mat4 vp = proj * view;
+        // Rows of vp
+        glm::vec4 r0(vp[0][0], vp[1][0], vp[2][0], vp[3][0]);
+        glm::vec4 r1(vp[0][1], vp[1][1], vp[2][1], vp[3][1]);
+        glm::vec4 r2(vp[0][2], vp[1][2], vp[2][2], vp[3][2]);
+        glm::vec4 r3(vp[0][3], vp[1][3], vp[2][3], vp[3][3]);
+        auto makePlane = [](glm::vec4 p) -> Plane {
+            float len = glm::length(glm::vec3(p));
+            return { glm::vec3(p) / len, p.w / len };
+        };
+        frustum[0] = makePlane(r3 + r0); // Left
+        frustum[1] = makePlane(r3 - r0); // Right
+        frustum[2] = makePlane(r3 + r1); // Bottom
+        frustum[3] = makePlane(r3 - r1); // Top
+        frustum[4] = makePlane(r3 + r2); // Near
+        frustum[5] = makePlane(r3 - r2); // Far
+    }
+
     // ---- Draw entities ----
     for (size_t i = 0; i < scene.Transforms.size(); i++)
     {
         if (!scene.MeshRenderers[i].MeshPtr) continue;
         glm::mat4 model = s_CachedWorldMats[(int)i];
         glm::mat4 mvp   = proj * view * model;
+
+        // ---- Frustum cull: conservative bounding sphere ----
+        {
+            glm::vec3 wpos = glm::vec3(model[3]);
+            const auto& sc = scene.Transforms[i].Scale;
+            float radius   = glm::max(glm::max(glm::abs(sc.x), glm::abs(sc.y)), glm::abs(sc.z)) * 1.75f;
+            bool outside = false;
+            for (int fp = 0; fp < 6; fp++) {
+                if (glm::dot(frustum[fp].n, wpos) + frustum[fp].d + radius < 0.0f) {
+                    outside = true;
+                    break;
+                }
+            }
+            if (outside) continue;
+        }
 
         // ---- Resolve material ----
         glm::vec3    matCol(1.0f, 1.0f, 1.0f);
@@ -699,10 +1054,25 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
         glUniform3fv(L.materialColor, 1, &matCol[0]);
         glUniformMatrix4fv(L.mvp,   1, GL_FALSE, &mvp[0][0]);
         glUniformMatrix4fv(L.model, 1, GL_FALSE, &model[0][0]);
+
+        // ---- Bind lightmap (unit 5) ----
+        {
+            const auto& mr = scene.MeshRenderers[i];
+            if (mr.LightmapID != 0) {
+                glUniform1i(L.useLightmap, 1);
+                glUniform4fv(L.lightmapST, 1, &mr.LightmapST[0]);
+                glActiveTexture(GL_TEXTURE5);
+                glBindTexture(GL_TEXTURE_2D, mr.LightmapID);
+                glActiveTexture(GL_TEXTURE0);
+            } else {
+                glUniform1i(L.useLightmap, 0);
+            }
+        }
+
         scene.MeshRenderers[i].MeshPtr->Draw();
     }
     // Unbind texture units (2D + cubemap)
-    for (int u : {0, 1, 2, 3}) {
+    for (int u : {0, 1, 2, 3, 5}) {
         glActiveTexture(GL_TEXTURE0 + u);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
@@ -839,6 +1209,34 @@ void Renderer::DrawColliderGizmos(Scene& scene, const glm::mat4& view, const glm
                 }
             }
         }
+    }
+
+    // --- Trigger Volume wireframes (yellow = inactive, bright green = player inside) ---
+    for (int i = 0; i < (int)scene.Triggers.size(); i++)
+    {
+        const auto& tr = scene.Triggers[i];
+        if (!tr.ShowTrigger || !tr.Active) continue;
+
+        glm::mat4 wm = (i < (int)s_CachedWorldMats.size()) ? s_CachedWorldMats[i] : scene.GetEntityWorldMatrix(i);
+        glm::mat4 rm(1.0f);
+        rm[0] = glm::vec4(glm::normalize(glm::vec3(wm[0])), 0.0f);
+        rm[1] = glm::vec4(glm::normalize(glm::vec3(wm[1])), 0.0f);
+        rm[2] = glm::vec4(glm::normalize(glm::vec3(wm[2])), 0.0f);
+        glm::vec3 wp = glm::vec3(wm[3]) + glm::vec3(rm * glm::vec4(tr.Offset, 0.0f));
+        auto tW = [&](glm::vec3 l) { return wp + glm::vec3(rm * glm::vec4(l, 0.0f)); };
+
+        float cr = tr._PlayerInside ? 0.1f : 1.0f;
+        float cg = tr._PlayerInside ? 1.0f : 0.9f;
+        float cb = tr._PlayerInside ? 0.1f : 0.0f;
+        glm::vec3 h = tr.Size;
+        glm::vec3 corners[8] = {
+            tW({-h.x,-h.y,-h.z}), tW({+h.x,-h.y,-h.z}),
+            tW({+h.x,-h.y,+h.z}), tW({-h.x,-h.y,+h.z}),
+            tW({-h.x,+h.y,-h.z}), tW({+h.x,+h.y,-h.z}),
+            tW({+h.x,+h.y,+h.z}), tW({-h.x,+h.y,+h.z}),
+        };
+        int te[12][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
+        for (auto& e : te) addLine(corners[e[0]], corners[e[1]], cr, cg, cb);
     }
 
     if (!verts.empty())
@@ -1039,6 +1437,131 @@ void Renderer::DrawGizmos(Scene& scene, const glm::mat4& view, const glm::mat4& 
     glEnable(GL_DEPTH_TEST);
 }
 
+// ----------------------------------------------------------------
+// ResizePostFBO — (re)creates the HDR FBO when size changes
+// ----------------------------------------------------------------
+void Renderer::ResizePostFBO(int winW, int winH)
+{
+    if (s_PostW == winW && s_PostH == winH) return;
+    s_PostW = winW;
+    s_PostH = winH;
+
+    if (s_PostFBO) glDeleteFramebuffers(1, &s_PostFBO);
+    if (s_PostColorTex) glDeleteTextures(1, &s_PostColorTex);
+    if (s_PostDepthRBO) glDeleteRenderbuffers(1, &s_PostDepthRBO);
+
+    glGenFramebuffers(1, &s_PostFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, s_PostFBO);
+
+    // HDR colour attachment (16f for bloom headroom)
+    glGenTextures(1, &s_PostColorTex);
+    glBindTexture(GL_TEXTURE_2D, s_PostColorTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, winW, winH, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_PostColorTex, 0);
+
+    // Depth renderbuffer
+    glGenRenderbuffers(1, &s_PostDepthRBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, s_PostDepthRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, winW, winH);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                              GL_RENDERBUFFER, s_PostDepthRBO);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ----------------------------------------------------------------
+// DrawSky — procedural gradient sky rendered before opaque pass
+// ----------------------------------------------------------------
+void Renderer::DrawSky(const Scene& scene, const glm::mat4& view, const glm::mat4& proj)
+{
+    const auto& sky = scene.Sky;
+    if (!sky.Enabled) return;
+
+    glUseProgram(s_SkyShader);
+    glm::mat4 invProj = glm::inverse(proj);
+    glm::mat4 invView = glm::inverse(view);
+    glUniformMatrix4fv(s_SkyLocs.invProj, 1, GL_FALSE, &invProj[0][0]);
+    glUniformMatrix4fv(s_SkyLocs.invView, 1, GL_FALSE, &invView[0][0]);
+    glUniform3fv(s_SkyLocs.zenith,   1, &sky.ZenithColor[0]);
+    glUniform3fv(s_SkyLocs.horizon,  1, &sky.HorizonColor[0]);
+    glUniform3fv(s_SkyLocs.ground,   1, &sky.GroundColor[0]);
+    glm::vec3 sunNorm = glm::normalize(sky.SunDirection);
+    glUniform3fv(s_SkyLocs.sunDir,   1, &sunNorm[0]);
+    glUniform3fv(s_SkyLocs.sunColor, 1, &sky.SunColor[0]);
+    glUniform1f(s_SkyLocs.sunSize,   cosf(sky.SunSize));
+    glUniform1f(s_SkyLocs.sunBloom,  sky.SunBloom);
+
+    glDepthMask(GL_FALSE);
+    glDepthFunc(GL_LEQUAL);
+    glBindVertexArray(s_SkyVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+}
+
+// ----------------------------------------------------------------
+// RenderPostProcess — blit HDR FBO to default framebuffer with effects
+// ----------------------------------------------------------------
+void Renderer::RenderPostProcess(const Scene& scene, int winW, int winH)
+{
+    const auto& pp = scene.PostProcess;
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, winW, winH);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glDisable(GL_DEPTH_TEST);
+
+    glUseProgram(s_PostShader);
+    // Bind scene texture
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, s_PostColorTex);
+    glUniform1i(s_PostLocs.sceneTex, 0);
+
+    glm::vec2 ts(1.0f / winW, 1.0f / winH);
+    glUniform2fv(s_PostLocs.texelSize, 1, &ts[0]);
+
+    glUniform1i(s_PostLocs.bloomEnabled,     pp.BloomEnabled    ? 1 : 0);
+    glUniform1f(s_PostLocs.bloomThreshold,   pp.BloomThreshold);
+    glUniform1f(s_PostLocs.bloomIntensity,   pp.BloomIntensity);
+    glUniform1f(s_PostLocs.bloomRadius,      pp.BloomRadius);
+    glUniform1i(s_PostLocs.vignetteEnabled,  pp.VignetteEnabled  ? 1 : 0);
+    glUniform1f(s_PostLocs.vignetteRadius,   pp.VignetteRadius);
+    glUniform1f(s_PostLocs.vignetteStrength, pp.VignetteStrength);
+    glUniform1i(s_PostLocs.grainEnabled,     pp.GrainEnabled     ? 1 : 0);
+    glUniform1f(s_PostLocs.grainStrength,    pp.GrainStrength);
+    glUniform1f(s_PostLocs.grainTime,        (float)glfwGetTime());
+    glUniform1i(s_PostLocs.chromaEnabled,    pp.ChromaEnabled    ? 1 : 0);
+    glUniform1f(s_PostLocs.chromaStrength,   pp.ChromaStrength);
+    glUniform1f(s_PostLocs.exposure,         pp.ColorGradeEnabled ? pp.Exposure    : 1.0f);
+    glUniform1f(s_PostLocs.saturation,       pp.ColorGradeEnabled ? pp.Saturation  : 1.0f);
+    glUniform1f(s_PostLocs.contrast,         pp.ColorGradeEnabled ? pp.Contrast    : 1.0f);
+    glUniform1f(s_PostLocs.brightness,       pp.ColorGradeEnabled ? pp.Brightness  : 0.0f);
+    // New effects
+    glUniform1i(s_PostLocs.sharpenEnabled,       pp.SharpenEnabled        ? 1 : 0);
+    glUniform1f(s_PostLocs.sharpenStrength,      pp.SharpenStrength);
+    glUniform1i(s_PostLocs.lensDistortEnabled,   pp.LensDistortEnabled    ? 1 : 0);
+    glUniform1f(s_PostLocs.lensDistortStrength,  pp.LensDistortStrength);
+    glUniform1i(s_PostLocs.sepiaEnabled,         pp.SepiaEnabled          ? 1 : 0);
+    glUniform1f(s_PostLocs.sepiaStrength,        pp.SepiaStrength);
+    glUniform1i(s_PostLocs.posterizeEnabled,     pp.PosterizeEnabled      ? 1 : 0);
+    glUniform1f(s_PostLocs.posterizeLevels,      pp.PosterizeLevels);
+    glUniform1i(s_PostLocs.scanlinesEnabled,     pp.ScanlinesEnabled      ? 1 : 0);
+    glUniform1f(s_PostLocs.scanlinesStrength,    pp.ScanlinesStrength);
+    glUniform1f(s_PostLocs.scanlinesFrequency,   pp.ScanlinesFrequency);
+    glUniform1i(s_PostLocs.pixelateEnabled,      pp.PixelateEnabled       ? 1 : 0);
+    glUniform1f(s_PostLocs.pixelateSize,         pp.PixelateSize);
+
+    glBindVertexArray(s_ScreenQuadVAO);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glBindVertexArray(0);
+
+    glEnable(GL_DEPTH_TEST);
+}
 
 // ----------------------------------------------------------------
 // RenderSceneEditor
@@ -1053,12 +1576,24 @@ void Renderer::RenderSceneEditor(Scene& scene, const EditorCamera& camera, int w
     glm::mat4 projection = camera.GetProjection(aspect);
 
     RenderShadowPass(scene);
+
+    bool usePost = s_EditorPostEnabled && scene.PostProcess.Enabled;
+    if (usePost)
+    {
+        ResizePostFBO(winW, winH);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_PostFBO);
+    }
+
     glViewport(0, 0, winW, winH);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    DrawSky(scene, view, projection);
     DrawScene(scene, view, projection, s_ShaderProgram);
     DrawColliderGizmos(scene, view, projection);
     DrawGizmos(scene, view, projection);
+
+    if (usePost)
+        RenderPostProcess(scene, winW, winH);
 }
 
 // ----------------------------------------------------------------
@@ -1089,10 +1624,22 @@ void Renderer::RenderSceneGame(Scene& scene, int winW, int winH)
     glm::mat4 proj      = gc.GetProjection(aspect);
 
     RenderShadowPass(scene);
+
+    bool usePost = scene.PostProcess.Enabled;
+    if (usePost)
+    {
+        ResizePostFBO(winW, winH);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_PostFBO);
+    }
+
     glViewport(0, 0, winW, winH);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+    DrawSky(scene, view, proj);
     DrawScene(scene, view, proj, s_ShaderProgram);
+
+    if (usePost)
+        RenderPostProcess(scene, winW, winH);
 }
 
 // ----------------------------------------------------------------
@@ -1617,6 +2164,221 @@ bool Renderer::ToolbarClickPause(int x, int y, int winW, int winH, float topOffs
     const float pauseX1 = pauseX0 + btnW;
     return (float)x >= pauseX0 && (float)x <= pauseX1 &&
            (float)y >= topOffsetPx && (float)y <= (topOffsetPx + barH);
+}
+
+// ----------------------------------------------------------------
+// DrawRoomBlockWireframes — wireframe cubes for room blocks + door markers
+// ----------------------------------------------------------------
+void Renderer::DrawRoomBlockWireframes(const RoomTemplate& room,
+                                        int selectedBlock, int hoveredBlock,
+                                        const EditorCamera& cam,
+                                        int winW, int winH)
+{
+    struct Vtx { float x,y,z, nx,ny,nz, r,g,b; };
+    static unsigned int rVAO = 0, rVBO = 0;
+    if (!rVAO) { glGenVertexArrays(1, &rVAO); glGenBuffers(1, &rVBO); }
+
+    float aspect = (float)winW / std::max((float)winH, 1.0f);
+    glm::mat4 view = cam.GetViewMatrix();
+    glm::mat4 proj = cam.GetProjection(aspect);
+    glm::mat4 mvp = proj * view;
+
+    glUseProgram(s_GizmoShader);
+    unsigned int mvpLoc   = glGetUniformLocation(s_GizmoShader, "u_MVP");
+    unsigned int alphaLoc = glGetUniformLocation(s_GizmoShader, "u_Alpha");
+    glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, &mvp[0][0]);
+    glUniform1f(alphaLoc, 0.85f);
+    glEnable(GL_DEPTH_TEST);
+    glLineWidth(2.0f);
+
+    std::vector<Vtx> verts;
+
+    auto addLine = [&](glm::vec3 a, glm::vec3 b, float r, float g, float bv) {
+        verts.push_back({a.x,a.y,a.z, 0,1,0, r,g,bv});
+        verts.push_back({b.x,b.y,b.z, 0,1,0, r,g,bv});
+    };
+
+    auto addWireCube = [&](glm::vec3 center, glm::vec3 half, float r, float g, float b) {
+        glm::vec3 c[8] = {
+            center + glm::vec3(-half.x, -half.y, -half.z),
+            center + glm::vec3(+half.x, -half.y, -half.z),
+            center + glm::vec3(+half.x, -half.y, +half.z),
+            center + glm::vec3(-half.x, -half.y, +half.z),
+            center + glm::vec3(-half.x, +half.y, -half.z),
+            center + glm::vec3(+half.x, +half.y, -half.z),
+            center + glm::vec3(+half.x, +half.y, +half.z),
+            center + glm::vec3(-half.x, +half.y, +half.z),
+        };
+        int edges[12][2] = {{0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},{0,4},{1,5},{2,6},{3,7}};
+        for (auto& e : edges) addLine(c[e[0]], c[e[1]], r, g, b);
+    };
+
+    // Draw wireframe for each block:
+    //   selected  = yellow,        hovered = bright cyan,   normal = dim cyan
+    for (int bi = 0; bi < (int)room.Blocks.size(); ++bi)
+    {
+        const auto& blk = room.Blocks[bi];
+        glm::vec3 center((float)blk.X, (float)blk.Y, (float)blk.Z);
+        glm::vec3 half(0.48f, 0.48f, 0.48f);
+        if      (bi == selectedBlock) addWireCube(center, half, 1.00f, 0.88f, 0.05f); // yellow
+        else if (bi == hoveredBlock)  addWireCube(center, half, 0.45f, 1.00f, 1.00f); // bright cyan
+        else                          addWireCube(center, half, 0.20f, 0.70f, 1.00f); // normal cyan
+    }
+
+    // Build filled red quads for doors (separate buffer, GL_TRIANGLES)
+    std::vector<Vtx> fillVerts;
+    for (const auto& dr : room.Doors)
+    {
+        float bx = (float)dr.BlockX, by = (float)dr.BlockY, bz = (float)dr.BlockZ;
+        constexpr float h   = 0.14f;   // half-size of the mini door square
+        constexpr float eps = 0.502f;  // pushed just off the block face
+        glm::vec3 c0, c1, c2, c3;
+        if (dr.Face == DoorFace::PosX) {
+            c0={bx+eps,by-h,bz-h}; c1={bx+eps,by+h,bz-h};
+            c2={bx+eps,by+h,bz+h}; c3={bx+eps,by-h,bz+h};
+        } else if (dr.Face == DoorFace::NegX) {
+            c0={bx-eps,by-h,bz+h}; c1={bx-eps,by+h,bz+h};
+            c2={bx-eps,by+h,bz-h}; c3={bx-eps,by-h,bz-h};
+        } else if (dr.Face == DoorFace::PosZ) {
+            c0={bx+h,by-h,bz+eps}; c1={bx+h,by+h,bz+eps};
+            c2={bx-h,by+h,bz+eps}; c3={bx-h,by-h,bz+eps};
+        } else { // NegZ
+            c0={bx-h,by-h,bz-eps}; c1={bx-h,by+h,bz-eps};
+            c2={bx+h,by+h,bz-eps}; c3={bx+h,by-h,bz-eps};
+        }
+        // Two triangles (CCW) — bright red
+        auto addTri = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c) {
+            fillVerts.push_back({a.x,a.y,a.z, 0,1,0, 1.0f,0.08f,0.08f});
+            fillVerts.push_back({b.x,b.y,b.z, 0,1,0, 1.0f,0.08f,0.08f});
+            fillVerts.push_back({c.x,c.y,c.z, 0,1,0, 1.0f,0.08f,0.08f});
+        };
+        addTri(c0,c1,c2); addTri(c0,c2,c3);
+    }
+
+    if (!verts.empty())
+    {
+        glBindVertexArray(rVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, rVBO);
+        glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vtx), verts.data(), GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)(3*sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)(6*sizeof(float)));
+        glDrawArrays(GL_LINES, 0, (int)verts.size());
+        glBindVertexArray(0);
+    }
+
+    // Draw filled door quads (semi-transparent red)
+    if (!fillVerts.empty())
+    {
+        static unsigned int fVAO = 0, fVBO = 0;
+        if (!fVAO) { glGenVertexArrays(1, &fVAO); glGenBuffers(1, &fVBO); }
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glUniform1f(alphaLoc, 0.68f);
+        glBindVertexArray(fVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, fVBO);
+        glBufferData(GL_ARRAY_BUFFER, fillVerts.size() * sizeof(Vtx), fillVerts.data(), GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)(3*sizeof(float)));
+        glEnableVertexAttribArray(2);
+        glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)(6*sizeof(float)));
+        glDrawArrays(GL_TRIANGLES, 0, (int)fillVerts.size());
+        glDisable(GL_BLEND);
+        glBindVertexArray(0);
+    }
+
+    glLineWidth(1.0f);
+}
+
+// ----------------------------------------------------------------
+// DrawRoomExpansionArrows — per-block exposed face arrow gizmos
+// dir: 0=+X 1=-X 2=+Z 3=-Z 4=+Y 5=-Y
+// shiftMode: arrows invert direction + turn red (erase indication)
+// ----------------------------------------------------------------
+void Renderer::DrawRoomExpansionArrows(const BlockFaceArrow* arrows, int arrowCount,
+                                        int hoveredIdx, bool shiftMode,
+                                        const EditorCamera& cam,
+                                        int winW, int winH)
+{
+    if (arrowCount <= 0) return;
+
+    // Face normal and perpendicular vectors for each direction
+    static const glm::vec3 faceN[6] = {{1,0,0},{-1,0,0},{0,0,1},{0,0,-1},{0,1,0},{0,-1,0}};
+    static const glm::vec3 perpA[6] = {{0,1,0},{0,1,0},{0,1,0},{0,1,0},{1,0,0},{1,0,0}};
+    static const glm::vec3 perpB[6] = {{0,0,1},{0,0,1},{1,0,0},{1,0,0},{0,0,1},{0,0,1}};
+
+    struct Vtx { float x,y,z, nx,ny,nz, r,g,b; };
+    static unsigned int aVAO = 0, aVBO = 0;
+    if (!aVAO) { glGenVertexArrays(1, &aVAO); glGenBuffers(1, &aVBO); }
+
+    std::vector<Vtx> verts;
+    verts.reserve(arrowCount * 10);
+
+    auto addLine = [&](glm::vec3 a, glm::vec3 b, float r, float g, float bv) {
+        verts.push_back({a.x,a.y,a.z, 0,1,0, r,g,bv});
+        verts.push_back({b.x,b.y,b.z, 0,1,0, r,g,bv});
+    };
+
+    for (int ai = 0; ai < arrowCount; ++ai)
+    {
+        const auto& fa = arrows[ai];
+        if (fa.dir < 0 || fa.dir > 5) continue;
+        bool hov = (ai == hoveredIdx);
+
+        // In shift (erase) mode the arrow inverts to point INTO the block
+        float sign = shiftMode ? -1.0f : 1.0f;
+        glm::vec3 fn  = faceN[fa.dir] * sign;
+        glm::vec3 tip = fa.pos + fn * 0.28f;
+        glm::vec3 pa  = perpA[fa.dir] * 0.13f;
+        glm::vec3 pb  = perpB[fa.dir] * 0.13f;
+
+        float r, g, b;
+        if (shiftMode)
+        { r = hov ? 1.0f : 0.85f;  g = hov ? 0.0f : 0.12f;  b = 0.08f; }
+        else
+        { r = hov ? 1.0f : 0.85f;  g = hov ? 1.0f : 0.85f;  b = hov ? 0.0f : 0.08f; }
+
+        // 4 arms from ring to tip
+        addLine(fa.pos + pa, tip, r, g, b);
+        addLine(fa.pos - pa, tip, r, g, b);
+        addLine(fa.pos + pb, tip, r, g, b);
+        addLine(fa.pos - pb, tip, r, g, b);
+        // Short stem from face surface back to ring centre
+        addLine(fa.pos - fn * 0.06f, fa.pos, r*0.55f, g*0.55f, b);
+    }
+
+    if (verts.empty()) return;
+
+    float aspect = (float)winW / std::max((float)winH, 1.0f);
+    glm::mat4 mvp = cam.GetProjection(aspect) * cam.GetViewMatrix();
+
+    glUseProgram(s_GizmoShader);
+    unsigned int mvpLoc   = glGetUniformLocation(s_GizmoShader, "u_MVP");
+    unsigned int alphaLoc = glGetUniformLocation(s_GizmoShader, "u_Alpha");
+    glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, &mvp[0][0]);
+    glUniform1f(alphaLoc, 1.0f);
+    glDisable(GL_DEPTH_TEST);
+    glLineWidth(2.0f);
+
+    glBindVertexArray(aVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, aVBO);
+    glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vtx), verts.data(), GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)(3*sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(Vtx), (void*)(6*sizeof(float)));
+    glDrawArrays(GL_LINES, 0, (int)verts.size());
+    glBindVertexArray(0);
+
+    glLineWidth(1.0f);
+    glEnable(GL_DEPTH_TEST);
 }
 
 } // namespace tsu

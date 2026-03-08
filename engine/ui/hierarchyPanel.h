@@ -17,6 +17,8 @@ public:
         m_PrefabEditorIdx    = prefabIdx;
         m_PrefabSelectedNode = selectedNodeOut;
     }
+    // Override pointer: when set, use this PrefabAsset instead of scene.Prefabs[idx]
+    void SetPrefabOverride(PrefabAsset* p) { m_PrefabOverride = p; }
     // Callbacks set by UIManager so hierarchy buttons can trigger sync/save
     void SetPrefabCallbacks(std::function<void()> syncCb, std::function<void()> saveCb) {
         m_SyncCallback = syncCb;
@@ -59,6 +61,7 @@ private:
     bool             m_PrefabEditorActive = false;
     int              m_PrefabEditorIdx    = -1;
     int*             m_PrefabSelectedNode = nullptr;
+    PrefabAsset*     m_PrefabOverride     = nullptr;   // when non-null, use instead of scene.Prefabs[idx]
     std::function<void()> m_SyncCallback;
     std::function<void()> m_SaveCallback;
 };

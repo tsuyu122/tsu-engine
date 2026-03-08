@@ -1,10 +1,44 @@
 #include <glad/glad.h>
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#  define GLFW_EXPOSE_NATIVE_WIN32
+#endif
 #include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
 #include "window.h"
 #include <cmath>
 #include <vector>
+#include <functional>
+
 
 namespace tsu {
+
+// ---- Win32 hooks to prevent viewport freeze during title-bar drag ----
+#ifdef _WIN32
+static WNDPROC               s_OldWndProc   = nullptr;
+static GLFWwindow*           s_GLFWWindow   = nullptr;
+static std::function<void()> s_RenderCB;
+
+void Window::SetRenderCallback(std::function<void()> cb) { s_RenderCB = cb; }
+static LRESULT CALLBACK WndProcHook(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_ENTERSIZEMOVE)
+        SetTimer(hwnd, 1, 15, nullptr);  // ~60 fps timer
+    else if (msg == WM_EXITSIZEMOVE)
+        KillTimer(hwnd, 1);
+    else if (msg == WM_TIMER && wp == 1)
+    {
+        if (s_RenderCB)
+            s_RenderCB();
+        else if (s_GLFWWindow)
+            glfwSwapBuffers(s_GLFWWindow);  // re-present last frame at minimum
+    }
+    return CallWindowProc(s_OldWndProc, hwnd, msg, wp, lp);
+}
+#else
+void Window::SetRenderCallback(std::function<void()>) {}
+#endif
 
 // ---------------------------------------------------------------------------
 // Generate the engine smiley-face logo as an RGBA pixel buffer (white on transparent)
@@ -99,6 +133,15 @@ Window::Window(int width, int height, const char* title)
     glfwSwapInterval(1);
 
     glEnable(GL_DEPTH_TEST);
+
+#ifdef _WIN32
+    // Subclass the Win32 HWND so we can keep rendering while the user drags the title bar.
+    // Windows enters a modal move loop on WM_NCLBUTTONDOWN which blocks glfwPollEvents.
+    // A 15ms timer (WM_TIMER) calls the render callback to avoid a frozen viewport.
+    s_GLFWWindow = m_Window;
+    HWND hwnd = glfwGetWin32Window(m_Window);
+    s_OldWndProc = (WNDPROC)SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)WndProcHook);
+#endif
 }
 
 Window::~Window()

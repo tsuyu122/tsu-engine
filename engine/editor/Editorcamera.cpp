@@ -1,6 +1,8 @@
 #include "editor/editorCamera.h"
 #include "input/inputManager.h"
-#include <imgui.h>
+#ifdef TSU_EDITOR
+#  include <imgui.h>
+#endif
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
@@ -40,7 +42,12 @@ void EditorCamera::OnUpdate(float dt)
 
     // Scroll: only when ImGui is not capturing the mouse (viewport scroll)
     float scroll = InputManager::GetScrollDelta();
-    if (scroll != 0.0f && !ImGui::GetIO().WantCaptureMouse)
+#ifdef TSU_EDITOR
+    const bool imguiWantsMouse = ImGui::GetIO().WantCaptureMouse;
+#else
+    const bool imguiWantsMouse = false;
+#endif
+    if (scroll != 0.0f && !imguiWantsMouse)
     {
         if (InputManager::IsKeyPressed(Key::LeftShift))
         {
@@ -56,7 +63,9 @@ void EditorCamera::OnUpdate(float dt)
     // Keyboard movement — blocked when an ImGui widget has keyboard focus,
     // but NOT when RMB is held (we're in camera-rotation mode; WASD must work)
     bool inCameraRotate = InputManager::IsMousePressed(Mouse::Right);
+#ifdef TSU_EDITOR
     if (!inCameraRotate && ImGui::GetIO().WantCaptureKeyboard) return;
+#endif
 
     float speed = MoveSpeed * dt;
     if (InputManager::IsKeyPressed(Key::LeftShift))

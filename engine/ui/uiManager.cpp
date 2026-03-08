@@ -1,6 +1,8 @@
 #include "ui/uiManager.h"
 #include "core/application.h"
+#include "renderer/renderer.h"
 #include "renderer/textureLoader.h"
+#include "renderer/lightmapManager.h"
 #include "renderer/mesh.h"
 #include "serialization/prefabSerializer.h"
 #include "scene/entity.h"
@@ -14,6 +16,7 @@
 #include <cstring>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 
 namespace tsu {
@@ -148,6 +151,15 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         }
         if (ImGui::BeginMenu("File"))
         {
+            if (ImGui::MenuItem("New Project..."))
+            { m_DlgProjName[0] = '\0'; m_DlgProjParent[0] = '\0'; m_ShowNewProjectDlg = true; }
+            if (ImGui::MenuItem("Open Project..."))
+            { m_DlgOpenPath[0] = '\0'; m_ShowOpenProjectDlg = true; }
+            if (ImGui::MenuItem("Save Project", "Ctrl+S"))
+                m_PendingSaveProject = true;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Export Game..."))
+            { m_DlgExportPath[0] = '\0'; m_ShowExportGameDlg = true; }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Edit"))
@@ -159,7 +171,86 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Windows"))
+        {
+            if (ImGui::MenuItem("Procedural Maze"))
+            {
+                m_MazeWindowOpen = true;
+                m_RequestViewportTab = 4;
+            }
+            ImGui::EndMenu();
+        }
+
+        // Project name indicator (right-aligned in menu bar)
+        {
+            float avail = ImGui::GetContentRegionAvail().x;
+            std::string label = "\xf0\x9f\x97\x80 " + m_ProjectDisplayName; // folder emoji + name
+            float textW = ImGui::CalcTextSize(label.c_str()).x + 16.f;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - textW);
+            ImGui::TextDisabled("%s", label.c_str());
+        }
+
         ImGui::EndMainMenuBar();
+    }
+
+    // ---- Project dialog modals (triggered by File menu) ----
+    if (m_ShowNewProjectDlg)  { ImGui::OpenPopup("New Project##dlg");  m_ShowNewProjectDlg  = false; }
+    if (m_ShowOpenProjectDlg) { ImGui::OpenPopup("Open Project##dlg"); m_ShowOpenProjectDlg = false; }
+    if (m_ShowExportGameDlg)  { ImGui::OpenPopup("Export Game##dlg");  m_ShowExportGameDlg  = false; }
+
+    // New Project
+    ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
+    if (ImGui::BeginPopupModal("New Project##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Project Name:");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputText("##pname", m_DlgProjName, sizeof(m_DlgProjName));
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Location (parent folder):");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputText("##ploc", m_DlgProjParent, sizeof(m_DlgProjParent));
+        ImGui::TextDisabled("A sub-folder <Name> will be created at this path.");
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        if (ImGui::Button("Create", ImVec2(120, 0))) {
+            if (m_DlgProjName[0] != '\0') { m_PendingNewProject = true; ImGui::CloseCurrentPopup(); }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    // Open Project
+    ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Always);
+    if (ImGui::BeginPopupModal("Open Project##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Path to project folder or .tsproj file:");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputText("##opath", m_DlgOpenPath, sizeof(m_DlgOpenPath));
+        ImGui::TextDisabled("Example: C:/Projects/MyGame  or  C:/Projects/MyGame/MyGame.tsproj");
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        if (ImGui::Button("Open", ImVec2(120, 0))) {
+            if (m_DlgOpenPath[0] != '\0') { m_PendingOpenProject = true; ImGui::CloseCurrentPopup(); }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    // Export Game
+    ImGui::SetNextWindowSize(ImVec2(480, 0), ImGuiCond_Always);
+    if (ImGui::BeginPopupModal("Export Game##dlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Output folder:");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputText("##epath", m_DlgExportPath, sizeof(m_DlgExportPath));
+        ImGui::TextDisabled("The game .exe and assets/ will be placed in this folder.");
+        ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
+        if (ImGui::Button("Export", ImVec2(120, 0))) {
+            if (m_DlgExportPath[0] != '\0') { m_PendingExportGame = true; ImGui::CloseCurrentPopup(); }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
 
     // --- Process externally dropped files (this function knows m_CurrentFolder) ---
@@ -308,14 +399,42 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             }
         );
         m_Hierarchy.SetPrefabEditorState(true, m_EditingPrefabIdx, &m_PrefabSelectedNode);
+        m_Hierarchy.SetPrefabOverride(nullptr);
     }
     else
     {
         m_Hierarchy.SetPrefabEditorState(false, -1, nullptr);
+        m_Hierarchy.SetPrefabOverride(nullptr);
+    }
+
+    // ---- Room editor: piggyback on prefab editor with override pointer ----
+    bool roomEditorActive = (m_ViewportTab == 5 && m_MazeRoomEditorOpen &&
+                             m_EditingRoomSetIdx >= 0 &&
+                             m_EditingRoomSetIdx < (int)scene.RoomSets.size() &&
+                             m_EditingRoomIdx >= 0 &&
+                             m_EditingRoomIdx < (int)scene.RoomSets[m_EditingRoomSetIdx].Rooms.size());
+
+    if (roomEditorActive)
+    {
+        RoomTemplate& editRoom = scene.RoomSets[m_EditingRoomSetIdx].Rooms[m_EditingRoomIdx];
+        m_RoomAsPrefab.Name  = editRoom.Name;
+        m_RoomAsPrefab.Nodes = editRoom.Interior;  // copy in
+
+        m_Hierarchy.SetPrefabEditorState(true, -1, &m_RoomSelectedNode);
+        m_Hierarchy.SetPrefabOverride(&m_RoomAsPrefab);
     }
 
     m_Hierarchy.Render(scene, selectedEntity,
                        0, sideY, m_PanelWidth, sideH);
+
+    // Sync hierarchy changes back to room Interior
+    if (roomEditorActive)
+    {
+        RoomTemplate& editRoom = scene.RoomSets[m_EditingRoomSetIdx].Rooms[m_EditingRoomIdx];
+        editRoom.Interior = m_RoomAsPrefab.Nodes;
+        if (m_RoomSelectedNode >= (int)m_RoomAsPrefab.Nodes.size())
+            m_RoomSelectedNode = (int)m_RoomAsPrefab.Nodes.size() - 1;
+    }
 
     int selectedGroup = m_Hierarchy.GetSelectedGroup();
 
@@ -333,10 +452,93 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     int inspTex = (selectedEntity < 0 && selectedGroup < 0) ? m_SelectedTexture  : -1;
     int inspPrf = (selectedEntity < 0 && selectedGroup < 0) ? m_SelectedPrefab   : -1;
     const std::vector<int>* multiSel = &m_Hierarchy.GetMultiSelection();
-    m_Inspector.SetPrefabEditorState(prefabEditorActive, m_EditingPrefabIdx, m_PrefabSelectedNode);
+
+    if (roomEditorActive)
+    {
+        m_Inspector.SetPrefabEditorState(true, -1, m_RoomSelectedNode);
+        m_Inspector.SetPrefabOverride(&m_RoomAsPrefab);
+    }
+    else
+    {
+        m_Inspector.SetPrefabEditorState(prefabEditorActive, m_EditingPrefabIdx, m_PrefabSelectedNode);
+        m_Inspector.SetPrefabOverride(nullptr);
+    }
     m_Inspector.Render(scene, selectedEntity, selectedGroup,
                        winW - m_PanelWidth, sideY, m_PanelWidth, sideH,
                        inspMat, inspTex, inspPrf, multiSel);
+
+    // Sync inspector changes back to room Interior
+    if (roomEditorActive)
+    {
+        RoomTemplate& editRoom = scene.RoomSets[m_EditingRoomSetIdx].Rooms[m_EditingRoomIdx];
+        editRoom.Interior = m_RoomAsPrefab.Nodes;
+    }
+
+    // ---------------------------------------------------------------
+    // Lightmap inspector panel (visible when room editor is active)
+    // ---------------------------------------------------------------
+    if (roomEditorActive)
+    {
+        const float lmPanelH = 180.0f;
+        const float panelX   = (float)(winW - m_PanelWidth);
+        const float panelY   = (float)(sideY + sideH) - lmPanelH;
+        const float panelW   = (float)m_PanelWidth;
+
+        ImGui::SetNextWindowPos (ImVec2(panelX, panelY), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(panelW, lmPanelH), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.93f);
+        ImGui::Begin("##lmInspector", nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoScrollbar);
+
+        RoomTemplate& editRoom =
+            scene.RoomSets[m_EditingRoomSetIdx].Rooms[m_EditingRoomIdx];
+
+        ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), "Lightmap");
+        ImGui::Separator();
+
+        if (editRoom.LightmapPath.empty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.0f, 1.0f), "Not baked");
+        }
+        else
+        {
+            // Truncate long path for display
+            std::string displayPath = editRoom.LightmapPath;
+            if (displayPath.size() > 34)
+                displayPath = "..." + displayPath.substr(displayPath.size() - 31);
+            ImGui::TextColored(ImVec4(0.50f, 1.0f, 0.50f, 1.0f), "%s", displayPath.c_str());
+
+            unsigned int lmId = LightmapManager::Instance().GetCachedID(editRoom.LightmapPath);
+            if (lmId == 0)
+            {
+                // Not loaded yet (e.g. a bake was done in a previous session); load on demand
+                lmId = LightmapManager::Instance().Load(editRoom.LightmapPath);
+            }
+
+            if (lmId != 0)
+            {
+                // Calculate preview size (square, fits remaining width minus padding)
+                const float prevSz = std::min(panelW - 16.0f, lmPanelH - 72.0f);
+                ImGui::Image((ImTextureID)(intptr_t)lmId, ImVec2(prevSz, prevSz),
+                             ImVec2(0, 0), ImVec2(1, 1));
+            }
+            else
+            {
+                ImGui::TextDisabled("(texture not available)");
+            }
+
+            ImGui::Spacing();
+            if (ImGui::SmallButton("Clear Lightmap"))
+            {
+                LightmapManager::Instance().Release(editRoom.LightmapPath);
+                editRoom.LightmapPath.clear();
+            }
+        }
+
+        ImGui::End();
+    }
 
     // ---------------------------------------------------------------
     // Top panel: camera tabs (same style as Assets/Console)
@@ -371,6 +573,23 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             ImGui::SameLine(0, 2);
             gizmoBtn("R", GizmoMode::Rotate);
             ImGui::SameLine(0, 12);
+
+            // Post-processing toggle (editor viewport only)
+            if (m_ViewportTab == 0)
+            {
+                bool postOn = Renderer::s_EditorPostEnabled;
+                if (postOn) {
+                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.70f, 0.40f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.80f, 0.50f, 1.0f));
+                }
+                if (ImGui::Button("Post", ImVec2(btnSz * 1.6f, btnSz)))
+                    Renderer::s_EditorPostEnabled = !Renderer::s_EditorPostEnabled;
+                if (postOn)
+                    ImGui::PopStyleColor(2);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Toggle post-processing on the editor viewport");
+                ImGui::SameLine(0, 12);
+            }
         }
 
         if (ImGui::BeginTabBar("##cameratabs"))
@@ -422,6 +641,49 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                     m_PrefabEditorOpen = false;
                     m_EditingPrefabIdx = -1;
                     if (m_ViewportTab == 3) m_ViewportTab = 0;
+                }
+            }
+
+            // Maze overview tab (closeable, tab index 4)
+            if (m_MazeWindowOpen)
+            {
+                bool keepMaze = true;
+                if (ImGui::BeginTabItem("Procedural Maze##mazetab", &keepMaze,
+                    (reqTab == 4) ? ImGuiTabItemFlags_SetSelected : 0))
+                {
+                    m_ViewportTab = 4;
+                    ImGui::EndTabItem();
+                }
+                if (!keepMaze)
+                {
+                    m_MazeWindowOpen = false;
+                    m_MazeRoomEditorOpen = false;
+                    m_EditingRoomSetIdx  = -1;
+                    m_EditingRoomIdx     = -1;
+                    if (m_ViewportTab == 4 || m_ViewportTab == 5) m_ViewportTab = 0;
+                }
+            }
+
+            // Room editor tab (closeable, named after the room, tab index 5)
+            if (m_MazeRoomEditorOpen && m_EditingRoomSetIdx >= 0 &&
+                m_EditingRoomSetIdx < (int)scene.RoomSets.size() &&
+                m_EditingRoomIdx >= 0 &&
+                m_EditingRoomIdx < (int)scene.RoomSets[m_EditingRoomSetIdx].Rooms.size())
+            {
+                bool keepRoom = true;
+                std::string roomTabName = scene.RoomSets[m_EditingRoomSetIdx].Rooms[m_EditingRoomIdx].Name + "##roomtab";
+                if (ImGui::BeginTabItem(roomTabName.c_str(), &keepRoom,
+                    (reqTab == 5) ? ImGuiTabItemFlags_SetSelected : 0))
+                {
+                    m_ViewportTab = 5;
+                    ImGui::EndTabItem();
+                }
+                if (!keepRoom)
+                {
+                    m_MazeRoomEditorOpen = false;
+                    m_EditingRoomSetIdx  = -1;
+                    m_EditingRoomIdx     = -1;
+                    if (m_ViewportTab == 5) m_ViewportTab = 0;
                 }
             }
 
@@ -698,6 +960,304 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 ImGui::EndDragDropTarget();
             }
             ImGui::End();
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Procedural Maze overview (tab 4) — viewport-area panel
+    // ---------------------------------------------------------------
+    if (m_ViewportTab == 4 && m_MazeWindowOpen)
+    {
+        const float vx = (float)m_PanelWidth;
+        const float vy = (float)topStackH;
+        const float vw = (float)(winW - m_PanelWidth * 2);
+        const float vh = (float)(winH - k_AssetH - topStackH);
+
+        ImGui::SetNextWindowPos(ImVec2(vx, vy), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(vw, vh), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.95f);
+        ImGui::Begin("##maze_overview", nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+
+        // ---- Room Sets list ----
+        ImGui::TextColored(ImVec4(0.75f, 0.82f, 1.0f, 1.0f), "Room Sets");
+        ImGui::SameLine();
+        float addBtnMazeW = 120.0f;
+        ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - addBtnMazeW);
+        if (ImGui::Button("+ Add Room Set", ImVec2(addBtnMazeW, 0)))
+        {
+            RoomSet rs;
+            rs.Name = "Room Set " + std::to_string(scene.RoomSets.size() + 1);
+            scene.RoomSets.push_back(rs);
+        }
+        ImGui::Separator();
+
+        if (scene.RoomSets.empty())
+        {
+            ImGui::Spacing();
+            ImGui::TextDisabled("No room sets. Click '+ Add Room Set' to create one.");
+        }
+
+        for (int si = 0; si < (int)scene.RoomSets.size(); )
+        {
+            auto& rs = scene.RoomSets[si];
+            ImGui::PushID(si);
+
+            char setLabel[128];
+            snprintf(setLabel, sizeof(setLabel), "%s##rset%d", rs.Name.c_str(), si);
+
+            float kDelBtn = ImGui::GetFrameHeight();
+            float availMW = ImGui::GetContentRegionAvail().x;
+            ImVec2 hdrCursorM = ImGui::GetCursorPos();
+
+            bool setOpen = ImGui::CollapsingHeader(setLabel,
+                ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+
+            ImVec2 afterHdrM = ImGui::GetCursorPos();
+
+            ImGui::SetCursorPos(ImVec2(hdrCursorM.x + availMW - kDelBtn - 2.0f, hdrCursorM.y));
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.60f, 0.14f, 0.14f, 0.80f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.26f, 0.26f, 1.00f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.48f, 0.10f, 0.10f, 1.00f));
+            bool doDeleteSet = ImGui::Button("X", ImVec2(kDelBtn, kDelBtn));
+            ImGui::PopStyleColor(3);
+            ImGui::SetCursorPos(afterHdrM);
+
+            if (setOpen && !doDeleteSet)
+            {
+                ImGui::Indent(8.0f);
+
+                char setNameBuf[128];
+                strncpy(setNameBuf, rs.Name.c_str(), sizeof(setNameBuf) - 1);
+                setNameBuf[sizeof(setNameBuf) - 1] = '\0';
+                ImGui::SetNextItemWidth(200);
+                if (ImGui::InputText("Name##setname", setNameBuf, sizeof(setNameBuf)))
+                    rs.Name = setNameBuf;
+
+                ImGui::Spacing();
+
+                if (ImGui::Button("+ Add Room"))
+                {
+                    RoomTemplate rt;
+                    rt.Name = "Room " + std::to_string(rs.Rooms.size() + 1);
+                    RoomBlock b; b.X = 0; b.Y = 0; b.Z = 0;
+                    rt.Blocks.push_back(b);
+                    rs.Rooms.push_back(rt);
+                }
+
+                for (int ri = 0; ri < (int)rs.Rooms.size(); )
+                {
+                    auto& room = rs.Rooms[ri];
+                    ImGui::PushID(ri);
+
+                    ImGui::Separator();
+                    char roomNameBuf[128];
+                    strncpy(roomNameBuf, room.Name.c_str(), sizeof(roomNameBuf) - 1);
+                    roomNameBuf[sizeof(roomNameBuf) - 1] = '\0';
+                    ImGui::SetNextItemWidth(140);
+                    if (ImGui::InputText("##rname", roomNameBuf, sizeof(roomNameBuf)))
+                        room.Name = roomNameBuf;
+
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(80);
+                    ImGui::DragFloat("Rarity", &room.Rarity, 0.05f, 0.01f, 100.0f, "%.2f");
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Edit"))
+                    {
+                        m_MazeRoomEditorOpen = true;
+                        m_EditingRoomSetIdx  = si;
+                        m_EditingRoomIdx     = ri;
+                        m_RequestViewportTab = 5;
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%d blocks, %d doors)",
+                        (int)room.Blocks.size(), (int)room.Doors.size());
+
+                    ImGui::SameLine();
+                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.60f, 0.14f, 0.14f, 0.80f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.88f, 0.26f, 0.26f, 1.00f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.48f, 0.10f, 0.10f, 1.00f));
+                    bool doDelRoom = ImGui::Button("X##delroom");
+                    ImGui::PopStyleColor(3);
+
+                    ImGui::PopID();
+
+                    if (doDelRoom)
+                    {
+                        if (m_EditingRoomSetIdx == si && m_EditingRoomIdx == ri)
+                        {
+                            m_MazeRoomEditorOpen = false;
+                            m_EditingRoomSetIdx = -1;
+                            m_EditingRoomIdx = -1;
+                            if (m_ViewportTab == 5) m_ViewportTab = 4;
+                        }
+                        rs.Rooms.erase(rs.Rooms.begin() + ri);
+                    }
+                    else
+                        ++ri;
+                }
+
+                ImGui::Unindent(8.0f);
+                ImGui::Spacing();
+            }
+
+            ImGui::PopID();
+
+            if (doDeleteSet)
+            {
+                if (m_EditingRoomSetIdx == si)
+                {
+                    m_MazeRoomEditorOpen = false;
+                    m_EditingRoomSetIdx = -1;
+                    m_EditingRoomIdx = -1;
+                    if (m_ViewportTab == 5) m_ViewportTab = 4;
+                }
+                for (auto& mg : scene.MazeGenerators)
+                {
+                    if (mg.RoomSetIndex == si) mg.RoomSetIndex = -1;
+                    else if (mg.RoomSetIndex > si) mg.RoomSetIndex--;
+                }
+                scene.RoomSets.erase(scene.RoomSets.begin() + si);
+            }
+            else
+                ++si;
+        }
+
+        ImGui::Separator();
+        ImGui::Spacing();
+        if (ImGui::Button("Place Generator in Scene", ImVec2(-1, 30)))
+        {
+            Entity e = scene.CreateEntity("MazeGenerator");
+            int id = (int)e.GetID();
+            scene.MazeGenerators[id].Active  = true;
+            scene.MazeGenerators[id].Enabled = true;
+            selectedEntity = id;
+        }
+        ImGui::TextDisabled("Creates an empty entity with a Maze Generator component.");
+
+        ImGui::End();
+    }
+
+    // ---------------------------------------------------------------
+    // Room Editor 3D viewport toolbar (tab 5) — block / door controls
+    // The 3D scene + wireframes are rendered by Application.
+    // This horizontal toolbar sits at the bottom of the viewport.
+    // ---------------------------------------------------------------
+    if (m_ViewportTab == 5 && m_MazeRoomEditorOpen &&
+        m_EditingRoomSetIdx >= 0 && m_EditingRoomSetIdx < (int)scene.RoomSets.size() &&
+        m_EditingRoomIdx >= 0 && m_EditingRoomIdx < (int)scene.RoomSets[m_EditingRoomSetIdx].Rooms.size())
+    {
+        const float vx = (float)m_PanelWidth;
+        const float vy = (float)topStackH;
+        const float vw = (float)(winW - m_PanelWidth * 2);
+        const float vh = (float)(winH - k_AssetH - topStackH);
+
+        RoomTemplate& editRoom = scene.RoomSets[m_EditingRoomSetIdx].Rooms[m_EditingRoomIdx];
+
+        // Compact horizontal toolbar at top of viewport
+        float barH = 38.0f;
+        ImGui::SetNextWindowPos(ImVec2(vx + 4.0f, vy + 4.0f), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(vw - 8.0f, barH), ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.82f);
+        ImGui::Begin("##roombar", nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoScrollbar);
+
+        // ---- Tool buttons: Block / Door ----
+        auto pushToolStyle = [](bool active) {
+            if (active) {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.50f, 0.90f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.62f, 1.00f, 1.0f));
+            }
+        };
+        auto popToolStyle = [](bool active) { if (active) ImGui::PopStyleColor(2); };
+
+        bool blockActive = !m_MazeDoorMode;
+        pushToolStyle(blockActive);
+        if (ImGui::Button("Block")) m_MazeDoorMode = false;
+        popToolStyle(blockActive);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("LMB=add block  Shift+LMB=erase  Ctrl=extend all  Ctrl+Shift=retract all");
+
+        ImGui::SameLine();
+        pushToolStyle(m_MazeDoorMode);
+        if (ImGui::Button("Door")) m_MazeDoorMode = true;
+        popToolStyle(m_MazeDoorMode);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("LMB=toggle door on block face");
+
+        ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
+
+        // ---- Y-Layer control ----
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Y:");
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("##yd", ImGuiDir_Down)) m_RoomEditorLayer--;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(44.0f);
+        ImGui::DragInt("##yl", &m_RoomEditorLayer, 0.15f, -20, 20);
+        ImGui::SameLine();
+        if (ImGui::ArrowButton("##yu", ImGuiDir_Up)) m_RoomEditorLayer++;
+
+        ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
+        ImGui::TextDisabled("Shift=erase | Ctrl=extend all | Arrows=expand edge");
+
+        ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
+
+        // ---- Bake Lighting button ----
+        bool baking = m_PendingBakeLighting;
+        if (baking) ImGui::BeginDisabled();
+        if (ImGui::Button("Bake Lighting"))
+            m_PendingBakeLighting = true;
+        if (baking) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("CPU-bake ambient occlusion + direct light lightmap for this room");
+
+        // Show bake status badge next to button
+        if (!m_BakeStatus.empty()) {
+            ImGui::SameLine();
+            bool ok = (m_BakeStatus.rfind("Error", 0) != 0);
+            if (ok)
+                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), "%s", m_BakeStatus.c_str());
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_BakeStatus.c_str());
+        }
+
+        ImGui::SameLine(ImGui::GetWindowWidth() - 148.0f);
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "Blocks:%d Doors:%d",
+            (int)editRoom.Blocks.size(), (int)editRoom.Doors.size());
+
+        ImGui::End();
+
+        // ---- 3D viewport click handling: add / remove blocks via raycasting ----
+        // Only process if ImGui doesn't want the mouse and we're not rotating the camera
+        // Skip if an arrow was handled this frame (prevents double-placement)
+        bool blockClick = m_BlockNextRoomClick;
+        m_BlockNextRoomClick = false;
+        if (!blockClick && !ImGui::GetIO().WantCaptureMouse &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            ImVec2 mpos = ImGui::GetIO().MousePos;
+            // Check mouse is within viewport
+            if (mpos.x >= vx && mpos.x <= vx + vw &&
+                mpos.y >= vy + barH && mpos.y <= vy + vh)
+            {
+                // Convert screen coords to NDC for raycast (actual ray computed in Application)
+                float ndcX = ((mpos.x - vx) / vw) * 2.0f - 1.0f;
+                float ndcY = 1.0f - ((mpos.y - vy) / vh) * 2.0f;
+
+                m_PendingRoomClick    = true;
+                m_PendingRoomClickNDC = glm::vec2(ndcX, ndcY);
+                m_PendingRoomClickY   = m_RoomEditorLayer;
+            }
         }
     }
 
@@ -1280,6 +1840,81 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         ImGui::Columns(1);
     }
 
+    // ---- LUA SCRIPT ASSETS ----
+    {
+        while ((int)scene.ScriptAssetFolders.size() < (int)scene.ScriptAssets.size())
+            scene.ScriptAssetFolders.push_back(-1);
+
+        auto drawScriptIconDL = [&](ImVec2 p, bool sel) {
+            auto* dl = ImGui::GetWindowDrawList();
+            ImVec2 mn = {p.x+4, p.y+4}, mx = {p.x+iconSz-4, p.y+iconSz-4};
+            const float r = 6.f;
+            // Dark greenish background
+            dl->AddRectFilledMultiColor(mn, mx,
+                IM_COL32(30,55,35,255), IM_COL32(30,55,35,255),
+                IM_COL32(20,40,25,255), IM_COL32(20,40,25,255));
+            dl->AddRect(mn, mx, sel ? IM_COL32(100,255,140,255) : IM_COL32(70,180,90,120), r, 0, sel ? 2.f : 1.f);
+            // "LUA" label centred
+            float fsz = iconSz * 0.22f;
+            float px2 = p.x + iconSz * 0.5f - fsz * 0.9f;
+            float py2 = p.y + iconSz * 0.38f - fsz * 0.5f;
+            dl->AddText(nullptr, fsz, ImVec2(px2, py2), IM_COL32(100,240,120,220), "LUA");
+            // Small horizontal lines (code icon)
+            float lx = p.x + iconSz*0.22f, lw = iconSz*0.56f;
+            float ly = p.y + iconSz*0.60f;
+            for (int li = 0; li < 3; li++) {
+                dl->AddLine(ImVec2(lx, ly+li*4.5f), ImVec2(lx + lw*(li==2?0.65f:1.0f), ly+li*4.5f),
+                            IM_COL32(80,180,100,140), 1.5f);
+            }
+        };
+
+        int scols = std::max(1, (int)(ImGui::GetContentRegionAvail().x / cellW));
+        ImGui::Columns(scols, "##scriptcols", false);
+
+        for (int si = 0; si < (int)scene.ScriptAssets.size(); ++si)
+        {
+            if (scene.ScriptAssetFolders[si] != m_CurrentFolder) continue;
+            ImGui::PushID(70000 + si);
+
+            const std::string& sPath = scene.ScriptAssets[si];
+            size_t sl2 = sPath.find_last_of("/\\");
+            std::string sName = (sl2 != std::string::npos) ? sPath.substr(sl2+1) : sPath;
+            // strip .lua extension for display
+            if (sName.size() > 4 && sName.substr(sName.size()-4) == ".lua")
+                sName = sName.substr(0, sName.size()-4);
+
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0,0,0,0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1,1,1,0.1f));
+            ImGui::Button("##sicon", {iconSz, iconSz});
+            ImGui::PopStyleColor(2);
+            ImVec2 iconMin = ImGui::GetItemRectMin();
+            drawScriptIconDL(iconMin, false);
+
+            // Context menu
+            if (ImGui::BeginPopupContextItem("##sctx")) {
+                if (ImGui::MenuItem("Delete")) {
+                    scene.ScriptAssets.erase(scene.ScriptAssets.begin() + si);
+                    scene.ScriptAssetFolders.erase(scene.ScriptAssetFolders.begin() + si);
+                    ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End();
+                    return ImGui::GetIO().WantCaptureMouse;
+                }
+                ImGui::EndPopup();
+            }
+
+            // Drag source — carries the script path
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
+                ImGui::SetDragDropPayload("SCRIPT_ASSET", sPath.c_str(), sPath.size()+1);
+                drawScriptIconDL({4,4}, false);
+                ImGui::Text("LUA: %s", sName.c_str());
+                ImGui::EndDragDropSource();
+            }
+
+            { std::string lbl = sName; if (lbl.size()>10) lbl=lbl.substr(0,9)+"\xe2\x80\xa6"; ImGui::TextUnformatted(lbl.c_str()); }
+            ImGui::NextColumn(); ImGui::PopID();
+        }
+        ImGui::Columns(1);
+    }
+
     // Full-area ENTITY drop target — covers the ENTIRE scroll child window
     {
         ImGuiWindow* childWin = ImGui::GetCurrentWindow();
@@ -1345,6 +1980,33 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         }
         if (ImGui::MenuItem("New Material"))
         { tsu::MaterialAsset m; m.Name="Material"; m.Folder=m_CurrentFolder; scene.Materials.push_back(m); }
+        if (ImGui::MenuItem("New Script"))
+        {
+            // Generate a unique name
+            int idx = (int)scene.ScriptAssets.size() + 1;
+            std::filesystem::create_directories("assets/scripts");
+            std::string name = "script_" + std::to_string(idx);
+            std::string path = "assets/scripts/" + name + ".lua";
+            // Avoid name collisions
+            while (std::filesystem::exists(path)) {
+                idx++;
+                name  = "script_" + std::to_string(idx);
+                path  = "assets/scripts/" + name + ".lua";
+            }
+            // Write a starter Lua file
+            std::ofstream newf(path);
+            if (newf.is_open()) {
+                newf << "-- " << name << ".lua\n\n";
+                newf << "-- Expose variables to the inspector with --@expose:\n";
+                newf << "-- --@expose speed number 5.0\n\n";
+                newf << "function OnStart()\nend\n\n";
+                newf << "function OnUpdate(dt)\nend\n\n";
+                newf << "function OnStop()\nend\n";
+                newf.close();
+            }
+            scene.ScriptAssets.push_back(path);
+            scene.ScriptAssetFolders.push_back(m_CurrentFolder);
+        }
         ImGui::EndPopup();
     }
 
@@ -1433,6 +2095,24 @@ void UIManager::Log(const std::string& msg)
     m_ConsoleLogs.push_back(msg);
     if ((int)m_ConsoleLogs.size() > k_MaxConsoleLogs)
         m_ConsoleLogs.pop_front();
+}
+
+void UIManager::OpenRoomEditor(int setIdx, int roomIdx)
+{
+    m_MazeRoomEditorOpen = true;
+    m_EditingRoomSetIdx  = setIdx;
+    m_EditingRoomIdx     = roomIdx;
+    m_RequestViewportTab = 5;
+    m_MazeSelectedBlock  = -1;
+    m_MazeDoorMode       = false;
+}
+
+void UIManager::CloseRoomEditor()
+{
+    m_MazeRoomEditorOpen = false;
+    m_EditingRoomSetIdx  = -1;
+    m_EditingRoomIdx     = -1;
+    if (m_ViewportTab == 5) m_ViewportTab = 0;
 }
 
 } // namespace tsu

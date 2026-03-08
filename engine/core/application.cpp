@@ -1,16 +1,37 @@
 #include "core/application.h"
 #include "renderer/renderer.h"
 #include "renderer/mesh.h"
+#include "renderer/lightBaker.h"
+#include "renderer/lightmapManager.h"
 #include "input/inputManager.h"
 #include "physics/physicsSystem.h"
+#include "procedural/mazeGenerator.h"
+#include "lua/luaSystem.h"
 #include "scene/entity.h"
+#include "serialization/sceneSerializer.h"
 #include <imgui.h>
 #include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <string>
 #include <vector>
+#include <filesystem>
+
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#include <windows.h>
+#endif
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace tsu {
 
@@ -56,13 +77,220 @@ void Application::SaveEditorState()
 
 void Application::RestoreEditorState()
 {
-    for (size_t i=0; i<m_Snapshot.size() && i<m_Scene.Transforms.size(); i++)
+    // Delete entities that were spawned during play (beyond the snapshot count)
+    int snapshotCount = (int)m_Snapshot.size();
+    for (int i = (int)m_Scene.Transforms.size() - 1; i >= snapshotCount; --i)
+        m_Scene.DeleteEntity(i);
+
+    // Restore original transforms/physics for the pre-play entities
+    for (size_t i = 0; i < m_Snapshot.size() && i < m_Scene.Transforms.size(); i++)
     {
         m_Scene.Transforms[i].Position          = m_Snapshot[i].position;
         m_Scene.RigidBodies[i].Velocity         = m_Snapshot[i].velocity;
         m_Scene.Transforms[i].Rotation          = m_Snapshot[i].rotation;
         m_Scene.RigidBodies[i].AngularVelocity  = m_Snapshot[i].angularVelocity;
         m_Scene.RigidBodies[i].IsGrounded       = false;
+    }
+
+    // Clear maze generator runtime state (spawned rooms + occupancy)
+    for (auto& gen : m_Scene.MazeGenerators)
+    {
+        gen.SpawnedRooms.clear();
+        gen.OccupiedCells.clear();
+    }
+}
+
+// ============================================================
+// Project management
+// ============================================================
+
+static std::string TrimStr(const std::string& s)
+{
+    size_t a = s.find_first_not_of(" \t\r\n");
+    size_t b = s.find_last_not_of(" \t\r\n");
+    return (a == std::string::npos) ? "" : s.substr(a, b - a + 1);
+}
+
+void Application::NewProject(const std::string& name, const std::string& parentFolder)
+{
+    namespace fs = std::filesystem;
+    std::string dir = (parentFolder.empty() ? "." : parentFolder) + "/" + name;
+    try {
+        fs::create_directories(dir + "/assets/scenes");
+        fs::create_directories(dir + "/assets/scripts");
+        fs::create_directories(dir + "/assets/prefabs");
+
+        // Write .tsproj descriptor
+        {
+            std::ofstream f(dir + "/" + name + ".tsproj");
+            f << "# tsuEngine Project File\n"
+              << "name  = " << name << "\n"
+              << "scene = assets/scenes/main.tscene\n";
+        }
+
+        // Free existing mesh pointers before clearing the scene
+        for (auto& mr : m_Scene.MeshRenderers)
+            if (mr.MeshPtr) { delete mr.MeshPtr; mr.MeshPtr = nullptr; }
+
+        // Create default empty scene
+        m_Scene         = Scene{};
+        m_SelectedEntity = -1;
+        SceneSerializer::Save(m_Scene, dir + "/assets/scenes/main.tscene");
+
+        m_ProjectName   = name;
+        m_ProjectFolder = fs::absolute(dir).string();
+        m_UIManager.SetProjectDisplayName(m_ProjectName);
+        m_UIManager.Log("[Project] New project '" + name + "' created at: " + m_ProjectFolder);
+    } catch (const std::exception& ex) {
+        m_UIManager.Log(std::string("[Project] Error creating project: ") + ex.what());
+    }
+}
+
+void Application::OpenProject(const std::string& inputPath)
+{
+    namespace fs = std::filesystem;
+    fs::path p(inputPath);
+    std::string projFolder;
+    std::string projName;
+    std::string scenePath;
+
+    try {
+        if (p.extension() == ".tsproj") {
+            projFolder = p.parent_path().string();
+            projName   = p.stem().string();
+            scenePath  = projFolder + "/assets/scenes/main.tscene";
+            // Parse .tsproj for overrides
+            std::ifstream f(inputPath);
+            std::string line;
+            while (std::getline(f, line)) {
+                auto e = line.find('=');
+                if (e == std::string::npos) continue;
+                std::string k = TrimStr(line.substr(0, e));
+                std::string v = TrimStr(line.substr(e + 1));
+                if (k == "name")  projName  = v;
+                if (k == "scene") scenePath = projFolder + "/" + v;
+            }
+        } else {
+            // Treat as project folder
+            projFolder = inputPath;
+            for (auto& entry : fs::directory_iterator(inputPath)) {
+                if (entry.path().extension() == ".tsproj") {
+                    projName = entry.path().stem().string();
+                    break;
+                }
+            }
+            if (projName.empty()) projName = p.filename().string();
+            scenePath = projFolder + "/assets/scenes/main.tscene";
+        }
+
+        m_ProjectName    = projName;
+        m_ProjectFolder  = fs::absolute(projFolder).string();
+
+        // Free existing mesh pointers before clearing the scene
+        for (auto& mr : m_Scene.MeshRenderers)
+            if (mr.MeshPtr) { delete mr.MeshPtr; mr.MeshPtr = nullptr; }
+
+        m_Scene          = Scene{};
+        m_SelectedEntity = -1;
+
+        if (fs::exists(scenePath))
+            SceneSerializer::Load(m_Scene, scenePath);
+        else
+            m_UIManager.Log("[Project] Warning: scene not found: " + scenePath);
+
+        m_UIManager.SetProjectDisplayName(m_ProjectName);
+        m_UIManager.Log("[Project] Opened: " + m_ProjectFolder);
+    } catch (const std::exception& ex) {
+        m_UIManager.Log(std::string("[Project] Error opening project: ") + ex.what());
+    }
+}
+
+void Application::SaveProject()
+{
+    namespace fs = std::filesystem;
+    try {
+        if (m_ProjectFolder.empty()) {
+            // No project set — save current scene to the default location
+            fs::create_directories("assets/scenes");
+            SceneSerializer::Save(m_Scene, "assets/scenes/default.tscene");
+            m_UIManager.Log("[Project] Saved scene to assets/scenes/default.tscene");
+            return;
+        }
+
+        fs::create_directories(m_ProjectFolder + "/assets/scenes");
+        fs::create_directories(m_ProjectFolder + "/assets/scripts");
+
+        // Save the main scene
+        SceneSerializer::Save(m_Scene, m_ProjectFolder + "/assets/scenes/main.tscene");
+
+        // Copy assets directory (scripts, textures, meshes, prefabs…) if it exists
+        if (fs::exists("assets")) {
+            fs::copy("assets", m_ProjectFolder + "/assets",
+                     fs::copy_options::recursive | fs::copy_options::update_existing);
+        }
+
+        // Write/refresh .tsproj
+        {
+            std::ofstream f(m_ProjectFolder + "/" + m_ProjectName + ".tsproj");
+            f << "# tsuEngine Project File\n"
+              << "name  = " << m_ProjectName << "\n"
+              << "scene = assets/scenes/main.tscene\n";
+        }
+
+        m_UIManager.Log("[Project] Project saved: " + m_ProjectFolder);
+    } catch (const std::exception& ex) {
+        m_UIManager.Log(std::string("[Project] Error saving: ") + ex.what());
+    }
+}
+
+void Application::ExportGame(const std::string& outputFolder)
+{
+    namespace fs = std::filesystem;
+    try {
+        fs::create_directories(outputFolder);
+
+        // 1. Find this exe
+        std::string exeSrc;
+#ifdef _WIN32
+        char buf[4096] = {};
+        GetModuleFileNameA(nullptr, buf, sizeof(buf));
+        exeSrc = buf;
+#endif
+
+        std::string gameName = m_ProjectName.empty() ? "Game" : m_ProjectName;
+
+        // 2. Copy GameRuntime.exe (the lean player binary, sibling of the editor)
+        //    Falls back to the editor exe only if GameRuntime is not found.
+        if (!exeSrc.empty()) {
+            fs::path runtimeExe = fs::path(exeSrc).parent_path() / "GameRuntime.exe";
+            std::string srcExe  = fs::exists(runtimeExe)
+                                  ? runtimeExe.string()
+                                  : exeSrc;  // fallback
+            std::string exeDest = outputFolder + "/" + gameName + ".exe";
+            fs::copy_file(srcExe, exeDest, fs::copy_options::overwrite_existing);
+        }
+
+        // 3. Save current scene as the default one the exe will load
+        fs::create_directories(outputFolder + "/assets/scenes");
+        SceneSerializer::Save(m_Scene, outputFolder + "/assets/scenes/default.tscene");
+
+        // 4. Copy all current asset files alongside the exe
+        if (fs::exists("assets")) {
+            fs::copy("assets", outputFolder + "/assets",
+                     fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        }
+
+        // 5. Write game.mode marker so the exe launches without editor UI
+        {
+            std::ofstream marker(outputFolder + "/game.mode");
+            marker << "# tsuEngine standalone game marker\n";
+            marker << "title=" << gameName << "\n";
+        }
+
+        m_UIManager.Log("[Export] Game exported to: " + outputFolder);
+        m_UIManager.Log("[Export] Executable: " + gameName + ".exe");
+    } catch (const std::exception& ex) {
+        m_UIManager.Log(std::string("[Export] Error: ") + ex.what());
     }
 }
 
@@ -260,6 +488,73 @@ void Application::RebuildPrefabPreview()
 }
 
 // ----------------------------------------------------------------
+// RebuildRoomPreview — populate m_RoomPreviewScene from room blocks
+// ----------------------------------------------------------------
+void Application::RebuildRoomPreview()
+{
+    int rsi = m_UIManager.GetEditingRoomSetIdx();
+    int rri = m_UIManager.GetEditingRoomIdx();
+    if (rsi < 0 || rsi >= (int)m_Scene.RoomSets.size()) return;
+    if (rri < 0 || rri >= (int)m_Scene.RoomSets[rsi].Rooms.size()) return;
+
+    const RoomTemplate& room = m_Scene.RoomSets[rsi].Rooms[rri];
+
+    // Clear preview scene
+    m_RoomPreviewScene = Scene();
+    m_RoomPreviewScene.Materials = m_Scene.Materials;
+
+    // Preview light
+    {
+        Entity lightEnt = m_RoomPreviewScene.CreateEntity("_PreviewLight");
+        int li = (int)lightEnt.GetID();
+        m_RoomPreviewScene.Transforms[li].Position = glm::vec3(5.0f, 12.0f, 5.0f);
+        m_RoomPreviewScene.Transforms[li].Rotation = glm::vec3(-50.0f, 30.0f, 0.0f);
+        m_RoomPreviewScene.Lights[li].Active    = true;
+        m_RoomPreviewScene.Lights[li].Enabled   = true;
+        m_RoomPreviewScene.Lights[li].Type      = LightType::Directional;
+        m_RoomPreviewScene.Lights[li].Intensity = 1.5f;
+        m_RoomPreviewScene.Lights[li].Color     = glm::vec3(1.0f);
+    }
+
+    // Interior prefab nodes (offset by 1: preview light only)
+    for (int ni = 0; ni < (int)room.Interior.size(); ++ni)
+    {
+        const PrefabEntityData& node = room.Interior[ni];
+        Entity ent = m_RoomPreviewScene.CreateEntity(node.Name);
+        int ei = (int)ent.GetID();
+        m_RoomPreviewScene.Transforms[ei] = node.Transform;
+
+        if (!node.MeshType.empty())
+        {
+            Mesh* mesh = nullptr;
+            const std::string& mt = node.MeshType;
+            if      (mt == "cube")     mesh = new Mesh(Mesh::CreateCube("#DDDDDD"));
+            else if (mt == "sphere")   mesh = new Mesh(Mesh::CreateSphere("#DDDDDD"));
+            else if (mt == "pyramid")  mesh = new Mesh(Mesh::CreatePyramid("#DDDDDD"));
+            else if (mt == "cylinder") mesh = new Mesh(Mesh::CreateCylinder("#DDDDDD"));
+            else if (mt == "capsule")  mesh = new Mesh(Mesh::CreateCapsule("#DDDDDD"));
+            else if (mt == "plane")    mesh = new Mesh(Mesh::CreatePlane("#DDDDDD"));
+            else if (mt.size() > 4 && mt.substr(0,4) == "obj:")
+                mesh = new Mesh(Mesh::LoadOBJ(mt.substr(4)));
+            if (mesh) {
+                m_RoomPreviewScene.MeshRenderers[ei].MeshPtr  = mesh;
+                m_RoomPreviewScene.MeshRenderers[ei].MeshType = mt;
+            }
+        }
+
+        if (!node.MaterialName.empty())
+        {
+            for (int mi = 0; mi < (int)m_RoomPreviewScene.Materials.size(); ++mi)
+                if (m_RoomPreviewScene.Materials[mi].Name == node.MaterialName)
+                    { m_RoomPreviewScene.EntityMaterial[ei] = mi; break; }
+        }
+    }
+
+    m_RoomPreviewSetIdx  = rsi;
+    m_RoomPreviewRoomIdx = rri;
+}
+
+// ----------------------------------------------------------------
 // SyncPrefabPreviewBack — write preview entity transforms back to prefab nodes
 // ----------------------------------------------------------------
 void Application::SyncPrefabPreviewBack()
@@ -397,6 +692,344 @@ void Application::HandlePrefabEditorInput(int winW, int winH)
     if (InputManager::IsKeyDown(Key::W)) m_GizmoMode = GizmoMode::Move;
     if (InputManager::IsKeyDown(Key::E)) m_GizmoMode = GizmoMode::Rotate;
     if (InputManager::IsKeyDown(Key::R)) m_GizmoMode = GizmoMode::Scale;
+}
+
+// ----------------------------------------------------------------
+// SyncRoomPreviewBack — write preview entity transforms back to room Interior
+// ----------------------------------------------------------------
+void Application::SyncRoomPreviewBack()
+{
+    int rsi = m_RoomPreviewSetIdx;
+    int rri = m_RoomPreviewRoomIdx;
+    if (rsi < 0 || rsi >= (int)m_Scene.RoomSets.size()) return;
+    if (rri < 0 || rri >= (int)m_Scene.RoomSets[rsi].Rooms.size()) return;
+
+    RoomTemplate& room = m_Scene.RoomSets[rsi].Rooms[rri];
+    // Entity 0 = preview light, entities 1..N = Interior nodes 0..N-1
+    for (int ni = 0; ni < (int)room.Interior.size(); ++ni)
+    {
+        int ei = ni + 1;
+        if (ei >= (int)m_RoomPreviewScene.Transforms.size()) break;
+        room.Interior[ni].Transform = m_RoomPreviewScene.Transforms[ei];
+        room.Interior[ni].Name      = m_RoomPreviewScene.EntityNames[ei];
+    }
+}
+
+// ----------------------------------------------------------------
+// Room editor Undo/Redo helpers
+// ----------------------------------------------------------------
+RoomTemplate* Application::GetEditingRoom()
+{
+    int rsi = m_UIManager.GetEditingRoomSetIdx();
+    int rri = m_UIManager.GetEditingRoomIdx();
+    if (rsi < 0 || rsi >= (int)m_Scene.RoomSets.size()) return nullptr;
+    if (rri < 0 || rri >= (int)m_Scene.RoomSets[rsi].Rooms.size()) return nullptr;
+    return &m_Scene.RoomSets[rsi].Rooms[rri];
+}
+
+void Application::PushRoomEditState()
+{
+    RoomTemplate* room = GetEditingRoom();
+    if (!room) return;
+    RoomEditState state;
+    state.Blocks = room->Blocks;
+    state.Doors  = room->Doors;
+    if ((int)m_RoomUndoStack.size() >= k_MaxRoomHistory)
+        m_RoomUndoStack.erase(m_RoomUndoStack.begin());
+    m_RoomUndoStack.push_back(std::move(state));
+    m_RoomRedoStack.clear();
+}
+
+void Application::DoRoomUndo()
+{
+    if (m_RoomUndoStack.empty()) return;
+    RoomTemplate* room = GetEditingRoom();
+    if (!room) return;
+    // Push current state to redo
+    RoomEditState cur;
+    cur.Blocks = room->Blocks;
+    cur.Doors  = room->Doors;
+    m_RoomRedoStack.push_back(std::move(cur));
+    // Restore last undo state
+    RoomEditState& prev = m_RoomUndoStack.back();
+    room->Blocks = std::move(prev.Blocks);
+    room->Doors  = std::move(prev.Doors);
+    m_RoomUndoStack.pop_back();
+}
+
+void Application::DoRoomRedo()
+{
+    if (m_RoomRedoStack.empty()) return;
+    RoomTemplate* room = GetEditingRoom();
+    if (!room) return;
+    // Push current state to undo
+    RoomEditState cur;
+    cur.Blocks = room->Blocks;
+    cur.Doors  = room->Doors;
+    m_RoomUndoStack.push_back(std::move(cur));
+    // Restore redo state
+    RoomEditState& next = m_RoomRedoStack.back();
+    room->Blocks = std::move(next.Blocks);
+    room->Doors  = std::move(next.Doors);
+    m_RoomRedoStack.pop_back();
+}
+
+// ----------------------------------------------------------------
+// HandleRoomEditorInput — gizmo + selection for room preview entities
+//                         + expansion arrow hover/click detection
+// ----------------------------------------------------------------
+void Application::HandleRoomEditorInput(int winW, int winH)
+{
+    if (!m_UIManager.IsMazeRoomEditorOpen()) return;
+    if (m_RoomPreviewSetIdx < 0) return;
+
+    double mxd, myd;
+    InputManager::GetMousePosition(mxd, myd);
+    float mx = (float)mxd;
+    float my = (float)myd;
+
+    if (InputManager::IsMousePressed(Mouse::Right)) return;
+    if (m_UIManager.WantCaptureMouse()) return;
+    if (my <= (float)UIManager::k_TopStackH) return;
+
+    int selNode = m_UIManager.GetRoomSelectedNode();
+    int selEntity = (selNode >= 0) ? selNode + 1 : -1;
+    if (selEntity >= (int)m_RoomPreviewScene.Transforms.size()) selEntity = -1;
+
+    const MouseDelta delta = InputManager::GetMouseDelta();
+
+    // ---- Mouse held (drag gizmo) ----
+    if (InputManager::IsMousePressed(Mouse::Left))
+    {
+        if (m_Gizmo.IsDragging() && selEntity >= 0)
+        {
+            if (m_GizmoMode == GizmoMode::Move)
+            {
+                glm::vec3 move = m_Gizmo.OnMouseDrag(m_EditorCamera,
+                                                       delta.x, delta.y,
+                                                       winW, winH);
+                m_RoomPreviewScene.Transforms[selEntity].Position += move;
+            }
+            else if (m_GizmoMode == GizmoMode::Rotate)
+            {
+                float deg = m_Gizmo.OnMouseDragRotation(m_EditorCamera,
+                                                         delta.x, delta.y,
+                                                         winW, winH);
+                auto axis = m_Gizmo.GetDragAxis();
+                if (axis == EditorGizmo::Axis::X || axis == EditorGizmo::Axis::YZ)
+                    m_RoomPreviewScene.Transforms[selEntity].Rotation.x += deg;
+                else if (axis == EditorGizmo::Axis::Y || axis == EditorGizmo::Axis::XZ)
+                    m_RoomPreviewScene.Transforms[selEntity].Rotation.y += deg;
+                else if (axis == EditorGizmo::Axis::Z || axis == EditorGizmo::Axis::XY)
+                    m_RoomPreviewScene.Transforms[selEntity].Rotation.z += deg;
+            }
+            else if (m_GizmoMode == GizmoMode::Scale)
+            {
+                glm::vec3 sd = m_Gizmo.OnMouseDragScale(m_EditorCamera,
+                                                          delta.x, delta.y,
+                                                          winW, winH);
+                m_RoomPreviewScene.Transforms[selEntity].Scale += sd;
+                auto& s = m_RoomPreviewScene.Transforms[selEntity].Scale;
+                s.x = std::max(s.x, 0.01f);
+                s.y = std::max(s.y, 0.01f);
+                s.z = std::max(s.z, 0.01f);
+            }
+            SyncRoomPreviewBack();
+            return;
+        }
+    }
+
+    // ---- Build ray from camera every frame (used for arrow + block hover) ----
+    float aspect = (float)winW / (float)winH;
+    glm::mat4 vp  = m_EditorCamera.GetProjection(aspect) * m_EditorCamera.GetViewMatrix();
+    glm::mat4 vpI = glm::inverse(vp);
+    float ndcX =  2.0f * mx / (float)winW - 1.0f;
+    float ndcY = -2.0f * my / (float)winH + 1.0f;
+    glm::vec4 nearH = vpI * glm::vec4(ndcX, ndcY, -1.0f, 1.0f);
+    glm::vec4 farH  = vpI * glm::vec4(ndcX, ndcY,  1.0f, 1.0f);
+    glm::vec3 rayOrig = glm::vec3(nearH) / nearH.w;
+    glm::vec3 rayDir  = glm::normalize(glm::vec3(farH) / farH.w - rayOrig);
+
+    // ---- Compute per-block exposed face arrows ----
+    m_MazeBlockArrows.clear();
+    m_MazeHoveredArrowIdx = -1;
+    m_MazeHoveredBlock    = -1;
+    {
+        int rsi = m_UIManager.GetEditingRoomSetIdx();
+        int rri = m_UIManager.GetEditingRoomIdx();
+        if (rsi >= 0 && rsi < (int)m_Scene.RoomSets.size() &&
+            rri >= 0 && rri < (int)m_Scene.RoomSets[rsi].Rooms.size())
+        {
+            const RoomTemplate& room = m_Scene.RoomSets[rsi].Rooms[rri];
+            const int dx[6] = {1,-1, 0, 0, 0, 0};
+            const int dy[6] = {0, 0, 0, 0, 1,-1};
+            const int dz[6] = {0, 0, 1,-1, 0, 0};
+
+            auto hasBlock = [&](int nx, int ny, int nz) {
+                for (const auto& b : room.Blocks)
+                    if (b.X == nx && b.Y == ny && b.Z == nz) return true;
+                return false;
+            };
+
+            // One arrow per exposed block face
+            for (int bi = 0; bi < (int)room.Blocks.size(); ++bi)
+            {
+                const auto& blk = room.Blocks[bi];
+                for (int d = 0; d < 6; ++d)
+                {
+                    if (!hasBlock(blk.X+dx[d], blk.Y+dy[d], blk.Z+dz[d]))
+                    {
+                        BlockFaceArrow fa;
+                        fa.pos = glm::vec3(blk.X + dx[d]*0.6f,
+                                           blk.Y + dy[d]*0.6f,
+                                           blk.Z + dz[d]*0.6f);
+                        fa.dir      = d;
+                        fa.blockIdx = bi;
+                        m_MazeBlockArrows.push_back(fa);
+                    }
+                }
+            }
+
+            // Sphere-ray intersection for hovered arrow
+            float bestT = 1e30f;
+            constexpr float kR = 0.25f;
+            for (int ai = 0; ai < (int)m_MazeBlockArrows.size(); ++ai)
+            {
+                glm::vec3 oc = rayOrig - m_MazeBlockArrows[ai].pos;
+                float b2 = glm::dot(oc, rayDir);
+                float c2 = glm::dot(oc, oc) - kR * kR;
+                float disc = b2*b2 - c2;
+                if (disc < 0.0f) continue;
+                float t = -b2 - sqrtf(disc);
+                if (t < 0.0f) t = -b2 + sqrtf(disc);
+                if (t > 0.0f && t < bestT) { bestT = t; m_MazeHoveredArrowIdx = ai; }
+            }
+
+            // Y-plane raycast for block hover highlight
+            int layer = m_UIManager.GetRoomEditorLayer();
+            float ly  = (float)layer;
+            if (std::abs(rayDir.y) > 0.0001f)
+            {
+                float t = (ly - rayOrig.y) / rayDir.y;
+                if (t > 0.0f)
+                {
+                    glm::vec3 hit = rayOrig + rayDir * t;
+                    int gx = (int)std::round(hit.x);
+                    int gz = (int)std::round(hit.z);
+                    for (int bi = 0; bi < (int)room.Blocks.size(); ++bi)
+                        if (room.Blocks[bi].X == gx && room.Blocks[bi].Z == gz && room.Blocks[bi].Y == layer)
+                        { m_MazeHoveredBlock = bi; break; }
+                }
+            }
+        }
+    }
+
+    // ---- Mouse down (click) ----
+    if (InputManager::IsMouseDown(Mouse::Left))
+    {
+        // === Arrow click: add block (normal) or erase block (shift) ===
+        if (m_MazeHoveredArrowIdx >= 0)
+        {
+            const BlockFaceArrow& fa = m_MazeBlockArrows[m_MazeHoveredArrowIdx];
+            int rsi = m_UIManager.GetEditingRoomSetIdx();
+            int rri = m_UIManager.GetEditingRoomIdx();
+            bool shiftHeld = InputManager::IsKeyPressed(Key::LeftShift);
+            if (rsi >= 0 && rsi < (int)m_Scene.RoomSets.size() &&
+                rri >= 0 && rri < (int)m_Scene.RoomSets[rsi].Rooms.size())
+            {
+                RoomTemplate& rm = m_Scene.RoomSets[rsi].Rooms[rri];
+                const int dx[6] = {1,-1, 0, 0, 0, 0};
+                const int dy[6] = {0, 0, 0, 0, 1,-1};
+                const int dz[6] = {0, 0, 1,-1, 0, 0};
+                // Capture block coords before any erasure invalidates references
+                int bx = rm.Blocks[fa.blockIdx].X;
+                int by = rm.Blocks[fa.blockIdx].Y;
+                int bz = rm.Blocks[fa.blockIdx].Z;
+
+                if (shiftHeld)
+                {
+                    // Erase: remove the block that owns this arrow (keep at least 1)
+                    if ((int)rm.Blocks.size() > 1)
+                    {
+                        PushRoomEditState();
+                        rm.Blocks.erase(rm.Blocks.begin() + fa.blockIdx);
+                        rm.Doors.erase(std::remove_if(rm.Doors.begin(), rm.Doors.end(),
+                            [bx,by,bz](const DoorPlacement& d) {
+                                return d.BlockX==bx && d.BlockY==by && d.BlockZ==bz;
+                            }), rm.Doors.end());
+                    }
+                }
+                else
+                {
+                    // Add: place new block adjacent to this face
+                    int nx = bx + dx[fa.dir];
+                    int ny = by + dy[fa.dir];
+                    int nz = bz + dz[fa.dir];
+                    bool exists = false;
+                    for (const auto& b : rm.Blocks)
+                        if (b.X==nx && b.Y==ny && b.Z==nz) { exists=true; break; }
+                    if (!exists) {
+                        PushRoomEditState();
+                        RoomBlock nb; nb.X=nx; nb.Y=ny; nb.Z=nz; rm.Blocks.push_back(nb);
+                    }
+                }
+            }
+            m_UIManager.BlockNextRoomClick();
+            m_UIManager.CancelPendingRoomClick();
+            return;
+        }
+
+        // === Gizmo hit on interior node ===
+        if (selEntity >= 0)
+        {
+            int gizmoHitMode = (m_GizmoMode == GizmoMode::Rotate) ? 1 : 0;
+            auto axis = m_Gizmo.OnMouseDown(
+                m_RoomPreviewScene.Transforms[selEntity].Position,
+                m_EditorCamera, mx, my, winW, winH, gizmoHitMode);
+            if (axis != EditorGizmo::Axis::None)
+                return;
+        }
+
+        // === Raycast preview scene for interior node selection ===
+        float bestT = 1e30f;
+        int hitNode = -1;
+        for (int ei = 1; ei < (int)m_RoomPreviewScene.Transforms.size(); ++ei)
+        {
+            if (!m_RoomPreviewScene.MeshRenderers[ei].MeshPtr) continue;
+            glm::vec3 pos  = m_RoomPreviewScene.GetEntityWorldPos(ei);
+            glm::vec3 sc   = m_RoomPreviewScene.Transforms[ei].Scale;
+            float radius   = std::max({sc.x, sc.y, sc.z}) * 0.5f;
+            glm::vec3 oc   = rayOrig - pos;
+            float b2 = glm::dot(oc, rayDir);
+            float c2 = glm::dot(oc, oc) - radius * radius;
+            float disc = b2 * b2 - c2;
+            if (disc < 0.0f) continue;
+            float t = -b2 - sqrtf(disc);
+            if (t < 0.0f) t = -b2 + sqrtf(disc);
+            if (t > 0.0f && t < bestT) { bestT = t; hitNode = ei - 1; }
+        }
+        m_UIManager.SetRoomSelectedNode(hitNode);
+        return;
+    }
+
+    if (InputManager::IsMouseUp(Mouse::Left))
+        m_Gizmo.OnMouseUp();
+
+    if (InputManager::IsKeyDown(Key::W)) m_GizmoMode = GizmoMode::Move;
+    if (InputManager::IsKeyDown(Key::E)) m_GizmoMode = GizmoMode::Rotate;
+    if (InputManager::IsKeyDown(Key::R)) m_GizmoMode = GizmoMode::Scale;
+
+    // ---- Undo / Redo (Ctrl+Z / Ctrl+Y or Ctrl+Shift+Z) ----
+    bool ctrlDown = InputManager::IsKeyPressed(Key::LeftControl) ||
+                    InputManager::IsKeyPressed(Key::RightControl);
+    bool shiftDown = InputManager::IsKeyPressed(Key::LeftShift) ||
+                     InputManager::IsKeyPressed(Key::RightShift);
+    if (ctrlDown && InputManager::IsKeyDown(Key::Z))
+    {
+        if (shiftDown) DoRoomRedo();
+        else           DoRoomUndo();
+    }
+    if (ctrlDown && InputManager::IsKeyDown(Key::Y)) DoRoomRedo();
 }
 
 glm::vec3 Application::ComputeViewportSpawnPoint(float mx, float my, int winW, int winH) const
@@ -572,9 +1205,9 @@ void Application::UpdatePlayerControllers(float dt)
         if (isLocalSpace)
         {
             // MODE 2 / 4 — Local space: axes are relative to the entity's facing direction.
-            // Get world-space forward vector (local +X projected onto the XZ plane).
+            // Get world-space forward vector (local -Z projected onto the XZ plane).
             glm::mat4 worldMat = m_Scene.GetEntityWorldMatrix(i);
-            glm::vec3 fwd = glm::vec3(worldMat * glm::vec4(1,0,0,0));
+            glm::vec3 fwd = glm::vec3(worldMat * glm::vec4(0,0,-1,0));
             fwd.y = 0.0f;
             if (glm::length(fwd) > 0.001f) fwd = glm::normalize(fwd);
             // Right vector is cross(forward, world-up) = left-perpendicular in XZ plane.
@@ -583,9 +1216,9 @@ void Application::UpdatePlayerControllers(float dt)
         }
         else
         {
-            // MODE 1 / 3 — World space: forward = world +X, right = world +Z.
+            // MODE 1 / 3 — World space: forward = world -Z, right = world +X.
             // Player rotation has NO effect on the movement direction.
-            worldMove = glm::vec3(axis.x, 0.0f, axis.z) * speed * dt;
+            worldMove = glm::vec3(axis.z, 0.0f, -axis.x) * speed * dt;
         }
 
         m_Scene.Transforms[i].Position += worldMove;
@@ -599,6 +1232,47 @@ void Application::UpdatePlayerControllers(float dt)
         pc.IsRunning    = running;
         pc.IsCrouching  = crouching;
         pc.LastMoveAxis = axis;
+
+        // ---- Headbob ----
+        if (pc.HeadbobEnabled && pc.HeadbobCameraEntity >= 0 &&
+            pc.HeadbobCameraEntity < (int)m_Scene.Transforms.size())
+        {
+            int camEnt = pc.HeadbobCameraEntity;
+            // Capture rest Y on first move
+            if (!pc._HeadbobBaseSet)
+            {
+                pc._HeadbobBaseY  = m_Scene.Transforms[camEnt].Position.y;
+                pc._HeadbobBaseSet = true;
+            }
+
+            bool isMovingNow = (glm::length(axis) > 0.01f);
+            float targetBlend = isMovingNow ? 1.0f : 0.0f;
+            // Smooth blend in/out (0.12s blend-in, 0.20s blend-out)
+            float blendRate = isMovingNow ? (dt / 0.12f) : (dt / 0.20f);
+            pc._HeadbobBlend += (targetBlend - pc._HeadbobBlend) * std::min(blendRate, 1.0f);
+
+            if (pc._HeadbobBlend > 0.001f)
+            {
+                // Advance phase by distance walked
+                float distWalked = glm::length(worldMove);
+                pc._HeadbobPhase += distWalked * pc.HeadbobFrequency * (float)(2.0 * M_PI);
+
+                // Vertical bob: sin²(phase/2) pattern (smoother than raw sin)
+                float bobY = sinf(pc._HeadbobPhase) * pc.HeadbobAmplitudeY * pc._HeadbobBlend;
+                // Lateral sway: half frequency
+                float swayX = sinf(pc._HeadbobPhase * 0.5f) * pc.HeadbobAmplitudeX * pc._HeadbobBlend;
+
+                m_Scene.Transforms[camEnt].Position.y = pc._HeadbobBaseY + bobY;
+                m_Scene.Transforms[camEnt].Position.x += swayX * 0.25f; // subtle lateral
+            }
+            else
+            {
+                // Smoothly return to rest position
+                float restY = pc._HeadbobBaseY;
+                float curY  = m_Scene.Transforms[camEnt].Position.y;
+                m_Scene.Transforms[camEnt].Position.y = curY + (restY - curY) * std::min(dt / 0.08f, 1.0f);
+            }
+        }
     }
 }
 
@@ -639,6 +1313,157 @@ void Application::UpdateMouseLook(float dt)
             }
             // Z-axis rotation = pitch for an entity whose local forward is +X
             m_Scene.Transforms[pitchEnt].Rotation.x = ml.CurrentPitch;
+        }
+    }
+}
+
+// ----------------------------------------------------------------
+// UpdateTriggers — AABB overlap detection, fires channels on enter/exit
+// ----------------------------------------------------------------
+void Application::UpdateTriggers(float dt)
+{
+    (void)dt;
+    // Collect player world positions
+    struct PlayerInfo { glm::vec3 pos; glm::vec3 half; };
+    std::vector<PlayerInfo> players;
+    for (int i = 0; i < (int)m_Scene.PlayerControllers.size(); ++i)
+    {
+        const auto& pc = m_Scene.PlayerControllers[i];
+        if (!pc.Active || !pc.Enabled) continue;
+        glm::vec3 pos  = m_Scene.GetEntityWorldPos(i);
+        // Player AABB: half-extents based on rigidbody collider if available
+        glm::vec3 half = glm::vec3(0.35f, 0.9f, 0.35f);
+        if (i < (int)m_Scene.RigidBodies.size() && m_Scene.RigidBodies[i].HasColliderModule)
+        {
+            const auto& rb = m_Scene.RigidBodies[i];
+            if (rb.Collider == ColliderType::Box)
+                half = rb.ColliderSize * 0.5f;
+            else
+                half = glm::vec3(rb.ColliderRadius, rb.ColliderHeight * 0.5f, rb.ColliderRadius);
+        }
+        players.push_back({ pos, half });
+    }
+
+    for (int i = 0; i < (int)m_Scene.Triggers.size(); ++i)
+    {
+        auto& tr = m_Scene.Triggers[i];
+        if (!tr.Active || !tr.Enabled) continue;
+
+        glm::vec3 center = m_Scene.GetEntityWorldPos(i) + tr.Offset;
+
+        bool anyPlayerInside = false;
+        for (const auto& pl : players)
+        {
+            // AABB overlap test (trigger half-size == tr.Size already represents half-extents)
+            glm::vec3 delta = glm::abs(pl.pos - center);
+            if (delta.x <= tr.Size.x + pl.half.x &&
+                delta.y <= tr.Size.y + pl.half.y &&
+                delta.z <= tr.Size.z + pl.half.z)
+            {
+                anyPlayerInside = true;
+                break;
+            }
+        }
+
+        bool wasInside = tr._PlayerInside;
+        tr._PlayerInside = anyPlayerInside;
+
+        if (!wasInside && anyPlayerInside)
+        {
+            // Enter event
+            if (!tr.OneShot || !tr._HasFired)
+            {
+                if (tr.Channel >= 0)
+                    m_Scene.SetChannelBool(tr.Channel, tr.InsideValue);
+                tr._HasFired = true;
+            }
+        }
+        else if (wasInside && !anyPlayerInside)
+        {
+            // Exit event
+            if (tr.Channel >= 0)
+                m_Scene.SetChannelBool(tr.Channel, tr.OutsideValue);
+        }
+    }
+}
+
+// ----------------------------------------------------------------
+// UpdateAnimators — advance keyframe animations
+// ----------------------------------------------------------------
+void Application::UpdateAnimators(float dt)
+{
+    auto applyEasing = [](float t, AnimatorEasing e) -> float {
+        switch (e) {
+            case AnimatorEasing::EaseIn:    return t * t;
+            case AnimatorEasing::EaseOut:   return 1.0f - (1.0f - t) * (1.0f - t);
+            case AnimatorEasing::EaseInOut: return t < 0.5f ? 2.0f*t*t : 1.0f - (-2.0f*t+2.0f)*(-2.0f*t+2.0f)*0.5f;
+            default:                        return t;
+        }
+    };
+
+    for (int i = 0; i < (int)m_Scene.Animators.size(); ++i)
+    {
+        auto& an = m_Scene.Animators[i];
+        if (!an.Active || !an.Enabled) continue;
+
+        // Auto-play on first frame if AutoPlay is set and not yet started
+        if (an.AutoPlay && !an.Playing && !an._DelayDone)
+            an.Playing = true;
+
+        if (!an.Playing) continue;
+
+        // Delay
+        if (!an._DelayDone)
+        {
+            an._Timer += dt;
+            if (an._Timer < an.Delay) continue;
+            an._Timer = 0.0f;
+            an._DelayDone = true;
+        }
+
+        float dur = std::max(an.Duration, 0.001f);
+        an._Timer += dt;
+        float rawT = std::min(an._Timer / dur, 1.0f);
+
+        // Handle oscillation direction
+        float phaseT;
+        if (an.Mode == AnimatorMode::Oscillate)
+        {
+            if (an._Dir > 0.0f)
+                phaseT = rawT;
+            else
+                phaseT = 1.0f - rawT;
+        }
+        else
+        {
+            phaseT = rawT;
+        }
+
+        float easedT = applyEasing(phaseT, an.Easing);
+        glm::vec3 value = glm::mix(an.From, an.To, easedT);
+
+        // Apply to entity transform
+        if (i < (int)m_Scene.Transforms.size())
+        {
+            auto& tr = m_Scene.Transforms[i];
+            if      (an.Property == AnimatorProperty::Position) tr.Position = value;
+            else if (an.Property == AnimatorProperty::Rotation) tr.Rotation = value;
+            else if (an.Property == AnimatorProperty::Scale)    tr.Scale    = value;
+        }
+
+        // Advance and handle end-of-cycle
+        if (an._Timer >= dur)
+        {
+            an._Timer = 0.0f;
+            if (an.Mode == AnimatorMode::Oscillate)
+            {
+                an._Dir *= -1.0f;  // reverse direction
+            }
+            else if (an.Mode == AnimatorMode::OneShot)
+            {
+                an.Playing = false;
+            }
+            // Loop: just restart (timer already reset)
         }
     }
 }
@@ -735,9 +1560,12 @@ void Application::HandleToolbarInput()
             {
                 SaveEditorState();
                 m_Mode = EngineMode::Game;
+                LuaSystem::Init(m_Scene);
+                LuaSystem::StartScripts();
             }
             else
             {
+                LuaSystem::Shutdown();
                 RestoreEditorState();
                 m_Mode = EngineMode::Editor;
             }
@@ -753,19 +1581,125 @@ void Application::HandleToolbarInput()
     // Atalho de teclado: F5 = play/stop, F6 = pause
     if (InputManager::IsKeyDown(Key::F1))
     {
-        if (m_Mode == EngineMode::Editor) { SaveEditorState(); m_Mode = EngineMode::Game; }
-        else { RestoreEditorState(); m_Mode = EngineMode::Editor; }
+        if (m_Mode == EngineMode::Editor)
+        {
+            SaveEditorState();
+            m_Mode = EngineMode::Game;
+            LuaSystem::Init(m_Scene);
+            LuaSystem::StartScripts();
+        }
+        else
+        {
+            LuaSystem::Shutdown();
+            RestoreEditorState();
+            m_Mode = EngineMode::Editor;
+        }
     }
     if (InputManager::IsKeyDown(Key::F2))
     {
         if (m_Mode == EngineMode::Game)   m_Mode = EngineMode::Paused;
         else if (m_Mode == EngineMode::Paused) m_Mode = EngineMode::Game;
     }
+
+    // Ctrl+S = Save project
+    {
+        bool ctrlHeld = InputManager::IsKeyPressed(Key::LeftControl) ||
+                        InputManager::IsKeyPressed(Key::RightControl);
+        if (ctrlHeld && InputManager::IsKeyDown(Key::S))
+            SaveProject();
+    }
 }
 
 void Application::Run()
 {
     Renderer::Init();
+
+    // ---- Detect standalone game mode ----
+    m_GameModeOnly = std::filesystem::exists("game.mode");
+    if (m_GameModeOnly)
+    {
+        // Parse title from marker
+        std::ifstream mk("game.mode");
+        std::string line;
+        while (std::getline(mk, line))
+        {
+            if (line.rfind("title=", 0) == 0)
+            {
+                std::string title = line.substr(6);
+                glfwSetWindowTitle(m_Window.GetNativeWindow(), title.c_str());
+                m_ProjectName = title;
+            }
+        }
+
+        // Go borderless-fullscreen on the primary monitor
+        GLFWmonitor*       monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode    = glfwGetVideoMode(monitor);
+        glfwSetWindowMonitor(m_Window.GetNativeWindow(), monitor, 0, 0,
+                             mode->width, mode->height, mode->refreshRate);
+
+        // Load the game scene
+        if (std::filesystem::exists("assets/scenes/default.tscene"))
+            SceneSerializer::Load(m_Scene, "assets/scenes/default.tscene");
+
+        // Hide cursor (game controls mouse cursor)
+        glfwSetInputMode(m_Window.GetNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+
+        // Start Lua scripts
+        LuaSystem::Init(m_Scene);
+        LuaSystem::StartScripts();
+        m_Mode = EngineMode::Game;
+
+        // ---- Standalone game loop (no editor UI) ----
+        while (!m_Window.ShouldClose())
+        {
+            float time      = (float)glfwGetTime();
+            float deltaTime = time - m_LastFrameTime;
+            m_LastFrameTime = time;
+            if (deltaTime > 0.05f) deltaTime = 0.05f;
+
+            InputManager::Update(m_Window.GetNativeWindow());
+
+            // Quit on Escape
+            if (InputManager::IsKeyDown(Key::Escape))
+                glfwSetWindowShouldClose(m_Window.GetNativeWindow(), GLFW_TRUE);
+
+            // Game logic
+            UpdatePlayerControllers(deltaTime);
+            UpdateMouseLook(deltaTime);
+            UpdateTriggers(deltaTime);
+            UpdateAnimators(deltaTime);
+            LuaSystem::UpdateScripts(m_Scene, deltaTime);
+            m_Scene.OnUpdate(deltaTime);
+            PhysicsSystem::Update(m_Scene, deltaTime);
+            MazeGenerator::Update(m_Scene, deltaTime);
+
+            int winW = m_Window.GetWidth();
+            int winH = m_Window.GetHeight();
+
+            Renderer::BeginFrame();
+
+            // Render from game camera
+            int camIdx = m_Scene.GetActiveGameCamera();
+            if (camIdx >= 0)
+            {
+                Renderer::RenderSceneGame(m_Scene, winW, winH);
+            }
+            else
+            {
+                // No camera — clear to black
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            }
+
+            m_Window.Update();
+        }
+
+        LuaSystem::Shutdown();
+        LightmapManager::Instance().ReleaseAll();
+        return;  // skip the editor run loop below
+    }
+
+    // ---- Editor mode ----
     m_UIManager.Init(m_Window.GetNativeWindow());
 
     // Register callback for external file drag & drop
@@ -782,6 +1716,27 @@ void Application::Run()
         m_UIManager.BeginFrame();
         HandleToolbarInput();
 
+        // ---- Poll project operation requests from UIManager ----
+        if (m_UIManager.HasPendingNewProject()) {
+            std::string name, parent;
+            m_UIManager.ConsumeNewProject(name, parent);
+            if (!name.empty()) NewProject(name, parent.empty() ? "." : parent);
+        }
+        if (m_UIManager.HasPendingOpenProject()) {
+            std::string path;
+            m_UIManager.ConsumeOpenProject(path);
+            if (!path.empty()) OpenProject(path);
+        }
+        if (m_UIManager.HasPendingSaveProject()) {
+            m_UIManager.ConsumeSaveProject();
+            SaveProject();
+        }
+        if (m_UIManager.HasPendingExportGame()) {
+            std::string outPath;
+            m_UIManager.ConsumeExportGame(outPath);
+            if (!outPath.empty()) ExportGame(outPath);
+        }
+
         // s_DroppedFiles is processed in UIManager::Render (which knows the current folder)
         Renderer::BeginFrame();
 
@@ -793,8 +1748,12 @@ void Application::Run()
         {
             UpdatePlayerControllers(deltaTime);
             UpdateMouseLook(deltaTime);
+            UpdateTriggers(deltaTime);
+            UpdateAnimators(deltaTime);
+            LuaSystem::UpdateScripts(m_Scene, deltaTime);
             m_Scene.OnUpdate(deltaTime);
             PhysicsSystem::Update(m_Scene, deltaTime);
+            MazeGenerator::Update(m_Scene, deltaTime);
         }
         else
         {
@@ -805,9 +1764,11 @@ void Application::Run()
         bool showGameView      = (m_UIManager.GetViewportTab() == 1);
         bool showProjectView   = (m_UIManager.GetViewportTab() == 2);
         bool showPrefabEditor  = m_UIManager.IsPrefabEditorActive();
+        bool showMazeOverview  = (m_UIManager.GetViewportTab() == 4);
+        bool showRoomEditor    = (m_UIManager.GetViewportTab() == 5);
 
-        // Editor camera update: needed when showing scene view or prefab editor
-        if (!showGameView && !showProjectView)
+        // Editor camera update: needed when showing scene view, prefab editor, or room editor
+        if (!showGameView && !showProjectView && !showMazeOverview)
             m_EditorCamera.OnUpdate(deltaTime);
 
         // Prefab editor: rebuild preview scene when the edited prefab changes
@@ -838,13 +1799,272 @@ void Application::Run()
             }
         }
 
+        // Room editor: rebuild preview scene when the edited room changes
+        if (showRoomEditor)
+        {
+            int rsi = m_UIManager.GetEditingRoomSetIdx();
+            int rri = m_UIManager.GetEditingRoomIdx();
+            if (rsi != m_RoomPreviewSetIdx || rri != m_RoomPreviewRoomIdx)
+                RebuildRoomPreview();
+            // Block cubes may have changed — rebuild each frame (cheap for small rooms)
+            else
+                RebuildRoomPreview();
+        }
+        else
+        {
+            if (m_RoomPreviewSetIdx >= 0)
+            {
+                m_RoomPreviewScene = Scene();
+                m_RoomPreviewSetIdx = -1;
+                m_RoomPreviewRoomIdx = -1;
+            }
+        }
+
         // Editor picking/gizmo (only in editor mode + scene view)
-        if (m_Mode == EngineMode::Editor && !showGameView && !showProjectView && !showPrefabEditor)
+        if (m_Mode == EngineMode::Editor && !showGameView && !showProjectView && !showPrefabEditor && !showRoomEditor && !showMazeOverview)
             HandleEditorInput(winW, winH);
 
         // Prefab editor gizmo
         if (showPrefabEditor)
             HandlePrefabEditorInput(winW, winH);
+
+        // Room editor gizmo + entity selection
+        if (showRoomEditor)
+            HandleRoomEditorInput(winW, winH);
+
+        // Room editor: handle 3D viewport click to place/remove blocks
+        // Skip if gizmo is being dragged (user is manipulating an interior entity)
+        if (showRoomEditor && m_UIManager.HasPendingRoomClick() && !m_Gizmo.IsDragging())
+        {
+            int clickY = 0;
+            glm::vec2 ndc = m_UIManager.ConsumePendingRoomClick(clickY);
+
+            // Reconstruct the ray from camera
+            float vpW = (float)(winW - m_UIManager.GetPanelWidth() * 2);
+            float vpH = (float)(winH - UIManager::k_AssetH - UIManager::k_TopStackH);
+            float aspect = vpW / std::max(vpH, 1.0f);
+            glm::mat4 proj = m_EditorCamera.GetProjection(aspect);
+            glm::mat4 view = m_EditorCamera.GetViewMatrix();
+            glm::mat4 invVP = glm::inverse(proj * view);
+
+            glm::vec4 nearNDC(ndc.x, ndc.y, -1.0f, 1.0f);
+            glm::vec4 farNDC (ndc.x, ndc.y,  1.0f, 1.0f);
+            glm::vec4 nearW = invVP * nearNDC; nearW /= nearW.w;
+            glm::vec4 farW  = invVP * farNDC;  farW  /= farW.w;
+            glm::vec3 rayOrig(nearW);
+            glm::vec3 rayDir = glm::normalize(glm::vec3(farW) - glm::vec3(nearW));
+
+            // Intersect ray with Y = clickY plane
+            float planeY = (float)clickY;
+            if (std::abs(rayDir.y) > 0.0001f)
+            {
+                float t = (planeY - rayOrig.y) / rayDir.y;
+                if (t > 0.0f)
+                {
+                    glm::vec3 hit = rayOrig + rayDir * t;
+                    int gx = (int)std::round(hit.x);
+                    int gz = (int)std::round(hit.z);
+
+                    int rsi = m_UIManager.GetEditingRoomSetIdx();
+                    int rri = m_UIManager.GetEditingRoomIdx();
+                    if (rsi >= 0 && rsi < (int)m_Scene.RoomSets.size() &&
+                        rri >= 0 && rri < (int)m_Scene.RoomSets[rsi].Rooms.size())
+                    {
+                        RoomTemplate& room = m_Scene.RoomSets[rsi].Rooms[rri];
+                        bool shiftHeld = InputManager::IsKeyPressed(Key::LeftShift);
+                        bool ctrlHeld  = InputManager::IsKeyPressed(Key::LeftControl);
+
+                        // Find if a block exists at this grid position
+                        int existIdx = -1;
+                        for (int bi = 0; bi < (int)room.Blocks.size(); ++bi)
+                        {
+                            if (room.Blocks[bi].X == gx && room.Blocks[bi].Z == gz &&
+                                room.Blocks[bi].Y == clickY)
+                            {
+                                existIdx = bi;
+                                break;
+                            }
+                        }
+
+                        if (m_UIManager.IsDoorMode())
+                        {
+                            // Door mode: only toggle doors on existing blocks
+                            if (existIdx >= 0)
+                            {
+                                float fx = hit.x - (float)gx;
+                                float fz = hit.z - (float)gz;
+                                DoorFace df;
+                                if (std::abs(fx) > std::abs(fz))
+                                    df = (fx > 0) ? DoorFace::PosX : DoorFace::NegX;
+                                else
+                                    df = (fz > 0) ? DoorFace::PosZ : DoorFace::NegZ;
+
+                                PushRoomEditState();
+                                bool found = false;
+                                for (int di = (int)room.Doors.size() - 1; di >= 0; --di)
+                                {
+                                    auto& d = room.Doors[di];
+                                    if (d.BlockX == gx && d.BlockZ == gz && d.BlockY == clickY && d.Face == df)
+                                    {
+                                        room.Doors.erase(room.Doors.begin() + di);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (!found)
+                                {
+                                    DoorPlacement dp;
+                                    dp.BlockX = gx; dp.BlockZ = gz; dp.BlockY = clickY; dp.Face = df;
+                                    room.Doors.push_back(dp);
+                                }
+                            }
+                            // In door mode, clicking empty space does nothing
+                        }
+                        else if (ctrlHeld && shiftHeld)
+                        {
+                            // Ctrl+Shift = retract: remove all edge blocks on clicked layer
+                            // Edge block = has at least one empty neighbor
+                            std::vector<int> toRemove;
+                            for (int bi = 0; bi < (int)room.Blocks.size(); ++bi)
+                            {
+                                auto& b = room.Blocks[bi];
+                                if (b.Y != clickY) continue;
+                                bool edge = false;
+                                int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+                                for (auto& d : dirs)
+                                {
+                                    bool hasNeighbor = false;
+                                    for (auto& nb : room.Blocks)
+                                        if (nb.X == b.X+d[0] && nb.Z == b.Z+d[1] && nb.Y == clickY)
+                                            { hasNeighbor = true; break; }
+                                    if (!hasNeighbor) { edge = true; break; }
+                                }
+                                if (edge) toRemove.push_back(bi);
+                            }
+                            // Keep at least 1 block
+                            if ((int)toRemove.size() < (int)room.Blocks.size())
+                            {
+                                PushRoomEditState();
+                                for (int ri = (int)toRemove.size() - 1; ri >= 0; --ri)
+                                {
+                                    int idx = toRemove[ri];
+                                    int bx = room.Blocks[idx].X, bz = room.Blocks[idx].Z, by = room.Blocks[idx].Y;
+                                    room.Blocks.erase(room.Blocks.begin() + idx);
+                                    for (int di = (int)room.Doors.size()-1; di >= 0; --di)
+                                        if (room.Doors[di].BlockX == bx && room.Doors[di].BlockZ == bz && room.Doors[di].BlockY == by)
+                                            room.Doors.erase(room.Doors.begin() + di);
+                                }
+                            }
+                        }
+                        else if (ctrlHeld && !shiftHeld)
+                        {
+                            // Ctrl = extend: add a new layer of blocks around existing edges
+                            std::vector<RoomBlock> newBlocks;
+                            for (auto& b : room.Blocks)
+                            {
+                                if (b.Y != clickY) continue;
+                                int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+                                for (auto& d : dirs)
+                                {
+                                    int nx = b.X + d[0], nz = b.Z + d[1];
+                                    bool exists = false;
+                                    for (auto& eb : room.Blocks)
+                                        if (eb.X == nx && eb.Z == nz && eb.Y == clickY)
+                                            { exists = true; break; }
+                                    if (exists) continue;
+                                    // Check not already in newBlocks
+                                    bool dup = false;
+                                    for (auto& nb : newBlocks)
+                                        if (nb.X == nx && nb.Z == nz && nb.Y == clickY)
+                                            { dup = true; break; }
+                                    if (!dup) { RoomBlock rb; rb.X = nx; rb.Y = clickY; rb.Z = nz; newBlocks.push_back(rb); }
+                                }
+                            }
+                            if (!newBlocks.empty())
+                            {
+                                PushRoomEditState();
+                                for (auto& nb : newBlocks)
+                                    room.Blocks.push_back(nb);
+                            }
+                        }
+                        else if (shiftHeld && existIdx >= 0)
+                        {
+                            // Shift+click = remove block
+                            if ((int)room.Blocks.size() > 1)
+                            {
+                                PushRoomEditState();
+                                room.Blocks.erase(room.Blocks.begin() + existIdx);
+                                for (int di = (int)room.Doors.size() - 1; di >= 0; --di)
+                                    if (room.Doors[di].BlockX == gx && room.Doors[di].BlockZ == gz &&
+                                        room.Doors[di].BlockY == clickY)
+                                        room.Doors.erase(room.Doors.begin() + di);
+                            }
+                        }
+                        else if (!shiftHeld && !ctrlHeld && existIdx >= 0)
+                        {
+                            // Plain click on existing block = select it
+                            m_UIManager.SetMazeSelectedBlock(existIdx);
+                        }
+                        else if (!shiftHeld && !ctrlHeld && existIdx < 0)
+                        {
+                            // Plain click on empty = place new block (must be adjacent or first block)
+                            bool adjacent = false;
+                            for (const auto& b : room.Blocks)
+                            {
+                                int dx = std::abs(b.X - gx);
+                                int dz = std::abs(b.Z - gz);
+                                int dy = std::abs(b.Y - clickY);
+                                if ((dx + dz + dy) == 1)
+                                { adjacent = true; break; }
+                            }
+                            if (adjacent || room.Blocks.empty())
+                            {
+                                PushRoomEditState();
+                                RoomBlock nb;
+                                nb.X = gx; nb.Y = clickY; nb.Z = gz;
+                                room.Blocks.push_back(nb);
+                                m_UIManager.SetMazeSelectedBlock(-1);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Lightmap bake request (raised by "Bake Lighting" toolbar button) ----
+        if (m_UIManager.HasPendingBakeLighting())
+        {
+            m_UIManager.ConsumePendingBakeLighting();
+            int rsi = m_UIManager.GetEditingRoomSetIdx();
+            int ri  = m_UIManager.GetEditingRoomIdx();
+            if (rsi >= 0 && rsi < (int)m_Scene.RoomSets.size() &&
+                ri  >= 0 && ri  < (int)m_Scene.RoomSets[rsi].Rooms.size())
+            {
+                RoomTemplate& room = m_Scene.RoomSets[rsi].Rooms[ri];
+                auto lights = LightBaker::ExtractLights(m_Scene);
+                LightBaker::BakeResult result = LightBaker::BakeRoom(room, lights);
+
+                // Build output path: assets/lightmaps/<roomName>.tga
+                std::string outDir  = "assets/lightmaps";
+                std::filesystem::create_directories(outDir);
+                std::string outPath = outDir + "/" + room.Name + ".tga";
+                bool saved = LightmapManager::SaveTGA(
+                    outPath, result.width, result.height, result.pixels.data());
+
+                if (saved)
+                {
+                    room.LightmapPath = outPath;
+                    room.LightmapST   = result.lightmapST;
+                    m_UIManager.SetBakeStatus("Baked!");
+                    m_UIManager.Log("[LightBaker] Baked: " + outPath);
+                }
+                else
+                {
+                    m_UIManager.SetBakeStatus("Error: save failed");
+                    m_UIManager.Log("[LightBaker] Error: could not save to " + outPath);
+                }
+            }
+        }
 
         // Compute viewport drop position for drag-to-viewport
         {
@@ -878,7 +2098,47 @@ void Application::Run()
         {
             Renderer::RenderSceneGame(m_Scene, winW, winH);
         }
-        else if (!showProjectView)
+        else if (showRoomEditor)
+        {
+            // Render the room preview scene (interior entities + floor)
+            Renderer::RenderSceneEditor(m_RoomPreviewScene, m_EditorCamera, winW, winH);
+
+            // Draw wireframe block outlines + door markers + expansion arrows
+            int rsi = m_UIManager.GetEditingRoomSetIdx();
+            int rri = m_UIManager.GetEditingRoomIdx();
+            if (rsi >= 0 && rsi < (int)m_Scene.RoomSets.size() &&
+                rri >= 0 && rri < (int)m_Scene.RoomSets[rsi].Rooms.size())
+            {
+                Renderer::DrawRoomBlockWireframes(
+                    m_Scene.RoomSets[rsi].Rooms[rri],
+                    m_UIManager.GetMazeSelectedBlock(),
+                    m_MazeHoveredBlock,
+                    m_EditorCamera, winW, winH);
+
+                if (!m_MazeBlockArrows.empty())
+                    Renderer::DrawRoomExpansionArrows(
+                        m_MazeBlockArrows.data(), (int)m_MazeBlockArrows.size(),
+                        m_MazeHoveredArrowIdx,
+                        InputManager::IsKeyPressed(Key::LeftShift),
+                        m_EditorCamera, winW, winH);
+            }
+
+            // Draw gizmo on selected interior node
+            int selNode = m_UIManager.GetRoomSelectedNode();
+            int selEnt  = (selNode >= 0) ? selNode + 1 : -1; // +1 for preview light
+            if (selEnt >= 0 && selEnt < (int)m_RoomPreviewScene.Transforms.size())
+            {
+                int axisInt = (int)m_Gizmo.GetDragAxis();
+                glm::vec3 gizmoPos = m_RoomPreviewScene.Transforms[selEnt].Position;
+                if (m_GizmoMode == GizmoMode::Move)
+                    Renderer::DrawTranslationGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+                else if (m_GizmoMode == GizmoMode::Rotate)
+                    Renderer::DrawRotationGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+                else if (m_GizmoMode == GizmoMode::Scale)
+                    Renderer::DrawScaleGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+            }
+        }
+        else if (!showProjectView && !showMazeOverview)
         {
             Renderer::RenderSceneEditor(m_Scene, m_EditorCamera, winW, winH);
             if (m_Mode == EngineMode::Editor && m_SelectedEntity >= 0)
@@ -1005,6 +2265,7 @@ void Application::Run()
     }
 
     m_UIManager.Shutdown();
+    LightmapManager::Instance().ReleaseAll();
 }
 
 } // namespace tsu

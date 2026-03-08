@@ -12,6 +12,9 @@
 #include <cstdio>
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include <map>
 #include <unordered_map>
 #include <functional>
 
@@ -144,6 +147,7 @@ static void KeyNameField(const char* label, int& keyCode)
     // Persistent edit buffer per-ID
     static std::unordered_map<ImGuiID, std::array<char,64>> s_EditBufs;
     static std::unordered_map<ImGuiID, bool>                s_Editing;
+    static std::unordered_map<ImGuiID, bool>                s_JustOpened;
     ImGuiID wid = ImGui::GetID("##kf");
 
     auto& editing = s_Editing[wid];
@@ -169,14 +173,20 @@ static void KeyNameField(const char* label, int& keyCode)
             if (nm2) snprintf(buf.data(), buf.size(), "%s", nm2);
             else     snprintf(buf.data(), buf.size(), "%d", keyCode);
             editing = true;
+            s_JustOpened[wid] = true;
         }
     }
     else
     {
         ImGui::SetNextItemWidth(140.0f);
+        // Focus the text field on the first frame of edit mode
+        if (s_JustOpened.count(wid))
+        {
+            ImGui::SetKeyboardFocusHere(0);
+            s_JustOpened.erase(wid);
+        }
         bool confirmed = ImGui::InputText("##kfedit", buf.data(), buf.size(),
             ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
-        ImGui::SetKeyboardFocusHere(-1);
         if (confirmed || (!ImGui::IsItemActive() && !ImGui::IsItemFocused()))
         {
             int parsed = GlfwKeyFromName(buf.data());
@@ -219,41 +229,22 @@ static bool DrawCompHeader(const char* label, const char* uid,
     if (pEnabled && !(*pEnabled))
         ImGui::PopStyleColor();
 
-    // ---------- Toggle button overlaid on the RIGHT of the header ----------
+    // Capture header rect BEFORE any cursor moves
+    ImVec2 hdrMin = ImGui::GetItemRectMin();
+    ImVec2 hdrMax = ImGui::GetItemRectMax();
+
+    // Right-click on header → Remove  (only for removable components, i.e. pEnabled != nullptr)
     if (pEnabled != nullptr)
     {
-        float frameH = ImGui::GetFrameHeight();
-        float btnW   = frameH * 1.15f;
-        ImVec2 hdrMin = ImGui::GetItemRectMin();
-        ImVec2 hdrMax = ImGui::GetItemRectMax();
-        // Place button at the right edge of the header, vertically centred
-        float bx = hdrMax.x - btnW - 4.0f;
-        float by = hdrMin.y + (hdrMax.y - hdrMin.y - frameH) * 0.5f;
-        ImGui::SetCursorScreenPos(ImVec2(bx, by));
-
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            *pEnabled ? ImVec4(0.20f, 0.72f, 0.26f, 1.0f) : ImVec4(0.38f, 0.38f, 0.40f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-            *pEnabled ? ImVec4(0.30f, 0.85f, 0.35f, 1.0f) : ImVec4(0.50f, 0.50f, 0.52f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-            *pEnabled ? ImVec4(0.14f, 0.58f, 0.20f, 1.0f) : ImVec4(0.28f, 0.28f, 0.30f, 1.0f));
-        char btnId[64]; snprintf(btnId, sizeof(btnId), "##entog_%s", uid);
-        if (ImGui::Button(btnId, ImVec2(btnW, frameH)))
-            *pEnabled = !(*pEnabled);
-        ImGui::PopStyleColor(3);
-        // Restore cursor to below the header so content follows normally
-        ImGui::SetCursorScreenPos(ImVec2(hdrMin.x, hdrMax.y));
+        char ctxId[64]; snprintf(ctxId, sizeof(ctxId), "##rmctx_%s", uid);
+        if (ImGui::BeginPopupContextItem(ctxId))
+        {
+            if (ImGui::MenuItem("Remove Component")) removedOut = true;
+            ImGui::EndPopup();
+        }
     }
 
-    // Right-click on header → Remove
-    char ctxId[64]; snprintf(ctxId, sizeof(ctxId), "##rmctx_%s", uid);
-    if (ImGui::BeginPopupContextItem(ctxId))
-    {
-        if (ImGui::MenuItem("Remove Component")) removedOut = true;
-        ImGui::EndPopup();
-    }
-
-    // Drag the header itself to reorder
+    // Drag the header to reorder (also while header is last item)
     if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
     {
         ImGui::SetDragDropPayload("COMP_REORDER", &orderIdx, sizeof(int));
@@ -271,6 +262,52 @@ static bool DrawCompHeader(const char* label, const char* uid,
                 std::swap(order[fromIdx], order[orderIdx]);
         }
         ImGui::EndDragDropTarget();
+    }
+
+    // ---------- Toggle button + × button overlaid on the RIGHT of the header ----------
+    if (pEnabled != nullptr)
+    {
+        float frameH = ImGui::GetFrameHeight();
+        float btnW   = frameH * 1.15f;
+        float closeW = frameH * 0.95f;
+
+        // Toggle button (enable/disable)
+        float bx = hdrMax.x - btnW - closeW - 8.0f;
+        float by = hdrMin.y + (hdrMax.y - hdrMin.y - frameH) * 0.5f;
+        ImGui::SetCursorScreenPos(ImVec2(bx, by));
+
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            *pEnabled ? ImVec4(0.20f, 0.72f, 0.26f, 1.0f) : ImVec4(0.38f, 0.38f, 0.40f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+            *pEnabled ? ImVec4(0.30f, 0.85f, 0.35f, 1.0f) : ImVec4(0.50f, 0.50f, 0.52f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+            *pEnabled ? ImVec4(0.14f, 0.58f, 0.20f, 1.0f) : ImVec4(0.28f, 0.28f, 0.30f, 1.0f));
+        char btnId[64]; snprintf(btnId, sizeof(btnId), "##entog_%s", uid);
+        if (ImGui::Button(btnId, ImVec2(btnW, frameH)))
+            *pEnabled = !(*pEnabled);
+        ImGui::PopStyleColor(3);
+
+        // × remove button
+        float cx2 = hdrMax.x - closeW - 2.0f;
+        ImGui::SetCursorScreenPos(ImVec2(cx2, by));
+        ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.55f, 0.10f, 0.10f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.20f, 0.20f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.40f, 0.07f, 0.07f, 1.0f));
+        char closeId[64]; snprintf(closeId, sizeof(closeId), "##rmx_%s", uid);
+        if (ImGui::Button(closeId, ImVec2(closeW, frameH)))
+            removedOut = true;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Remove component");
+        // Draw × text manually centred in the button
+        ImVec2 btnPos   = ImGui::GetItemRectMin();
+        ImVec2 btnSize  = ImGui::GetItemRectSize();
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(btnPos.x + btnSize.x * 0.5f - 4.0f, btnPos.y + btnSize.y * 0.5f - 7.0f),
+            IM_COL32(255,220,220,255), "\xc3\x97");  // UTF-8 × (U+00D7)
+        ImGui::PopStyleColor(3);
+
+        // Restore cursor to below the header so content follows normally
+        ImGui::SetCursorScreenPos(ImVec2(hdrMin.x, hdrMax.y));
     }
 
     return open;
@@ -349,6 +386,10 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
             case COMP_PLAYERCTRL:  return scene.PlayerControllers[idx].Active;
             case COMP_MOUSELOOK:   return scene.MouseLooks[idx].Active;
             case COMP_LIGHT:       return scene.Lights[idx].Active;
+            case COMP_MAZEGEN:     return scene.MazeGenerators[idx].Active;
+            case COMP_TRIGGER:     return (idx < (int)scene.Triggers.size()) && scene.Triggers[idx].Active;
+            case COMP_ANIMATOR:    return (idx < (int)scene.Animators.size()) && scene.Animators[idx].Active;
+            case COMP_LUA:         return (idx < (int)scene.LuaScripts.size()) && scene.LuaScripts[idx].Active;
             default: return false;
         }
     };
@@ -370,6 +411,10 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
     addMissing(COMP_PLAYERCTRL);
     addMissing(COMP_MOUSELOOK);
     addMissing(COMP_LIGHT);
+    addMissing(COMP_MAZEGEN);
+    addMissing(COMP_TRIGGER);
+    addMissing(COMP_ANIMATOR);
+    addMissing(COMP_LUA);
 
     return stored;
 }
@@ -460,7 +505,7 @@ void InspectorPanel::DrawTransformSection(TransformComponent& t, const char* lab
 // Game Camera section
 // ----------------------------------------------------------------
 
-bool InspectorPanel::DrawCameraSection(GameCameraComponent& gc,
+bool InspectorPanel::DrawCameraSection(GameCameraComponent& gc, Scene& scene,
                                         int orderIdx, std::vector<int>& order)
 {
     bool removed = false;
@@ -479,6 +524,10 @@ bool InspectorPanel::DrawCameraSection(GameCameraComponent& gc,
     bool pitchChanged = TableDragFloat1("Pitch", &gc.Pitch, 0.5f, -89.0f, 89.0f, &kPitchDef);
     if (yawChanged || pitchChanged) gc.UpdateVectors();
     ImGui::EndTable();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    DrawEnvironmentSettings(scene);
     return true;
 }
 
@@ -732,6 +781,37 @@ bool InspectorPanel::DrawPlayerControllerSection(PlayerControllerComponent& pc,
     ImGui::TextDisabled("Last Move Axis: %.2f  %.2f  %.2f",
                         pc.LastMoveAxis.x, pc.LastMoveAxis.y, pc.LastMoveAxis.z);
 
+    // ---- Headbob ----
+    ImGui::SeparatorText("Headbob");
+    ImGui::Checkbox("Enabled##hb", &pc.HeadbobEnabled);
+    if (pc.HeadbobEnabled)
+    {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Camera Entity");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(60.0f);
+        ImGui::InputInt("##hbcam", &pc.HeadbobCameraEntity);
+        if (pc.HeadbobCameraEntity >= 0 &&
+            pc.HeadbobCameraEntity < (int)scene.EntityNames.size())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%s)", scene.EntityNames[pc.HeadbobCameraEntity].c_str());
+        }
+        ImGui::TextDisabled("Set to the camera child entity index");
+        if (ImGui::BeginTable("##hb_tbl", 2, ImGuiTableFlags_SizingFixedFit))
+        {
+            ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+            ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+            static const float kFreqDef  = 2.2f;
+            static const float kAmpYDef  = 0.055f;
+            static const float kAmpXDef  = 0.030f;
+            TableDragFloat1("Frequency",  &pc.HeadbobFrequency,  0.05f, 0.1f, 10.0f, &kFreqDef);
+            TableDragFloat1("Amp Y",      &pc.HeadbobAmplitudeY, 0.002f, 0.0f, 0.5f, &kAmpYDef);
+            TableDragFloat1("Amp X",      &pc.HeadbobAmplitudeX, 0.002f, 0.0f, 0.2f, &kAmpXDef);
+            ImGui::EndTable();
+        }
+    }
+
     return true;
 }
 
@@ -834,6 +914,38 @@ void InspectorPanel::DrawAddComponentMenu(Scene& scene, int entityIdx,
             any = true;
         }
 
+        // ---- Trigger / Animator / Lua Script ----
+        bool showTr  = (entityIdx < (int)scene.Triggers.size())  && !scene.Triggers[entityIdx].Active  && matches("Trigger Volume");
+        bool showAn  = (entityIdx < (int)scene.Animators.size()) && !scene.Animators[entityIdx].Active && matches("Animator");
+        bool showLua = (entityIdx < (int)scene.LuaScripts.size()) && !scene.LuaScripts[entityIdx].Active && matches("Lua");
+        if (showTr || showAn || showLua)
+        {
+            if (!searchActive)
+            {
+                if (any) ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 1.0f, 0.7f, 1.0f));
+                ImGui::TextUnformatted("  Interaction");
+                ImGui::PopStyleColor();
+            }
+            if (showTr && ImGui::MenuItem("    Trigger Volume"))
+            {
+                scene.Triggers[entityIdx].Active = true;
+                order.push_back(COMP_TRIGGER);
+            }
+            if (showAn && ImGui::MenuItem("    Animator"))
+            {
+                scene.Animators[entityIdx].Active  = true;
+                scene.Animators[entityIdx].Playing = false;
+                order.push_back(COMP_ANIMATOR);
+            }
+            if (showLua && ImGui::MenuItem("    Lua Script"))
+            {
+                scene.LuaScripts[entityIdx].Active = true;
+                order.push_back(COMP_LUA);
+            }
+            any = true;
+        }
+
         // ---- Lighting ----
         bool showLt = !scene.Lights[entityIdx].Active && matches("Light");
         if (showLt)
@@ -875,6 +987,26 @@ void InspectorPanel::DrawAddComponentMenu(Scene& scene, int entityIdx,
                 scene.Lights[entityIdx].Width   = 2.0f;
                 scene.Lights[entityIdx].Height  = 1.0f;
                 order.push_back(COMP_LIGHT);
+            }
+            any = true;
+        }
+
+        // ---- Procedural ----
+        bool showMg = !scene.MazeGenerators[entityIdx].Active && matches("Maze Generator");
+        if (showMg)
+        {
+            if (!searchActive)
+            {
+                ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 1.0f, 0.7f, 1.0f));
+                ImGui::TextUnformatted("  Procedural");
+                ImGui::PopStyleColor();
+            }
+            if (ImGui::MenuItem("    Maze Generator"))
+            {
+                scene.MazeGenerators[entityIdx].Active  = true;
+                scene.MazeGenerators[entityIdx].Enabled = true;
+                order.push_back(COMP_MAZEGEN);
             }
             any = true;
         }
@@ -1082,6 +1214,88 @@ bool InspectorPanel::DrawLightSection(LightComponent& lc, int orderIdx, std::vec
 }
 
 // ----------------------------------------------------------------
+// Maze Generator section
+// ----------------------------------------------------------------
+
+bool InspectorPanel::DrawMazeGeneratorSection(MazeGeneratorComponent& mg, Scene& scene,
+                                               int orderIdx, std::vector<int>& order)
+{
+    bool removedOut = false;
+    bool open = DrawCompHeader("Maze Generator", "mazegen_sec", orderIdx, order, removedOut, &mg.Enabled);
+    if (removedOut)
+    {
+        mg.Active  = false;
+        mg.Enabled = true;
+        mg.RoomSetIndex = -1;
+        mg.SpawnedRooms.clear();
+        mg.OccupiedCells.clear();
+        return false;
+    }
+    if (!open) return true;
+
+    if (!ImGui::BeginTable("##mg", 2)) return true;
+    ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+
+    // --- Room Set selector ---
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Room Set");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1);
+
+        const char* preview = "(None)";
+        if (mg.RoomSetIndex >= 0 && mg.RoomSetIndex < (int)scene.RoomSets.size())
+            preview = scene.RoomSets[mg.RoomSetIndex].Name.c_str();
+
+        if (ImGui::BeginCombo("##mgset", preview))
+        {
+            if (ImGui::Selectable("(None)", mg.RoomSetIndex < 0))
+                mg.RoomSetIndex = -1;
+            for (int si = 0; si < (int)scene.RoomSets.size(); ++si)
+            {
+                bool sel = (mg.RoomSetIndex == si);
+                if (ImGui::Selectable(scene.RoomSets[si].Name.c_str(), sel))
+                    mg.RoomSetIndex = si;
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    // --- Generate Radius ---
+    TableDragFloat1("Gen Radius", &mg.GenerateRadius, 0.5f, 1.0f, 5000.0f);
+
+    // --- Despawn Radius ---
+    TableDragFloat1("Despawn Radius", &mg.DespawnRadius, 0.5f, 1.0f, 5000.0f);
+
+    // --- Block Size ---
+    TableDragFloat1("Block Size", &mg.BlockSize, 0.05f, 0.1f, 50.0f);
+
+    // --- Runtime info ---
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextDisabled("Live Rooms");
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextDisabled("%d", (int)mg.SpawnedRooms.size());
+
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextDisabled("Occupied Cells");
+    ImGui::TableSetColumnIndex(1);
+    ImGui::TextDisabled("%d", (int)mg.OccupiedCells.size());
+
+    ImGui::EndTable();
+
+    // Ensure despawn >= generate
+    if (mg.DespawnRadius < mg.GenerateRadius)
+        mg.DespawnRadius = mg.GenerateRadius;
+
+    return true;
+}
+
+// ----------------------------------------------------------------
 // Group order management
 // ----------------------------------------------------------------
 
@@ -1147,6 +1361,443 @@ void InspectorPanel::DrawAddGroupComponentMenu(SceneGroup& group, std::vector<in
 }
 
 // ----------------------------------------------------------------
+// Trigger Volume section
+// ----------------------------------------------------------------
+bool InspectorPanel::DrawTriggerSection(TriggerComponent& tr, int orderIdx, std::vector<int>& order)
+{
+    bool removed = false;
+    bool open    = DrawCompHeader("Trigger Volume", "trig", orderIdx, order, removed, &tr.Enabled);
+    if (removed) { tr.Active = false; tr.Enabled = true; tr._PlayerInside = false; tr._HasFired = false; return false; }
+    if (!open || !tr.Enabled) return true;
+
+    if (ImGui::BeginTable("##trig_tbl", 2, ImGuiTableFlags_SizingFixedFit))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        TableDragFloat3("Half-Size", &tr.Size.x,   0.02f, 0.01f, 100.0f);
+        TableDragFloat3("Offset",    &tr.Offset.x, 0.01f);
+        ImGui::EndTable();
+    }
+
+    // Channel
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Channel");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(60.0f);
+    int ch = tr.Channel;
+    if (ImGui::InputInt("##trig_ch", &ch))
+        tr.Channel = std::max(-1, ch);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(-1 = off)");
+
+    if (tr.Channel >= 0)
+    {
+        ImGui::Checkbox("Value while inside##trig",  &tr.InsideValue);
+        ImGui::Checkbox("Value while outside##trig", &tr.OutsideValue);
+    }
+
+    ImGui::Checkbox("One Shot##trig",  &tr.OneShot);
+    ImGui::Checkbox("Show Trigger##trig", &tr.ShowTrigger);
+
+    // Status
+    ImGui::Spacing();
+    ImGui::TextColored(
+        tr._PlayerInside ? ImVec4(0.2f,1.0f,0.3f,1) : ImVec4(0.45f,0.45f,0.45f,1),
+        tr._PlayerInside ? "● INSIDE" : "○ outside");
+    if (tr.OneShot && tr._HasFired)
+    {
+        ImGui::SameLine(0, 12);
+        if (ImGui::SmallButton("Reset##trig")) tr._HasFired = false;
+    }
+    return true;
+}
+
+// ----------------------------------------------------------------
+// Animator section
+// ----------------------------------------------------------------
+bool InspectorPanel::DrawAnimatorSection(AnimatorComponent& an, int orderIdx, std::vector<int>& order)
+{
+    bool removed = false;
+    bool open    = DrawCompHeader("Oscillator", "anim", orderIdx, order, removed, &an.Enabled);
+    if (removed) { an.Active = false; an.Enabled = true; an.Playing = false; return false; }
+    if (!open || !an.Enabled) return true;
+
+    static const char* propNames[] = { "Position", "Rotation", "Scale" };
+    static const char* easeNames[] = { "Linear", "Ease In", "Ease Out", "Ease In/Out" };
+    static const char* modeNames[] = { "Oscillate", "One Shot", "Loop" };
+
+    if (ImGui::BeginTable("##anim_tbl", 2, ImGuiTableFlags_SizingFixedFit))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+        // Property combo
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Property");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##animProp", propNames[(int)an.Property]))
+        {
+            for (int pi = 0; pi < 3; pi++)
+                if (ImGui::Selectable(propNames[pi], (int)an.Property == pi))
+                    an.Property = (AnimatorProperty)pi;
+            ImGui::EndCombo();
+        }
+
+        // Mode combo
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Mode");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##animMode", modeNames[(int)an.Mode]))
+        {
+            for (int mi = 0; mi < 3; mi++)
+                if (ImGui::Selectable(modeNames[mi], (int)an.Mode == mi))
+                    an.Mode = (AnimatorMode)mi;
+            ImGui::EndCombo();
+        }
+
+        // Easing combo
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Easing");
+        ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##animEase", easeNames[(int)an.Easing]))
+        {
+            for (int ei = 0; ei < 4; ei++)
+                if (ImGui::Selectable(easeNames[ei], (int)an.Easing == ei))
+                    an.Easing = (AnimatorEasing)ei;
+            ImGui::EndCombo();
+        }
+
+        TableDragFloat3("From", &an.From.x, 0.02f);
+        TableDragFloat3("To",   &an.To.x,   0.02f);
+
+        static const float defDur = 1.0f;
+        TableDragFloat1("Duration", &an.Duration, 0.01f, 0.01f, 60.0f, &defDur);
+        TableDragFloat1("Delay",    &an.Delay,    0.01f, 0.0f,  60.0f);
+
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::TextUnformatted("Auto Play");
+        ImGui::TableSetColumnIndex(1); ImGui::Checkbox("##autoPlay", &an.AutoPlay);
+
+        // Runtime progress
+        float prog = (an.Duration > 0.0f) ? std::min(an._Timer / an.Duration, 1.0f) : 0.0f;
+        ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextDisabled("Progress");
+        ImGui::TableSetColumnIndex(1); ImGui::ProgressBar(prog, ImVec2(-1,0));
+
+        ImGui::EndTable();
+    }
+
+    // Play / Pause / Reset buttons
+    ImGui::Spacing();
+    if (!an.Playing)
+    {
+        if (ImGui::SmallButton("Play")) { an.Playing = true; an._DelayDone = false; an._Timer = 0.0f; an._Dir = 1.0f; }
+    }
+    else
+    {
+        if (ImGui::SmallButton("Pause")) an.Playing = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset")) { an.Playing = false; an._Timer = 0.0f; an._Phase = 0.0f; an._Dir = 1.0f; an._DelayDone = false; }
+
+    return true;
+}
+
+// ----------------------------------------------------------------
+// Lua Script component section
+// ----------------------------------------------------------------
+// Parse --@expose annotations from a Lua script into ExposedVars (add new, keep existing user values)
+static void SyncExposedVars(LuaScriptComponent& ls)
+{
+    std::ifstream f(ls.ScriptPath);
+    if (!f.is_open()) { ls.ExposedVars.clear(); return; }
+
+    std::map<std::string, std::string> parsed;
+    std::string line;
+    while (std::getline(f, line)) {
+        auto pos = line.find("--@expose ");
+        if (pos == std::string::npos) continue;
+        std::istringstream ss(line.substr(pos + 10));
+        std::string name, second;
+        if (!(ss >> name >> second)) continue;
+        std::string defaultVal;
+        // second may be a type keyword or already the value
+        if (second == "number" || second == "string" || second == "boolean") {
+            std::getline(ss, defaultVal);
+        } else {
+            defaultVal = second;
+            std::string extra; std::getline(ss, extra);
+            if (!extra.empty()) defaultVal += extra;
+        }
+        // trim
+        while (!defaultVal.empty() && (defaultVal.front()==' ' || defaultVal.front()=='\t')) defaultVal.erase(0,1);
+        while (!defaultVal.empty() && (defaultVal.back()==' ' || defaultVal.back()=='\r' || defaultVal.back()=='\n')) defaultVal.pop_back();
+        parsed[name] = defaultVal;
+    }
+
+    // Merge: keep existing user values for known keys, add new keys with defaults
+    std::map<std::string, std::string> merged;
+    for (auto& [k, v] : parsed)
+        merged[k] = ls.ExposedVars.count(k) ? ls.ExposedVars.at(k) : v;
+    ls.ExposedVars = std::move(merged);
+}
+
+bool InspectorPanel::DrawLuaScriptSection(LuaScriptComponent& ls, int orderIdx, std::vector<int>& order)
+{
+    bool removed = false;
+    bool open    = DrawCompHeader("Lua Script", "lua", orderIdx, order, removed, &ls.Enabled);
+    if (removed) { ls.Active = false; ls.Enabled = true; ls.ScriptPath.clear(); ls.ExposedVars.clear(); return false; }
+    if (!open || !ls.Enabled) return true;
+
+    ImGui::Spacing();
+
+    // ---- Script path drop zone + path input ----
+    static char pathBuf[512] = {};
+    strncpy(pathBuf, ls.ScriptPath.c_str(), 511); pathBuf[511] = '\0';
+
+    // Auto-sync if path is set but ExposedVars not yet populated
+    if (!ls.ScriptPath.empty() && ls.ExposedVars.empty())
+        SyncExposedVars(ls);
+
+    // Styled drop zone frame
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.10f, 0.14f, 0.10f, 1.0f));
+    bool pathChanged = ImGui::InputText("##luapath", pathBuf, 512, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::PopStyleColor();
+
+    // Accept drag-drop from assets panel
+    if (ImGui::BeginDragDropTarget()) {
+        if (auto* pl = ImGui::AcceptDragDropPayload("SCRIPT_ASSET")) {
+            std::string dropped((const char*)pl->Data, pl->DataSize - 1);
+            if (ls.ScriptPath != dropped) {
+                ls.ScriptPath = dropped;
+                pathChanged = true;
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+
+    if (pathChanged) {
+        ls.ScriptPath = pathBuf;
+        SyncExposedVars(ls);
+    }
+
+    if (ls.ScriptPath.empty()) {
+        ImGui::TextDisabled("Drag a .lua file here or type the path");
+    } else {
+        // Derive file name for display
+        size_t sl = ls.ScriptPath.find_last_of("/\\");
+        std::string nm = (sl != std::string::npos) ? ls.ScriptPath.substr(sl+1) : ls.ScriptPath;
+        ImGui::TextColored(ImVec4(0.4f,1.0f,0.5f,1.0f), "%s", nm.c_str());
+    }
+
+    // Sync button
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Sync##lsync")) SyncExposedVars(ls);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Re-read --@expose annotations from the script file");
+
+    // ---- Exposed variables ----
+    if (!ls.ExposedVars.empty()) {
+        ImGui::Spacing();
+        ImGui::SeparatorText("Variables");
+        ImGui::PushID("##luavars");
+        static std::unordered_map<std::string, std::array<char,256>> s_StrBufs;
+        for (auto& [k, v] : ls.ExposedVars) {
+            // Detect type by value
+            bool isBool   = (v == "true" || v == "false");
+            bool isNumber = false;
+            float numVal  = 0.0f;
+            if (!isBool) {
+                char* end = nullptr;
+                numVal = std::strtof(v.c_str(), &end);
+                isNumber = (end && *end == '\0' && end != v.c_str());
+            }
+
+            ImGui::PushID(k.c_str());
+            ImGui::SetNextItemWidth(-1.0f);
+            if (isBool) {
+                bool bv = (v == "true");
+                if (ImGui::Checkbox(k.c_str(), &bv)) v = bv ? "true" : "false";
+            } else if (isNumber) {
+                if (ImGui::DragFloat(k.c_str(), &numVal, 0.01f)) {
+                    char tmp[64]; snprintf(tmp, 64, "%g", numVal);
+                    v = tmp;
+                }
+            } else {
+                auto& buf = s_StrBufs[k];
+                strncpy(buf.data(), v.c_str(), 255); buf[255] = '\0';
+                if (ImGui::InputText(k.c_str(), buf.data(), 256)) v = buf.data();
+            }
+            ImGui::PopID();
+        }
+        ImGui::PopID();
+    } else if (!ls.ScriptPath.empty()) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("No --@expose variables found.");
+        ImGui::TextDisabled("Add: --@expose myVar number 1.0");
+    }
+
+    ImGui::Spacing();
+    ImGui::TextDisabled("Script functions: OnStart(), OnUpdate(dt), OnStop()");
+    ImGui::TextDisabled("Use 'entity_idx' for this entity's index.");
+
+    return true;
+}
+
+// ----------------------------------------------------------------
+// Environment settings (Fog, Sky, Post-Process) — shown when no entity selected
+// ----------------------------------------------------------------
+void InspectorPanel::DrawEnvironmentSettings(Scene& scene)
+{
+    ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Environment");
+    ImGui::Separator();
+
+    // ---- Fog ----
+    if (ImGui::CollapsingHeader("Fog", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        static const char* fogTypeNames[] = { "None", "Linear", "Exponential", "Exp²" };
+        int ft = (int)scene.Fog.Type;
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::Combo("##fogType", &ft, fogTypeNames, 4))
+            scene.Fog.Type = (FogType)ft;
+        if (scene.Fog.Type != FogType::None)
+        {
+            ImGui::ColorEdit3("Color##fog", &scene.Fog.Color[0]);
+            if (scene.Fog.Type == FogType::Linear)
+            {
+                ImGui::DragFloat("Start##fog", &scene.Fog.Start, 0.5f, 0.0f, 1000.0f);
+                ImGui::DragFloat("End##fog",   &scene.Fog.End,   0.5f, 0.0f, 1000.0f);
+            }
+            else
+            {
+                ImGui::DragFloat("Density##fog", &scene.Fog.Density, 0.001f, 0.0001f, 1.0f, "%.4f");
+            }
+        }
+    }
+
+    // ---- Sky ----
+    if (ImGui::CollapsingHeader("Sky"))
+    {
+        ImGui::Checkbox("Enabled##sky", &scene.Sky.Enabled);
+        if (scene.Sky.Enabled)
+        {
+            ImGui::ColorEdit3("Zenith##sky",   &scene.Sky.ZenithColor[0]);
+            ImGui::ColorEdit3("Horizon##sky",  &scene.Sky.HorizonColor[0]);
+            ImGui::ColorEdit3("Ground##sky",   &scene.Sky.GroundColor[0]);
+            ImGui::DragFloat3("Sun Dir##sky",  &scene.Sky.SunDirection[0], 0.01f, -1.0f, 1.0f);
+            ImGui::ColorEdit3("Sun Color##sky",&scene.Sky.SunColor[0]);
+            ImGui::DragFloat("Sun Size##sky",  &scene.Sky.SunSize,  0.001f, 0.001f, 0.5f, "%.3f");
+            ImGui::DragFloat("Sun Bloom##sky", &scene.Sky.SunBloom, 0.005f, 0.0f,   0.5f, "%.3f");
+        }
+    }
+
+    // ---- Post-Process ----
+    if (ImGui::CollapsingHeader("Post-Processing"))
+    {
+        ImGui::Checkbox("Enabled##pp", &scene.PostProcess.Enabled);
+        if (scene.PostProcess.Enabled)
+        {
+            if (ImGui::TreeNodeEx("Bloom", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::Checkbox("##bloomEn", &scene.PostProcess.BloomEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Bloom");
+                if (scene.PostProcess.BloomEnabled)
+                {
+                    ImGui::DragFloat("Threshold##bloom", &scene.PostProcess.BloomThreshold, 0.01f, 0.0f, 1.0f);
+                    ImGui::DragFloat("Intensity##bloom",  &scene.PostProcess.BloomIntensity,  0.01f, 0.0f, 5.0f);
+                    ImGui::DragFloat("Radius##bloom",     &scene.PostProcess.BloomRadius,     0.1f,  0.1f, 8.0f);
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("Vignette", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::Checkbox("##vigEn", &scene.PostProcess.VignetteEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Vignette");
+                if (scene.PostProcess.VignetteEnabled)
+                {
+                    ImGui::DragFloat("Radius##vig",   &scene.PostProcess.VignetteRadius,   0.01f, 0.0f, 1.5f);
+                    ImGui::DragFloat("Strength##vig", &scene.PostProcess.VignetteStrength, 0.01f, 0.0f, 1.0f);
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("Film Grain"))
+            {
+                ImGui::Checkbox("##grainEn", &scene.PostProcess.GrainEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Grain");
+                if (scene.PostProcess.GrainEnabled)
+                    ImGui::DragFloat("Strength##grain", &scene.PostProcess.GrainStrength, 0.001f, 0.0f, 0.5f);
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("Chromatic Aberration"))
+            {
+                ImGui::Checkbox("##chromaEn", &scene.PostProcess.ChromaEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Chroma");
+                if (scene.PostProcess.ChromaEnabled)
+                    ImGui::DragFloat("Strength##chroma", &scene.PostProcess.ChromaStrength, 0.0001f, 0.0f, 0.02f, "%.4f");
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNodeEx("Color Grade", ImGuiTreeNodeFlags_DefaultOpen))
+            {
+                ImGui::Checkbox("Enabled##cg", &scene.PostProcess.ColorGradeEnabled);
+                if (scene.PostProcess.ColorGradeEnabled)
+                {
+                    ImGui::DragFloat("Exposure##cg",    &scene.PostProcess.Exposure,    0.01f, 0.1f, 5.0f);
+                    ImGui::DragFloat("Saturation##cg",  &scene.PostProcess.Saturation,  0.01f, 0.0f, 3.0f);
+                    ImGui::DragFloat("Contrast##cg",    &scene.PostProcess.Contrast,    0.01f, 0.0f, 3.0f);
+                    ImGui::DragFloat("Brightness##cg",  &scene.PostProcess.Brightness,  0.005f,-0.5f, 0.5f);
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("Sharpen"))
+            {
+                ImGui::Checkbox("##sharpenEn", &scene.PostProcess.SharpenEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Sharpen");
+                if (scene.PostProcess.SharpenEnabled)
+                    ImGui::DragFloat("Strength##sharpen", &scene.PostProcess.SharpenStrength, 0.05f, 0.0f, 5.0f);
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("Lens Distortion"))
+            {
+                ImGui::Checkbox("##lensEn", &scene.PostProcess.LensDistortEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Lens Distortion");
+                if (scene.PostProcess.LensDistortEnabled)
+                    ImGui::DragFloat("Strength##lens", &scene.PostProcess.LensDistortStrength, 0.01f, -1.0f, 1.0f);
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("Sepia"))
+            {
+                ImGui::Checkbox("##sepiaEn", &scene.PostProcess.SepiaEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Sepia");
+                if (scene.PostProcess.SepiaEnabled)
+                    ImGui::DragFloat("Strength##sepia", &scene.PostProcess.SepiaStrength, 0.01f, 0.0f, 1.0f);
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("Posterize"))
+            {
+                ImGui::Checkbox("##posterizeEn", &scene.PostProcess.PosterizeEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Posterize");
+                if (scene.PostProcess.PosterizeEnabled)
+                    ImGui::DragFloat("Levels##posterize", &scene.PostProcess.PosterizeLevels, 0.5f, 2.0f, 32.0f);
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("Scanlines"))
+            {
+                ImGui::Checkbox("##scanlinesEn", &scene.PostProcess.ScanlinesEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Scanlines");
+                if (scene.PostProcess.ScanlinesEnabled)
+                {
+                    ImGui::DragFloat("Strength##scanlines",   &scene.PostProcess.ScanlinesStrength,  0.01f, 0.0f, 1.0f);
+                    ImGui::DragFloat("Frequency##scanlines",  &scene.PostProcess.ScanlinesFrequency, 50.0f, 50.0f, 4000.0f);
+                }
+                ImGui::TreePop();
+            }
+            if (ImGui::TreeNode("Pixelate"))
+            {
+                ImGui::Checkbox("##pixelateEn", &scene.PostProcess.PixelateEnabled);
+                ImGui::SameLine(); ImGui::TextUnformatted("Pixelate");
+                if (scene.PostProcess.PixelateEnabled)
+                    ImGui::DragFloat("Block Size##pixelate", &scene.PostProcess.PixelateSize, 0.5f, 1.0f, 64.0f);
+                ImGui::TreePop();
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------
 // Group Transform + components section
 // ----------------------------------------------------------------
 
@@ -1166,7 +1817,7 @@ void InspectorPanel::DrawGroupSection(SceneGroup& group, int groupIdx)
         switch (order[i])
         {
             case COMP_CAMERA:
-                kept = DrawCameraSection(group.GameCamera, i, order);
+                kept = DrawCameraSection(group.GameCamera, *m_ScenePtr, i, order);
                 break;
             case COMP_GRAVITY:
                 kept = DrawGravitySection(group.RigidBody, i, order);
@@ -1471,6 +2122,8 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                              int selectedMaterial, int selectedTexture,
                              int selectedPrefab, const std::vector<int>* multiSelection)
 {
+    m_ScenePtr = &scene;   // give helper functions access to the scene this frame
+
     ImGui::SetNextWindowPos(ImVec2((float)winX, (float)winY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2((float)panelW, (float)panelH), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.93f);
@@ -1493,16 +2146,18 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     }
 
     // ---- Prefab editor mode: show selected node properties ----
-    if (m_PrefabEditorActive && m_PrefabEditorIdx >= 0 &&
-        m_PrefabEditorIdx < (int)scene.Prefabs.size())
+    if (m_PrefabEditorActive &&
+        (m_PrefabOverride || (m_PrefabEditorIdx >= 0 && m_PrefabEditorIdx < (int)scene.Prefabs.size())))
     {
-        PrefabAsset& prefab = scene.Prefabs[m_PrefabEditorIdx];
+        PrefabAsset& prefab = m_PrefabOverride ? *m_PrefabOverride
+                                               : scene.Prefabs[m_PrefabEditorIdx];
         if (m_PrefabSelectedNode >= 0 && m_PrefabSelectedNode < (int)prefab.Nodes.size())
         {
             PrefabEntityData& node = prefab.Nodes[m_PrefabSelectedNode];
 
             // Editable name
-            ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f), "Prefab Node");
+            ImGui::TextColored(ImVec4(0.35f, 0.85f, 1.0f, 1.0f),
+                               m_PrefabOverride ? "Interior Node" : "Prefab Node");
             ImGui::Separator();
             {
                 static char nodeName[128];
@@ -1516,16 +2171,19 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
 
             ImGui::Spacing();
 
-            // Transform
+            // Transform — with double-right-click to reset defaults
             if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
             {
+                static const float defPos[3] = {0.0f, 0.0f, 0.0f};
+                static const float defRot[3] = {0.0f, 0.0f, 0.0f};
+                static const float defScl[3] = {1.0f, 1.0f, 1.0f};
                 if (ImGui::BeginTable("##prefnodetfm", 2, ImGuiTableFlags_SizingStretchProp))
                 {
                     ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 60.0f);
                     ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-                    TableDragFloat3("Position", &node.Transform.Position.x, 0.1f);
-                    TableDragFloat3("Rotation", &node.Transform.Rotation.x, 0.5f);
-                    TableDragFloat3("Scale",    &node.Transform.Scale.x,    0.05f);
+                    TableDragFloat3("Position", &node.Transform.Position.x, 0.1f, 0.0f, 0.0f, defPos);
+                    TableDragFloat3("Rotation", &node.Transform.Rotation.x, 0.5f, 0.0f, 0.0f, defRot);
+                    TableDragFloat3("Scale",    &node.Transform.Scale.x,    0.05f, 0.0f, 0.0f, defScl);
                     ImGui::EndTable();
                 }
             }
@@ -1680,7 +2338,11 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
 
     if (selectedEntity < 0 && selectedGroup < 0)
     {
-        ImGui::TextDisabled("Nothing selected.");
+        ImGui::Spacing();
+        ImGui::TextDisabled("Select an entity to inspect its components.");
+        ImGui::Spacing();
+        ImGui::TextDisabled("Environment settings (Fog / Sky / Post-Processing)");
+        ImGui::TextDisabled("are accessible from the Game Camera component.");
         ImGui::End();
         return;
     }
@@ -1732,7 +2394,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
         switch (order[i])
         {
             case COMP_CAMERA:
-                kept = DrawCameraSection(scene.GameCameras[selectedEntity], i, order);
+                kept = DrawCameraSection(scene.GameCameras[selectedEntity], scene, i, order);
                 break;
             case COMP_GRAVITY:
                 kept = DrawGravitySection(scene.RigidBodies[selectedEntity], i, order);
@@ -1751,6 +2413,21 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                 break;
             case COMP_LIGHT:
                 kept = DrawLightSection(scene.Lights[selectedEntity], i, order);
+                break;
+            case COMP_MAZEGEN:
+                kept = DrawMazeGeneratorSection(scene.MazeGenerators[selectedEntity], scene, i, order);
+                break;
+            case COMP_TRIGGER:
+                if (selectedEntity < (int)scene.Triggers.size())
+                    kept = DrawTriggerSection(scene.Triggers[selectedEntity], i, order);
+                break;
+            case COMP_ANIMATOR:
+                if (selectedEntity < (int)scene.Animators.size())
+                    kept = DrawAnimatorSection(scene.Animators[selectedEntity], i, order);
+                break;
+            case COMP_LUA:
+                if (selectedEntity < (int)scene.LuaScripts.size())
+                    kept = DrawLuaScriptSection(scene.LuaScripts[selectedEntity], i, order);
                 break;
         }
         // ...existing code...

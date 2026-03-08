@@ -1,54 +1,149 @@
 # tsuEngine Scene File
-# Linhas com # sao comentarios
-#
-# Tipos: camera | cube | pyramid | cylinder
-# Cores: #RRGGBB
-# Escala 1 = 1 metro
+# Updated default scene showcasing all engine features
 
 # ========================
-# CAMERA DO EDITOR
+# ENVIRONMENT – FOG
+# ========================
+[fog]
+type    = 2
+color   = 0.65 0.70 0.80
+density = 0.025
+
+# ========================
+# ENVIRONMENT – SKY
+# ========================
+[sky]
+enabled   = true
+zenith    = 0.10 0.25 0.75
+horizon   = 0.50 0.70 1.00
+ground    = 0.28 0.23 0.18
+sun_dir   = 0.50 0.80 0.50
+sun_col   = 1.00 0.95 0.80
+sun_size  = 0.04
+sun_bloom = 0.12
+
+# ========================
+# POST-PROCESSING
+# ========================
+[postprocess]
+enabled          = true
+bloom            = true
+bloom_threshold  = 0.80
+bloom_intensity  = 0.40
+bloom_radius     = 1.50
+vignette         = true
+vig_radius       = 0.70
+vig_strength     = 0.45
+grain            = false
+grain_strength   = 0.04
+chroma           = false
+chroma_strength  = 0.003
+exposure         = 1.00
+saturation       = 1.05
+contrast         = 1.05
+brightness       = 0.00
+sharpen          = false
+sharpen_strength = 0.50
+lens_distort     = false
+lens_strength    = 0.20
+sepia            = false
+sepia_strength   = 1.00
+posterize        = false
+posterize_levels = 5.00
+scanlines        = false
+scanlines_strength  = 0.35
+scanlines_freq   = 800.00
+pixelate         = false
+pixelate_size    = 4.00
+
+# ========================
+# GAME CAMERA (principal)
 # ========================
 [entity]
-type     = camera
-position = 0 1 6
+name  = Game Camera
+type  = game_camera
+fov   = 65
+near  = 0.10
+far   = 1000.00
+yaw   = 0.0
+pitch = 0.0
+position = 0 1.5 6
 primary  = true
 
 # ========================
-# CUBO branco no centro
+# SPINNING CUBE (Lua scripted)
+# Rotates via example_rotate.lua
 # ========================
 [entity]
-type     = cube
-position = 0 0 0
-rotation = 0 0 0
-scale    = 1 1 1
-color    = #FFFFFF
+name            = Spinning Cube
+type            = cube
+position        = 0 0.5 0
+rotation        = 0 0 0
+scale           = 1 1 1
+color           = #FF4444
+lua_script      = true
+lua_script_path = assets/scripts/example_rotate.lua
 
 # ========================
-# PIRAMIDE laranja a direita
+# FLOATING SPHERE (Animator)
+# Oscillates up and down
 # ========================
 [entity]
+name          = Floating Sphere
+type          = sphere
+position      = 2.5 0.5 0
+scale         = 0.85 0.85 0.85
+color         = #44AAFF
+animator      = true
+anim_prop     = 0
+anim_mode     = 0
+anim_easing   = 3
+anim_from     = 2.5 0.2 0.0
+anim_to       = 2.5 1.4 0.0
+anim_duration = 1.80
+anim_delay    = 0.00
+anim_auto_play = true
+
+# ========================
+# PYRAMID (static)
+# ========================
+[entity]
+name     = Pyramid
 type     = pyramid
-position = 2.5 0 0
-rotation = 0 0 0
+position = -2.5 0.5 0
+rotation = 0 15 0
 scale    = 1 1 1
 color    = #FF8800
 
 # ========================
-# CILINDRO azul a esquerda
+# DIRECTIONAL LIGHT (sun)
 # ========================
 [entity]
-type     = cylinder
-position = -2.5 0 0
-rotation = 0 0 0
-scale    = 1 1 1
-color    = #0088FF
+name            = Sun
+type            = cube
+position        = 5 8 3
+scale           = 0.3 0.3 0.3
+light           = true
+light_type      = directional
+light_color     = 1.0 0.95 0.85
+light_temp      = 6500
+light_intensity = 2.50
+light_range     = 100
+light_inner     = 0
+light_outer     = 0
+light_width     = 0
+light_height    = 0
 
 # ========================
-# CHAO (cubo achatado)
+# GROUND PLANE
 # ========================
 [entity]
+name     = Ground
 type     = cube
-position = 0 -1 0
+position = 0 -0.55 0
 rotation = 0 0 0
-scale    = 10 0.1 10
-color    = #444444
+scale    = 12 0.10 12
+color    = #3A3A3A
+
+[script_assets]
+path = assets/scripts/example_rotate.lua

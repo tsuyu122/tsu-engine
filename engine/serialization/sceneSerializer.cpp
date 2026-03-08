@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <algorithm>
 
 namespace tsu {
 
@@ -97,6 +98,38 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         float       lightWidth      = 1.0f;
         float       lightHeight     = 1.0f;
         int         materialIdx     = -1;   // index into scene.Materials
+
+        // Maze Generator
+        bool        hasMazeGen      = false;
+        int         mgRoomSet       = -1;
+        float       mgGenRadius     = 50.0f;
+        float       mgDespawnRadius = 80.0f;
+        float       mgBlockSize     = 2.0f;
+
+        // Trigger Volume
+        bool        hasTrigger      = false;
+        glm::vec3   trigSize        = {1,2,1};
+        glm::vec3   trigOffset      = {0,0,0};
+        int         trigChannel     = -1;
+        bool        trigInsideVal   = true;
+        bool        trigOutsideVal  = false;
+        bool        trigOneShot     = false;
+
+        // Animator
+        bool        hasAnimator     = false;
+        int         animProp        = 0;   // AnimatorProperty
+        int         animMode        = 0;   // AnimatorMode
+        int         animEasing      = 0;   // AnimatorEasing
+        glm::vec3   animFrom        = {0,0,0};
+        glm::vec3   animTo          = {0,0,0};
+        float       animDuration    = 1.0f;
+        float       animDelay       = 0.0f;
+        bool        animAutoPlay    = false;
+
+        // Lua Script
+        bool        hasLuaScript    = false;
+        std::string luaScriptPath;
+        std::map<std::string, std::string> luaExposedVars;
     };
 
     struct MaterialData {
@@ -277,6 +310,55 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else                              lc.Type = LightType::Directional;
         }
 
+        if (d.hasMazeGen)
+        {
+            auto& mg = scene.MazeGenerators[id];
+            mg.Active         = true;
+            mg.Enabled        = true;
+            mg.RoomSetIndex   = d.mgRoomSet;
+            mg.GenerateRadius = d.mgGenRadius;
+            mg.DespawnRadius  = d.mgDespawnRadius;
+            mg.BlockSize      = d.mgBlockSize;
+        }
+
+        if (d.hasTrigger)
+        {
+            auto& tr = scene.Triggers[id];
+            tr.Active        = true;
+            tr.Enabled       = true;
+            tr.Size          = d.trigSize;
+            tr.Offset        = d.trigOffset;
+            tr.Channel       = d.trigChannel;
+            tr.InsideValue   = d.trigInsideVal;
+            tr.OutsideValue  = d.trigOutsideVal;
+            tr.OneShot       = d.trigOneShot;
+        }
+
+        if (d.hasAnimator)
+        {
+            auto& an = scene.Animators[id];
+            an.Active    = true;
+            an.Enabled   = true;
+            an.Property  = (AnimatorProperty)d.animProp;
+            an.Mode      = (AnimatorMode)d.animMode;
+            an.Easing    = (AnimatorEasing)d.animEasing;
+            an.From      = d.animFrom;
+            an.To        = d.animTo;
+            an.Duration  = d.animDuration;
+            an.Delay     = d.animDelay;
+            an.AutoPlay  = d.animAutoPlay;
+            an.Playing   = d.animAutoPlay;
+        }
+
+        if (d.hasLuaScript && id < (int)scene.LuaScripts.size())
+        {
+            auto& ls = scene.LuaScripts[id];
+            ls.Active      = true;
+            ls.Enabled     = true;
+            ls.ScriptPath  = d.luaScriptPath;
+            ls.ExposedVars = d.luaExposedVars;
+        }
+
         d = EntityData{};
     };
 
@@ -320,7 +402,49 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
     EntityData cur;
     ChannelData curCh;
     MaterialData curMat;
-    enum class Section { None, Entity, Channel, Material };
+
+    // ---- Room set / room template data ----
+    struct RoomSetData {
+        bool valid = false;
+        std::string name = "Room Set";
+    };
+    struct RoomData {
+        bool valid = false;
+        int setIdx = -1;   // which room set this room belongs to
+        std::string name = "Room";
+        float rarity = 1.0f;
+        std::vector<RoomBlock> blocks;
+        std::vector<DoorPlacement> doors;
+        std::string lightmapPath;
+        glm::vec4   lightmapST = {1,1,0,0};
+    };
+    RoomSetData curRs;
+    RoomData    curRm;
+
+    auto flushRoomSet = [&](RoomSetData& rs) {
+        if (!rs.valid) return;
+        RoomSet s;
+        s.Name = rs.name;
+        scene.RoomSets.push_back(s);
+        rs = RoomSetData{};
+    };
+
+    auto flushRoom = [&](RoomData& rm) {
+        if (!rm.valid) return;
+        if (rm.setIdx >= 0 && rm.setIdx < (int)scene.RoomSets.size()) {
+            RoomTemplate t;
+            t.Name        = rm.name;
+            t.Rarity      = rm.rarity;
+            t.Blocks      = rm.blocks;
+            t.Doors       = rm.doors;
+            t.LightmapPath = rm.lightmapPath;
+            t.LightmapST   = rm.lightmapST;
+            scene.RoomSets[rm.setIdx].Rooms.push_back(t);
+        }
+        rm = RoomData{};
+    };
+
+    enum class Section { None, Entity, Channel, Material, RoomSet, Room, Fog, Sky, PostProcess, ScriptAssets };
     Section section = Section::None;
     std::string line;
 
@@ -334,6 +458,8 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             flushChannel(curCh);
             flushEntity(cur);
             flushMaterial(curMat);
+            flushRoom(curRm);
+            flushRoomSet(curRs);
             cur.valid = true;
             section = Section::Entity;
             continue;
@@ -344,6 +470,8 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             flushEntity(cur);
             flushChannel(curCh);
             flushMaterial(curMat);
+            flushRoom(curRm);
+            flushRoomSet(curRs);
             curCh.valid = true;
             section = Section::Channel;
             continue;
@@ -354,8 +482,66 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             flushEntity(cur);
             flushChannel(curCh);
             flushMaterial(curMat);
+            flushRoom(curRm);
+            flushRoomSet(curRs);
             curMat.valid = true;
             section = Section::Material;
+            continue;
+        }
+
+        if (line == "[roomset]")
+        {
+            flushEntity(cur);
+            flushChannel(curCh);
+            flushMaterial(curMat);
+            flushRoom(curRm);
+            flushRoomSet(curRs);
+            curRs.valid = true;
+            section = Section::RoomSet;
+            continue;
+        }
+
+        if (line == "[room]")
+        {
+            flushEntity(cur);
+            flushChannel(curCh);
+            flushMaterial(curMat);
+            flushRoom(curRm);
+            curRm.valid = true;
+            curRm.setIdx = (int)scene.RoomSets.size() - 1; // belongs to last flushed set
+            section = Section::Room;
+            continue;
+        }
+
+        if (line == "[fog]")
+        {
+            flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
+            flushRoom(curRm); flushRoomSet(curRs);
+            section = Section::Fog;
+            continue;
+        }
+
+        if (line == "[sky]")
+        {
+            flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
+            flushRoom(curRm); flushRoomSet(curRs);
+            section = Section::Sky;
+            continue;
+        }
+
+        if (line == "[postprocess]")
+        {
+            flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
+            flushRoom(curRm); flushRoomSet(curRs);
+            section = Section::PostProcess;
+            continue;
+        }
+
+        if (line == "[script_assets]")
+        {
+            flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
+            flushRoom(curRm); flushRoomSet(curRs);
+            section = Section::ScriptAssets;
             continue;
         }
 
@@ -423,6 +609,91 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (k == "light_width")      cur.lightWidth         = std::stof(val);
             else if (k == "light_height")     cur.lightHeight        = std::stof(val);
             else if (k == "entity_material")  cur.materialIdx        = std::stoi(val);
+            else if (k == "maze_gen")         cur.hasMazeGen         = (val == "true");
+            else if (k == "mg_room_set")      cur.mgRoomSet          = std::stoi(val);
+            else if (k == "mg_gen_radius")    cur.mgGenRadius        = std::stof(val);
+            else if (k == "mg_despawn_radius")cur.mgDespawnRadius    = std::stof(val);
+            else if (k == "mg_block_size")    cur.mgBlockSize        = std::stof(val);
+            // Trigger Volume
+            else if (k == "trigger")          cur.hasTrigger         = (val == "true");
+            else if (k == "trig_size")        cur.trigSize           = parseVec3(val);
+            else if (k == "trig_offset")      cur.trigOffset         = parseVec3(val);
+            else if (k == "trig_channel")     cur.trigChannel        = std::stoi(val);
+            // legacy field fallback
+            else if (k == "trig_enter_ch")    cur.trigChannel        = std::stoi(val);
+            else if (k == "trig_inside_val" || k == "trig_enter_val")   cur.trigInsideVal   = (val == "true");
+            else if (k == "trig_outside_val")  cur.trigOutsideVal  = (val == "false" ? false : (val == "true"));
+            else if (k == "trig_one_shot")    cur.trigOneShot        = (val == "true");
+            // Animator
+            else if (k == "animator")         cur.hasAnimator        = (val == "true");
+            else if (k == "anim_prop")        cur.animProp           = std::stoi(val);
+            else if (k == "anim_mode")        cur.animMode           = std::stoi(val);
+            else if (k == "anim_easing")      cur.animEasing         = std::stoi(val);
+            else if (k == "anim_from")        cur.animFrom           = parseVec3(val);
+            else if (k == "anim_to")          cur.animTo             = parseVec3(val);
+            else if (k == "anim_duration")    cur.animDuration       = std::stof(val);
+            else if (k == "anim_delay")       cur.animDelay          = std::stof(val);
+            else if (k == "anim_auto_play")   cur.animAutoPlay       = (val == "true");
+            // Lua Script
+            else if (k == "lua_script")      cur.hasLuaScript       = (val == "true");
+            else if (k == "lua_script_path") cur.luaScriptPath      = val;
+            else if (k == "lua_var") {
+                auto pipe = val.find('|');
+                if (pipe != std::string::npos)
+                    cur.luaExposedVars[val.substr(0, pipe)] = val.substr(pipe + 1);
+            }
+        }
+        else if (section == Section::Fog)
+        {
+            if      (k == "type")    scene.Fog.Type    = (FogType)std::stoi(val);
+            else if (k == "color")   scene.Fog.Color   = parseVec3(val);
+            else if (k == "density") scene.Fog.Density = std::stof(val);
+            else if (k == "start")   scene.Fog.Start   = std::stof(val);
+            else if (k == "end")     scene.Fog.End     = std::stof(val);
+        }
+        else if (section == Section::Sky)
+        {
+            if      (k == "enabled") scene.Sky.Enabled         = (val == "true");
+            else if (k == "zenith")  scene.Sky.ZenithColor     = parseVec3(val);
+            else if (k == "horizon") scene.Sky.HorizonColor    = parseVec3(val);
+            else if (k == "ground")  scene.Sky.GroundColor     = parseVec3(val);
+            else if (k == "sun_dir") scene.Sky.SunDirection    = parseVec3(val);
+            else if (k == "sun_col") scene.Sky.SunColor        = parseVec3(val);
+            else if (k == "sun_size")  scene.Sky.SunSize       = std::stof(val);
+            else if (k == "sun_bloom") scene.Sky.SunBloom      = std::stof(val);
+        }
+        else if (section == Section::PostProcess)
+        {
+            if      (k == "enabled")           scene.PostProcess.Enabled         = (val == "true");
+            else if (k == "bloom")             scene.PostProcess.BloomEnabled    = (val == "true");
+            else if (k == "bloom_threshold")   scene.PostProcess.BloomThreshold  = std::stof(val);
+            else if (k == "bloom_intensity")   scene.PostProcess.BloomIntensity  = std::stof(val);
+            else if (k == "bloom_radius")      scene.PostProcess.BloomRadius     = std::stof(val);
+            else if (k == "vignette")          scene.PostProcess.VignetteEnabled = (val == "true");
+            else if (k == "vig_radius")        scene.PostProcess.VignetteRadius  = std::stof(val);
+            else if (k == "vig_strength")      scene.PostProcess.VignetteStrength= std::stof(val);
+            else if (k == "grain")             scene.PostProcess.GrainEnabled    = (val == "true");
+            else if (k == "grain_strength")    scene.PostProcess.GrainStrength   = std::stof(val);
+            else if (k == "chroma")            scene.PostProcess.ChromaEnabled   = (val == "true");
+            else if (k == "chroma_strength")   scene.PostProcess.ChromaStrength  = std::stof(val);
+            else if (k == "color_grade")       scene.PostProcess.ColorGradeEnabled = (val == "true");
+            else if (k == "exposure")          scene.PostProcess.Exposure        = std::stof(val);
+            else if (k == "saturation")        scene.PostProcess.Saturation      = std::stof(val);
+            else if (k == "contrast")          scene.PostProcess.Contrast        = std::stof(val);
+            else if (k == "brightness")        scene.PostProcess.Brightness      = std::stof(val);
+            else if (k == "sharpen")           scene.PostProcess.SharpenEnabled      = (val == "true");
+            else if (k == "sharpen_strength")  scene.PostProcess.SharpenStrength     = std::stof(val);
+            else if (k == "lens_distort")      scene.PostProcess.LensDistortEnabled  = (val == "true");
+            else if (k == "lens_strength")     scene.PostProcess.LensDistortStrength = std::stof(val);
+            else if (k == "sepia")             scene.PostProcess.SepiaEnabled        = (val == "true");
+            else if (k == "sepia_strength")    scene.PostProcess.SepiaStrength       = std::stof(val);
+            else if (k == "posterize")         scene.PostProcess.PosterizeEnabled    = (val == "true");
+            else if (k == "posterize_levels")  scene.PostProcess.PosterizeLevels     = std::stof(val);
+            else if (k == "scanlines")         scene.PostProcess.ScanlinesEnabled    = (val == "true");
+            else if (k == "scanlines_strength")scene.PostProcess.ScanlinesStrength   = std::stof(val);
+            else if (k == "scanlines_freq")    scene.PostProcess.ScanlinesFrequency  = std::stof(val);
+            else if (k == "pixelate")          scene.PostProcess.PixelateEnabled     = (val == "true");
+            else if (k == "pixelate_size")     scene.PostProcess.PixelateSize        = std::stof(val);
         }
         else if (section == Section::Material)
         {
@@ -448,11 +719,60 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (k == "type")  curCh.type = val;
             else if (k == "value") curCh.value = val;
         }
+        else if (section == Section::RoomSet)
+        {
+            if (k == "name") curRs.name = val;
+        }
+        else if (section == Section::Room)
+        {
+            if      (k == "name")   curRm.name = val;
+            else if (k == "rarity") curRm.rarity = std::stof(val);
+            else if (k == "block")
+            {
+                // format: "x y z"
+                std::istringstream bs(val);
+                RoomBlock b;
+                bs >> b.X >> b.Y >> b.Z;
+                curRm.blocks.push_back(b);
+            }
+            else if (k == "door")
+            {
+                // format: "blockX blockZ blockY faceInt"
+                std::istringstream ds(val);
+                DoorPlacement d;
+                int faceInt = 0;
+                ds >> d.BlockX >> d.BlockZ >> d.BlockY >> faceInt;
+                d.Face = (DoorFace)faceInt;
+                curRm.doors.push_back(d);
+            }
+            else if (k == "lightmap_path") curRm.lightmapPath = val;
+            else if (k == "lightmap_st")
+            {
+                std::istringstream ss(val);
+                ss >> curRm.lightmapST.x >> curRm.lightmapST.y
+                   >> curRm.lightmapST.z >> curRm.lightmapST.w;
+            }
+        }
+        else if (section == Section::ScriptAssets)
+        {
+            if (k == "path")
+            {
+                // Add to ScriptAssets if not already present
+                if (std::find(scene.ScriptAssets.begin(), scene.ScriptAssets.end(), val)
+                    == scene.ScriptAssets.end())
+                {
+                    scene.ScriptAssets.push_back(val);
+                    scene.ScriptAssetFolders.push_back(-1);
+                }
+            }
+        }
     }
 
     flushEntity(cur);
     flushChannel(curCh);
     flushMaterial(curMat);
+    flushRoom(curRm);
+    flushRoomSet(curRs);
 }
 
 void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
@@ -509,6 +829,67 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
             file << "type  = bool\n";
             file << "value = " << (ch.BoolValue ? "true" : "false") << "\n\n";
         }
+    }
+
+    // ---- Fog ----
+    {
+        const auto& f = scene.Fog;
+        file << "[fog]\n";
+        file << "type    = " << (int)f.Type << "\n";
+        file << "color   = " << f.Color.r << " " << f.Color.g << " " << f.Color.b << "\n";
+        file << "density = " << f.Density << "\n";
+        file << "start   = " << f.Start   << "\n";
+        file << "end     = " << f.End     << "\n\n";
+    }
+
+    // ---- Sky ----
+    {
+        const auto& s = scene.Sky;
+        file << "[sky]\n";
+        file << "enabled   = " << (s.Enabled ? "true" : "false") << "\n";
+        file << "zenith    = " << s.ZenithColor.r  << " " << s.ZenithColor.g  << " " << s.ZenithColor.b  << "\n";
+        file << "horizon   = " << s.HorizonColor.r << " " << s.HorizonColor.g << " " << s.HorizonColor.b << "\n";
+        file << "ground    = " << s.GroundColor.r  << " " << s.GroundColor.g  << " " << s.GroundColor.b  << "\n";
+        file << "sun_dir   = " << s.SunDirection.x << " " << s.SunDirection.y << " " << s.SunDirection.z << "\n";
+        file << "sun_col   = " << s.SunColor.r << " " << s.SunColor.g << " " << s.SunColor.b << "\n";
+        file << "sun_size  = " << s.SunSize  << "\n";
+        file << "sun_bloom = " << s.SunBloom << "\n\n";
+    }
+
+    // ---- Post-Process ----
+    {
+        const auto& pp = scene.PostProcess;
+        file << "[postprocess]\n";
+        file << "enabled         = " << (pp.Enabled ? "true" : "false")         << "\n";
+        file << "bloom           = " << (pp.BloomEnabled ? "true" : "false")    << "\n";
+        file << "bloom_threshold = " << pp.BloomThreshold  << "\n";
+        file << "bloom_intensity = " << pp.BloomIntensity  << "\n";
+        file << "bloom_radius    = " << pp.BloomRadius     << "\n";
+        file << "vignette        = " << (pp.VignetteEnabled ? "true" : "false") << "\n";
+        file << "vig_radius      = " << pp.VignetteRadius  << "\n";
+        file << "vig_strength    = " << pp.VignetteStrength<< "\n";
+        file << "grain           = " << (pp.GrainEnabled ? "true" : "false")    << "\n";
+        file << "grain_strength  = " << pp.GrainStrength   << "\n";
+        file << "chroma          = " << (pp.ChromaEnabled ? "true" : "false")   << "\n";
+        file << "chroma_strength = " << pp.ChromaStrength  << "\n";
+        file << "color_grade     = " << (pp.ColorGradeEnabled ? "true" : "false") << "\n";
+        file << "exposure        = " << pp.Exposure        << "\n";
+        file << "saturation      = " << pp.Saturation      << "\n";
+        file << "contrast        = " << pp.Contrast        << "\n";
+        file << "brightness      = " << pp.Brightness      << "\n";
+        file << "sharpen         = " << (pp.SharpenEnabled ? "true" : "false")      << "\n";
+        file << "sharpen_strength= " << pp.SharpenStrength      << "\n";
+        file << "lens_distort    = " << (pp.LensDistortEnabled ? "true" : "false")  << "\n";
+        file << "lens_strength   = " << pp.LensDistortStrength   << "\n";
+        file << "sepia           = " << (pp.SepiaEnabled ? "true" : "false")        << "\n";
+        file << "sepia_strength  = " << pp.SepiaStrength          << "\n";
+        file << "posterize       = " << (pp.PosterizeEnabled ? "true" : "false")    << "\n";
+        file << "posterize_levels= " << pp.PosterizeLevels         << "\n";
+        file << "scanlines       = " << (pp.ScanlinesEnabled ? "true" : "false")    << "\n";
+        file << "scanlines_strength = " << pp.ScanlinesStrength    << "\n";
+        file << "scanlines_freq  = " << pp.ScanlinesFrequency       << "\n";
+        file << "pixelate        = " << (pp.PixelateEnabled ? "true" : "false")     << "\n";
+        file << "pixelate_size   = " << pp.PixelateSize             << "\n\n";
     }
 
     for (size_t i = 0; i < scene.Transforms.size(); i++)
@@ -611,9 +992,89 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
             file << "light_height    = " << lc.Height               << "\n";
         }
 
+        if (i < scene.MazeGenerators.size() && scene.MazeGenerators[i].Active)
+        {
+            const auto& mg = scene.MazeGenerators[i];
+            file << "maze_gen          = true\n";
+            file << "mg_room_set       = " << mg.RoomSetIndex   << "\n";
+            file << "mg_gen_radius     = " << mg.GenerateRadius << "\n";
+            file << "mg_despawn_radius = " << mg.DespawnRadius  << "\n";
+            file << "mg_block_size     = " << mg.BlockSize      << "\n";
+        }
+
+        if (i < scene.Triggers.size() && scene.Triggers[i].Active)
+        {
+            const auto& tr = scene.Triggers[i];
+            file << "trigger       = true\n";
+            file << "trig_size     = " << tr.Size.x << " " << tr.Size.y << " " << tr.Size.z << "\n";
+            file << "trig_offset   = " << tr.Offset.x << " " << tr.Offset.y << " " << tr.Offset.z << "\n";
+            file << "trig_channel   = " << tr.Channel << "\n";
+            file << "trig_inside_val = " << (tr.InsideValue  ? "true" : "false") << "\n";
+            file << "trig_outside_val = " << (tr.OutsideValue ? "true" : "false") << "\n";
+            file << "trig_one_shot  = " << (tr.OneShot ? "true" : "false") << "\n";
+        }
+
+        if (i < scene.Animators.size() && scene.Animators[i].Active)
+        {
+            const auto& an = scene.Animators[i];
+            file << "animator      = true\n";
+            file << "anim_prop     = " << (int)an.Property << "\n";
+            file << "anim_mode     = " << (int)an.Mode     << "\n";
+            file << "anim_easing   = " << (int)an.Easing   << "\n";
+            file << "anim_from     = " << an.From.x << " " << an.From.y << " " << an.From.z << "\n";
+            file << "anim_to       = " << an.To.x   << " " << an.To.y   << " " << an.To.z   << "\n";
+            file << "anim_duration = " << an.Duration << "\n";
+            file << "anim_delay    = " << an.Delay    << "\n";
+            file << "anim_auto_play = " << (an.AutoPlay ? "true" : "false") << "\n";
+        }
+
+        if (i < scene.LuaScripts.size() && scene.LuaScripts[i].Active)
+        {
+            const auto& ls = scene.LuaScripts[i];
+            file << "lua_script      = true\n";
+            file << "lua_script_path = " << ls.ScriptPath << "\n";
+            for (const auto& [vk, vv] : ls.ExposedVars)
+                file << "lua_var = " << vk << "|" << vv << "\n";
+        }
+
         file << "position = " << t.Position.x << " " << t.Position.y << " " << t.Position.z << "\n"
              << "rotation = " << t.Rotation.x << " " << t.Rotation.y << " " << t.Rotation.z << "\n"
              << "scale    = " << t.Scale.x    << " " << t.Scale.y    << " " << t.Scale.z    << "\n\n";
+    }
+
+    // ---- Room Sets ----
+    for (size_t si = 0; si < scene.RoomSets.size(); ++si)
+    {
+        const auto& rs = scene.RoomSets[si];
+        file << "[roomset]\n";
+        file << "name = " << rs.Name << "\n\n";
+
+        for (const auto& room : rs.Rooms)
+        {
+            file << "[room]\n";
+            file << "name   = " << room.Name << "\n";
+            file << "rarity = " << room.Rarity << "\n";
+            for (const auto& b : room.Blocks)
+                file << "block = " << b.X << " " << b.Y << " " << b.Z << "\n";
+            for (const auto& d : room.Doors)
+                file << "door = " << d.BlockX << " " << d.BlockZ << " " << d.BlockY << " " << (int)d.Face << "\n";
+            if (!room.LightmapPath.empty())
+            {
+                file << "lightmap_path = " << room.LightmapPath << "\n";
+                const auto& st = room.LightmapST;
+                file << "lightmap_st = " << st.x << " " << st.y << " " << st.z << " " << st.w << "\n";
+            }
+            file << "\n";
+        }
+    }
+
+    // ---- Script Assets ----
+    if (!scene.ScriptAssets.empty())
+    {
+        file << "[script_assets]\n";
+        for (const auto& p : scene.ScriptAssets)
+            file << "path = " << p << "\n";
+        file << "\n";
     }
 }
 
