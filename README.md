@@ -1,5 +1,5 @@
 ﻿<div align="center">
-  <img src="docs/images/tsu_engine_logo.svg" width="100" alt="TSU Engine Logo"/>
+  <img src="docs/images/logo.svg" width="100" alt="TSU Engine Logo"/>
   <h1>TSU Engine</h1>
 
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
