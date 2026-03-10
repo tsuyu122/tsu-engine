@@ -17,6 +17,8 @@ Entity Scene::CreateEntity(const std::string& name)
     EntityGroups.push_back(-1);
     EntityMaterial.push_back(-1);
     EntityColors.push_back(glm::vec3(1.0f, 1.0f, 1.0f));
+    EntityStatic.push_back(true);
+    EntityReceiveLightmap.push_back(true);
     PlayerControllers.emplace_back();
     MouseLooks.emplace_back();
     Lights.emplace_back();
@@ -255,6 +257,8 @@ void Scene::DeleteEntity(int idx)
     erase1(EntityChildren);
     erase1(EntityMaterial);
     erase1(EntityColors);
+    if (idx < (int)EntityStatic.size()) EntityStatic.erase(EntityStatic.begin() + idx);
+    if (idx < (int)EntityReceiveLightmap.size()) EntityReceiveLightmap.erase(EntityReceiveLightmap.begin() + idx);
     erase1(PlayerControllers);
     erase1(MouseLooks);
     erase1(Lights);

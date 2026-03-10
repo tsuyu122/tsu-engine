@@ -2,6 +2,7 @@
 #include "scene/entity.h"
 #include "renderer/mesh.h"
 #include "serialization/prefabSerializer.h"
+#include "input/inputmanager.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <cstring>
@@ -423,6 +424,45 @@ void HierarchyPanel::DrawEntityNode(Scene& scene, int entityIdx,
                 scene.EntityPrefabSource[entityIdx] = -1;
         }
         ImGui::Separator();
+        if (ImGui::MenuItem("Duplicate"))
+        {
+            // Deep-duplicate entity + children
+            std::function<int(int, int)> dup = [&](int srcIdx, int parentIdx) -> int {
+                std::string dupName = MakeUniqueName(scene, scene.EntityNames[srcIdx]);
+                Entity ne = scene.CreateEntity(dupName);
+                int nid = (int)ne.GetID();
+                scene.Transforms[nid] = scene.Transforms[srcIdx];
+                if (srcIdx < (int)scene.MeshRenderers.size() && scene.MeshRenderers[srcIdx].MeshPtr) {
+                    const std::string& mt = scene.MeshRenderers[srcIdx].MeshType;
+                    Mesh* mesh = nullptr;
+                    std::string color = "#DDDDDD";
+                    if      (mt == "cube")     mesh = new Mesh(Mesh::CreateCube(color));
+                    else if (mt == "sphere")   mesh = new Mesh(Mesh::CreateSphere(color));
+                    else if (mt == "pyramid")  mesh = new Mesh(Mesh::CreatePyramid(color));
+                    else if (mt == "cylinder") mesh = new Mesh(Mesh::CreateCylinder(color));
+                    else if (mt == "capsule")  mesh = new Mesh(Mesh::CreateCapsule(color));
+                    else if (mt == "plane")    mesh = new Mesh(Mesh::CreatePlane(color));
+                    if (mesh) { scene.MeshRenderers[nid].MeshPtr = mesh; scene.MeshRenderers[nid].MeshType = mt; }
+                }
+                if (srcIdx < (int)scene.EntityMaterial.size())
+                    scene.EntityMaterial[nid] = scene.EntityMaterial[srcIdx];
+                if (srcIdx < (int)scene.Lights.size() && scene.Lights[srcIdx].Active)
+                    scene.Lights[nid] = scene.Lights[srcIdx];
+                if (srcIdx < (int)scene.GameCameras.size() && scene.GameCameras[srcIdx].Active)
+                    scene.GameCameras[nid] = scene.GameCameras[srcIdx];
+                if (parentIdx >= 0)
+                    scene.SetEntityParent(nid, parentIdx);
+                else if (srcIdx < (int)scene.EntityParents.size() && scene.EntityParents[srcIdx] >= 0)
+                    scene.SetEntityParent(nid, scene.EntityParents[srcIdx]);
+                // Recurse children
+                if (srcIdx < (int)scene.EntityChildren.size())
+                    for (int child : scene.EntityChildren[srcIdx])
+                        dup(child, nid);
+                return nid;
+            };
+            int dupId = dup(entityIdx, -1);
+            selectedEntity = dupId;
+        }
         if (ImGui::MenuItem("Create Prefab"))
             CreatePrefab(scene, entityIdx);
         ImGui::Separator();
@@ -621,37 +661,84 @@ void HierarchyPanel::DrawPrefabNodeTree(PrefabAsset& prefab, int nodeIdx, int de
                 if (ImGui::MenuItem("Capsule"))  addChildNode("Capsule",  "capsule");
                 ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Empty")) addChildNode("Empty", "");
-            if (ImGui::MenuItem("Light"))
+            if (ImGui::BeginMenu("Lights"))
             {
-                PrefabEntityData child;
-                child.Name      = "Light";
-                child.ParentIdx = nodeIdx;
-                child.HasLight  = true;
-                child.Light.Active  = true;
-                child.Light.Enabled = true;
-                child.Light.Type    = LightType::Point;
-                child.Transform.Scale = glm::vec3(1.0f);
-                int newIdx = (int)prefab.Nodes.size();
-                prefab.Nodes.push_back(child);
-                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+                auto addChildLight = [&](const char* name, LightType lt) {
+                    PrefabEntityData child;
+                    child.Name      = name;
+                    child.ParentIdx = nodeIdx;
+                    child.HasLight  = true;
+                    child.Light.Active  = true;
+                    child.Light.Enabled = true;
+                    child.Light.Type    = lt;
+                    child.Light.Intensity = (lt == LightType::Directional) ? 1.0f : 1.5f;
+                    child.Light.Range     = (lt == LightType::Spot) ? 15.0f : 10.0f;
+                    if (lt == LightType::Spot) { child.Light.InnerAngle = 25.0f; child.Light.OuterAngle = 40.0f; }
+                    if (lt == LightType::Area) { child.Light.Width = 2.0f; child.Light.Height = 1.0f; }
+                    child.Transform.Scale = glm::vec3(1.0f);
+                    int newIdx = (int)prefab.Nodes.size();
+                    prefab.Nodes.push_back(child);
+                    if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+                };
+                if (ImGui::MenuItem("Directional Light")) addChildLight("Directional Light", LightType::Directional);
+                if (ImGui::MenuItem("Point Light"))       addChildLight("Point Light",       LightType::Point);
+                if (ImGui::MenuItem("Spot Light"))        addChildLight("Spot Light",        LightType::Spot);
+                if (ImGui::MenuItem("Area Light"))        addChildLight("Area Light",        LightType::Area);
+                ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Camera"))
+            if (ImGui::BeginMenu("Hierarchy"))
             {
-                PrefabEntityData child;
-                child.Name      = "Camera";
-                child.ParentIdx = nodeIdx;
-                child.HasCamera = true;
-                child.Camera.Active = true;
-                child.Transform.Scale = glm::vec3(1.0f);
-                int newIdx = (int)prefab.Nodes.size();
-                prefab.Nodes.push_back(child);
-                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+                if (ImGui::MenuItem("Group")) addChildNode("Group", "");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Render"))
+            {
+                if (ImGui::MenuItem("Camera"))
+                {
+                    PrefabEntityData child;
+                    child.Name      = "Camera";
+                    child.ParentIdx = nodeIdx;
+                    child.HasCamera = true;
+                    child.Camera.Active = true;
+                    child.Transform.Scale = glm::vec3(1.0f);
+                    int newIdx = (int)prefab.Nodes.size();
+                    prefab.Nodes.push_back(child);
+                    if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+                }
+                ImGui::EndMenu();
             }
             ImGui::EndMenu();
         }
+        // Unparent — move node to root level
+        if (node.ParentIdx >= 0 && ImGui::MenuItem("Unparent"))
+            node.ParentIdx = -1;
+
+        // Duplicate — deep-copy node + children
+        if (ImGui::MenuItem("Duplicate"))
+        {
+            std::function<int(int)> cloneNode = [&](int srcIdx) -> int {
+                PrefabEntityData copy = prefab.Nodes[srcIdx];
+                int newIdx = (int)prefab.Nodes.size();
+                prefab.Nodes.push_back(copy);
+                // Clone children (find children of srcIdx, clone them under newIdx)
+                std::vector<int> childIdxs;
+                for (int ci = 0; ci < (int)prefab.Nodes.size() - 1; ++ci)
+                    if (prefab.Nodes[ci].ParentIdx == srcIdx) childIdxs.push_back(ci);
+                for (int ci : childIdxs)
+                {
+                    int clonedChild = cloneNode(ci);
+                    prefab.Nodes[clonedChild].ParentIdx = newIdx;
+                }
+                return newIdx;
+            };
+            int cloned = cloneNode(nodeIdx);
+            if (m_PrefabSelectedNode) *m_PrefabSelectedNode = cloned;
+        }
+
         ImGui::Separator();
-        if (depth > 0 && ImGui::MenuItem("Delete Node"))
+        // Allow deleting any node (root included) when in room-interior override mode
+        bool canDelete = (depth > 0 || m_PrefabOverride != nullptr);
+        if (canDelete && ImGui::MenuItem("Delete Node"))
         {
             // Recursively remove this node and children
             std::function<void(int)> removeNode = [&](int ni) {
@@ -691,14 +778,24 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
 
     ImGui::SetNextWindowPos(ImVec2((float)winX, (float)winY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2((float)panelW, (float)panelH), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.93f);
 
     ImGuiWindowFlags wf = ImGuiWindowFlags_NoMove        |
                           ImGuiWindowFlags_NoResize       |
                           ImGuiWindowFlags_NoCollapse     |
-                          ImGuiWindowFlags_NoBringToFrontOnFocus;
+                          ImGuiWindowFlags_NoBringToFrontOnFocus |
+                          ImGuiWindowFlags_NoTitleBar;
 
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.13f, 0.13f, 0.15f, 1.0f));
     ImGui::Begin("Hierarchy", nullptr, wf);
+
+    // Panel header
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.68f, 0.72f, 1.0f));
+    ImGui::TextUnformatted("HIERARCHY");
+    ImGui::PopStyleColor();
+    ImGui::Separator();
+
+    // Scrollable content area
+    ImGui::BeginChild("##hierscroll", ImVec2(0, 0), false);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 2.0f));
 
     // ---- Prefab / Room editor mode: show prefab nodes instead of scene hierarchy ----
@@ -772,38 +869,120 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
                 if (ImGui::MenuItem("Capsule"))  addRootNode("Capsule",  "capsule");
                 ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Empty")) addRootNode("Empty", "");
-            if (ImGui::MenuItem("Light"))
+            if (ImGui::BeginMenu("Lights"))
             {
-                PrefabEntityData child;
-                child.Name      = "Light";
-                child.ParentIdx = -1;
-                child.HasLight  = true;
-                child.Light.Active  = true;
-                child.Light.Enabled = true;
-                child.Light.Type    = LightType::Point;
-                child.Transform.Scale = glm::vec3(1.0f);
-                int newIdx = (int)prefab.Nodes.size();
-                prefab.Nodes.push_back(child);
-                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+                auto addRootLight = [&](const char* name, LightType lt) {
+                    PrefabEntityData child;
+                    child.Name      = name;
+                    child.ParentIdx = -1;
+                    child.HasLight  = true;
+                    child.Light.Active  = true;
+                    child.Light.Enabled = true;
+                    child.Light.Type    = lt;
+                    child.Light.Intensity = (lt == LightType::Directional) ? 1.0f : 1.5f;
+                    child.Light.Range     = (lt == LightType::Spot) ? 15.0f : 10.0f;
+                    if (lt == LightType::Spot) { child.Light.InnerAngle = 25.0f; child.Light.OuterAngle = 40.0f; }
+                    if (lt == LightType::Area) { child.Light.Width = 2.0f; child.Light.Height = 1.0f; }
+                    child.Transform.Scale = glm::vec3(1.0f);
+                    int newIdx = (int)prefab.Nodes.size();
+                    prefab.Nodes.push_back(child);
+                    if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+                };
+                if (ImGui::MenuItem("Directional Light")) addRootLight("Directional Light", LightType::Directional);
+                if (ImGui::MenuItem("Point Light"))       addRootLight("Point Light",       LightType::Point);
+                if (ImGui::MenuItem("Spot Light"))        addRootLight("Spot Light",        LightType::Spot);
+                if (ImGui::MenuItem("Area Light"))        addRootLight("Area Light",        LightType::Area);
+                ImGui::EndMenu();
             }
-            if (ImGui::MenuItem("Camera"))
+            if (ImGui::BeginMenu("Hierarchy"))
             {
-                PrefabEntityData child;
-                child.Name      = "Camera";
-                child.ParentIdx = -1;
-                child.HasCamera = true;
-                child.Camera.Active = true;
-                child.Transform.Scale = glm::vec3(1.0f);
-                int newIdx = (int)prefab.Nodes.size();
-                prefab.Nodes.push_back(child);
-                if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+                if (ImGui::MenuItem("Group")) addRootNode("Group", "");
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Render"))
+            {
+                if (ImGui::MenuItem("Camera"))
+                {
+                    PrefabEntityData child;
+                    child.Name      = "Camera";
+                    child.ParentIdx = -1;
+                    child.HasCamera = true;
+                    child.Camera.Active = true;
+                    child.Transform.Scale = glm::vec3(1.0f);
+                    int newIdx = (int)prefab.Nodes.size();
+                    prefab.Nodes.push_back(child);
+                    if (m_PrefabSelectedNode) *m_PrefabSelectedNode = newIdx;
+                }
+                ImGui::EndMenu();
             }
             ImGui::EndPopup();
         }
 
+        // ---- Keyboard shortcuts for prefab/room editor (Ctrl+C, Ctrl+V, Delete) ----
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && m_PrefabSelectedNode)
+        {
+            bool ctrl = InputManager::IsKeyPressed(Key::LeftControl) || InputManager::IsKeyPressed(Key::RightControl);
+
+            // Ctrl+C — copy selected prefab node
+            if (ctrl && InputManager::IsKeyDown(Key::C) && *m_PrefabSelectedNode >= 0)
+            {
+                m_ClipboardPrefabNodes.clear();
+                m_ClipboardPrefabNodes.push_back(*m_PrefabSelectedNode);
+            }
+
+            // Ctrl+V — paste (duplicate) copied prefab node
+            if (ctrl && InputManager::IsKeyDown(Key::V) && !m_ClipboardPrefabNodes.empty())
+            {
+                for (int srcIdx : m_ClipboardPrefabNodes)
+                {
+                    if (srcIdx >= 0 && srcIdx < (int)prefab.Nodes.size())
+                    {
+                        std::function<int(int)> cloneNode = [&](int si) -> int {
+                            PrefabEntityData copy = prefab.Nodes[si];
+                            int newIdx = (int)prefab.Nodes.size();
+                            prefab.Nodes.push_back(copy);
+                            std::vector<int> childIdxs;
+                            for (int ci = 0; ci < (int)prefab.Nodes.size() - 1; ++ci)
+                                if (prefab.Nodes[ci].ParentIdx == si) childIdxs.push_back(ci);
+                            for (int ci : childIdxs)
+                            {
+                                int clonedChild = cloneNode(ci);
+                                prefab.Nodes[clonedChild].ParentIdx = newIdx;
+                            }
+                            return newIdx;
+                        };
+                        int cloned = cloneNode(srcIdx);
+                        *m_PrefabSelectedNode = cloned;
+                    }
+                }
+            }
+
+            // Delete — delete selected prefab node
+            if (InputManager::IsKeyDown(Key::Delete) && *m_PrefabSelectedNode >= 0)
+            {
+                int nodeIdx = *m_PrefabSelectedNode;
+                bool canDelete = (prefab.Nodes[nodeIdx].ParentIdx >= 0 || m_PrefabOverride != nullptr);
+                if (canDelete)
+                {
+                    std::function<void(int)> removeNode = [&](int ni) {
+                        for (int i = (int)prefab.Nodes.size() - 1; i >= 0; --i)
+                            if (prefab.Nodes[i].ParentIdx == ni) removeNode(i);
+                        for (auto& n : prefab.Nodes)
+                            if (n.ParentIdx > ni) n.ParentIdx--;
+                            else if (n.ParentIdx == ni) n.ParentIdx = -1;
+                        prefab.Nodes.erase(prefab.Nodes.begin() + ni);
+                        if (*m_PrefabSelectedNode >= ni) (*m_PrefabSelectedNode)--;
+                        if (*m_PrefabSelectedNode < 0) *m_PrefabSelectedNode = -1;
+                    };
+                    removeNode(nodeIdx);
+                }
+            }
+        }
+
         ImGui::PopStyleVar();
+        ImGui::EndChild(); // ##hierscroll
         ImGui::End();
+        ImGui::PopStyleColor(); // WindowBg
         return;
     }
 
@@ -908,8 +1087,96 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
         ImGui::EndPopup();
     }
 
+    // ---- Keyboard shortcuts (Ctrl+C, Ctrl+V, Delete) ----
+    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+    {
+        bool ctrl = InputManager::IsKeyPressed(Key::LeftControl) || InputManager::IsKeyPressed(Key::RightControl);
+
+        // Ctrl+C — copy selected entities
+        if (ctrl && InputManager::IsKeyDown(Key::C))
+        {
+            m_ClipboardEntities.clear();
+            if (!m_MultiSelection.empty())
+                m_ClipboardEntities = m_MultiSelection;
+            else if (selectedEntity >= 0)
+                m_ClipboardEntities.push_back(selectedEntity);
+        }
+
+        // Ctrl+V — paste (duplicate) copied entities
+        if (ctrl && InputManager::IsKeyDown(Key::V) && !m_ClipboardEntities.empty())
+        {
+            std::function<int(int, int, Scene&)> dup = [&](int srcIdx, int parentIdx, Scene& sc) -> int {
+                std::string dupName = MakeUniqueName(sc, sc.EntityNames[srcIdx]);
+                Entity ne = sc.CreateEntity(dupName);
+                int nid = (int)ne.GetID();
+                sc.Transforms[nid] = sc.Transforms[srcIdx];
+                if (srcIdx < (int)sc.MeshRenderers.size() && sc.MeshRenderers[srcIdx].MeshPtr) {
+                    const std::string& mt = sc.MeshRenderers[srcIdx].MeshType;
+                    Mesh* mesh = nullptr;
+                    std::string color = "#DDDDDD";
+                    if      (mt == "cube")     mesh = new Mesh(Mesh::CreateCube(color));
+                    else if (mt == "sphere")   mesh = new Mesh(Mesh::CreateSphere(color));
+                    else if (mt == "pyramid")  mesh = new Mesh(Mesh::CreatePyramid(color));
+                    else if (mt == "cylinder") mesh = new Mesh(Mesh::CreateCylinder(color));
+                    else if (mt == "capsule")  mesh = new Mesh(Mesh::CreateCapsule(color));
+                    else if (mt == "plane")    mesh = new Mesh(Mesh::CreatePlane(color));
+                    if (mesh) { sc.MeshRenderers[nid].MeshPtr = mesh; sc.MeshRenderers[nid].MeshType = mt; }
+                }
+                if (srcIdx < (int)sc.EntityMaterial.size())
+                    sc.EntityMaterial[nid] = sc.EntityMaterial[srcIdx];
+                if (srcIdx < (int)sc.Lights.size() && sc.Lights[srcIdx].Active)
+                    sc.Lights[nid] = sc.Lights[srcIdx];
+                if (srcIdx < (int)sc.GameCameras.size() && sc.GameCameras[srcIdx].Active)
+                    sc.GameCameras[nid] = sc.GameCameras[srcIdx];
+                if (parentIdx >= 0)
+                    sc.SetEntityParent(nid, parentIdx);
+                else if (srcIdx < (int)sc.EntityParents.size() && sc.EntityParents[srcIdx] >= 0)
+                    sc.SetEntityParent(nid, sc.EntityParents[srcIdx]);
+                if (srcIdx < (int)sc.EntityChildren.size())
+                    for (int child : sc.EntityChildren[srcIdx])
+                        dup(child, nid, sc);
+                return nid;
+            };
+            int lastDup = -1;
+            for (int src : m_ClipboardEntities)
+            {
+                if (src >= 0 && src < (int)scene.Transforms.size())
+                    lastDup = dup(src, -1, scene);
+            }
+            if (lastDup >= 0) selectedEntity = lastDup;
+        }
+
+        // Delete — delete selected entities (single or multi-selection)
+        if (InputManager::IsKeyDown(Key::Delete))
+        {
+            std::vector<int> toDelete;
+            if (!m_MultiSelection.empty())
+                toDelete = m_MultiSelection;
+            else if (selectedEntity >= 0)
+                toDelete.push_back(selectedEntity);
+
+            if (!toDelete.empty())
+            {
+                // Sort descending so deletions don't shift remaining indices
+                std::sort(toDelete.begin(), toDelete.end(), std::greater<int>());
+                // Remove duplicates
+                toDelete.erase(std::unique(toDelete.begin(), toDelete.end()), toDelete.end());
+                for (int eid : toDelete)
+                {
+                    if (eid >= 0 && eid < (int)scene.Transforms.size())
+                        scene.DeleteEntity(eid);
+                }
+                selectedEntity = -1;
+                m_MultiSelection.clear();
+                m_LastSelected = -1;
+            }
+        }
+    }
+
     ImGui::PopStyleVar(); // ItemSpacing
+    ImGui::EndChild(); // ##hierscroll
     ImGui::End();
+    ImGui::PopStyleColor(); // WindowBg
 }
 
 } // namespace tsu

@@ -4,6 +4,9 @@
 #include "editor/editorCamera.h"
 #include "editor/editorGizmo.h"
 #include "ui/uiManager.h"
+#include <atomic>
+#include <mutex>
+#include <thread>
 
 namespace tsu {
 
@@ -48,6 +51,8 @@ private:
     void OpenProject(const std::string& path);
     void SaveProject();
     void ExportGame(const std::string& outputFolder, const std::string& gameNameOverride = "");
+    void StartSceneBakeAsync();
+    void PollSceneBakeAsync();
 
     // ---- Room Editor Undo/Redo ----
     struct RoomEditState {
@@ -72,7 +77,12 @@ private:
     Scene        m_RoomPreviewScene;      // temp scene for 3D room editing
     int          m_RoomPreviewSetIdx = -1;
     int          m_RoomPreviewRoomIdx = -1;
+    std::string  m_RoomPreviewLightmap; // currently loaded preview lightmap path
+    std::string  m_SceneLightmapPath;   // main/reference scene lightmap path (Y projection)
+    std::string  m_SceneLightmapPathX;  // X projection
+    std::string  m_SceneLightmapPathZ;  // Z projection
     EditorCamera m_EditorCamera;
+    EditorCamera m_RoomEditorCamera;  // separate camera for room editor (tab 5)
     EditorGizmo  m_Gizmo;
     UIManager    m_UIManager;
     EngineMode   m_Mode           = EngineMode::Editor;
@@ -104,6 +114,16 @@ private:
 
     // ---- Game export mode ----
     bool         m_GameModeOnly = false;  // true when running as exported standalone game (no editor UI)
+
+    // ---- Async light baking ----
+    std::thread        m_BakeThread;
+    std::atomic<bool>  m_BakeRunning{false};
+    std::atomic<float> m_BakeProgress{0.0f};
+    std::mutex         m_BakeMutex;
+    std::string        m_BakeStage;
+    std::string        m_BakeError;
+    bool               m_BakeReady = false;
+    LightBaker::AtlasBakeResult m_BakeResult;
 };
 
 } // namespace tsu

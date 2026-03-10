@@ -1,6 +1,7 @@
 #pragma once
 #include "ui/hierarchyPanel.h"
 #include "ui/inspectorPanel.h"
+#include "renderer/lightBaker.h"
 #include <glm/glm.hpp>
 #include <vector>
 #include <string>
@@ -35,8 +36,10 @@ public:
 
     // Viewport tab: 0 = Scene, 1 = Game
     int GetViewportTab()  const { return m_ViewportTab; }
-    // Current panel width (resizable by dragging the border)
-    int GetPanelWidth()   const { return m_PanelWidth; }
+    // Current panel widths (resizable by dragging borders)
+    int GetLeftPanelWidth()  const { return m_LeftPanelWidth; }
+    int GetRightPanelWidth() const { return m_RightPanelWidth; }
+    int GetPanelWidth()      const { return m_LeftPanelWidth; } // legacy compat
     // Prefab editor state
     bool IsPrefabEditorActive() const { return m_PrefabEditorOpen && m_ViewportTab == 3; }
     int  GetEditingPrefabIdx()  const { return m_EditingPrefabIdx; }
@@ -63,10 +66,23 @@ public:
     // Lightmap bake request (raised by "Bake Lighting" button, consumed by Application)
     bool HasPendingBakeLighting()      const { return m_PendingBakeLighting; }
     void ConsumePendingBakeLighting()        { m_PendingBakeLighting = false; }
+    // Clear scene lightmap request
+    bool HasPendingClearSceneLightmap()      const { return m_PendingClearSceneLightmap; }
+    void ConsumePendingClearSceneLightmap()        { m_PendingClearSceneLightmap = false; }
     // Written back by Application after successful bake
     void SetBakeStatus(const std::string& s) { m_BakeStatus = s; }
+    void SetBakeProgress(bool active, float value, const std::string& stage) {
+        m_BakeInProgress = active;
+        m_BakeProgress = glm::clamp(value, 0.0f, 1.0f);
+        m_BakeStage = stage;
+    }
+    void SetSceneLightmapPath(const std::string& p) { m_SceneLightmapPath = p; }
+    const std::string& GetSceneLightmapPath() const  { return m_SceneLightmapPath; }
+    // Current bake parameters (edited in Lighting Settings window)
+    const LightBaker::BakeParams& GetBakeParams() const { return m_BakeParams; }
     bool IsDoorMode() const { return m_MazeDoorMode; }
     int  GetRoomEditorLayer()    const { return m_RoomEditorLayer; }
+    bool GetRoomShowBlocks()     const { return m_RoomShowBlocks; }
     int  GetMazeSelectedBlock()  const { return m_MazeSelectedBlock; }
     void SetMazeSelectedBlock(int b)   { m_MazeSelectedBlock = b; }
     void OpenMazeWindow()              { m_MazeWindowOpen = true; m_RequestViewportTab = 4; }
@@ -100,14 +116,21 @@ public:
     }
     void SetProjectDisplayName(const std::string& n) { m_ProjectDisplayName = n; }
 
+    // Play / Pause toolbar (rendered as ImGui buttons, polled by Application)
+    bool HasPendingPlayToggle()  const { return m_PendingPlayToggle; }
+    void ConsumePlayToggle()           { m_PendingPlayToggle = false; }
+    bool HasPendingPauseToggle() const { return m_PendingPauseToggle; }
+    void ConsumePauseToggle()          { m_PendingPauseToggle = false; }
+    void SetPlayState(bool playing, bool paused) { m_IsPlaying = playing; m_IsPaused = paused; }
+
     // Width reserved on each side (pixels) for renderers to know the viewport
-    static constexpr int k_PanelWidth = 260;
-    static constexpr int k_MenuBarH   = 24;
-    static constexpr int k_ToolbarH   = 34;
-    static constexpr int k_TopTabsH   = 34;
+    static constexpr int k_PanelWidth = 280;
+    static constexpr int k_MenuBarH   = 22;
+    static constexpr int k_ToolbarH   = 36;
+    static constexpr int k_TopTabsH   = 32;
     static constexpr int k_TopStackH  = k_MenuBarH + k_ToolbarH + k_TopTabsH;
     // Height reserved at the bottom for the asset browser
-    static constexpr int k_AssetH     = 200;
+    static constexpr int k_AssetH     = 220;
 
 private:
     HierarchyPanel    m_Hierarchy;
@@ -133,6 +156,7 @@ private:
     int               m_MazeSelectedBlock  = -1;   // selected block in room editor grid
     bool              m_MazeDoorMode       = false; // when true, clicking places doors instead of blocks
     int               m_RoomEditorLayer    = 0;    // current Y layer for block placement
+    bool              m_RoomShowBlocks     = true; // show wireframe block outlines in room editor
     PrefabAsset       m_RoomAsPrefab;               // temporary PrefabAsset mirroring room Interior
     // Pending 3D viewport click for room block placement (consumed by Application)
     bool              m_PendingRoomClick    = false;
@@ -141,14 +165,26 @@ private:
     int               m_PendingRoomClickY   = 0;
     // Lightmap bake pending flag
     bool              m_PendingBakeLighting = false;
+    bool              m_PendingClearSceneLightmap = false;
     std::string       m_BakeStatus;          // "" = no status, else e.g. "Baked!" or "Error"
+    std::string       m_SceneLightmapPath;   // path of the scene lightmap (set by Application)
+    bool              m_LightmapSettingsOpen = false;
+    LightBaker::BakeParams m_BakeParams;
+    bool              m_BakeInProgress = false;
+    float             m_BakeProgress = 0.0f;
+    std::string       m_BakeStage;
     int               m_BottomTab        = 0;   // 0=Assets, 1=Console
     std::deque<std::string> m_ConsoleLogs;
     static constexpr int k_MaxConsoleLogs = 200;
-    // Resizable side panels
-    int               m_PanelWidth   = k_PanelWidth;
+    // Resizable side panels (independent left/right)
+    int               m_LeftPanelWidth   = k_PanelWidth;
+    int               m_RightPanelWidth  = k_PanelWidth;
     bool              m_DraggingLeft  = false;
     bool              m_DraggingRight = false;
+    // Panel docking: 0=Hierarchy, 1=Inspector. Value = slot (0=left, 1=right)
+    int               m_PanelSlot[2]   = { 0, 1 };  // default: Hierarchy=left, Inspector=right
+    bool              m_DraggingPanel  = false;
+    int               m_DragPanelId    = -1; // which panel is being dragged (0 or 1)
     // Project settings left-category selection (0 = Channel System)
     int               m_PsCategory   = 0;
     // Viewport drop position (world space, computed by Application)
@@ -177,6 +213,11 @@ private:
     char        m_DlgExportPath[512]   = {};
     char        m_DlgGameName[256]     = {};
     std::string m_ProjectDisplayName   = "Untitled";
+    // Play / Pause toolbar state
+    bool        m_PendingPlayToggle    = false;
+    bool        m_PendingPauseToggle   = false;
+    bool        m_IsPlaying            = false;
+    bool        m_IsPaused             = false;
 };
 
 } // namespace tsu

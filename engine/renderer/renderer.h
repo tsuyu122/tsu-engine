@@ -27,6 +27,10 @@ public:
     static bool ToolbarClickPause(int x, int y, int winW, int winH,
                                   float topOffsetPx = 0.0f);
 
+    // Register baked lightmap atlases globally by index (Unity-style lightmap table).
+    static void SetGlobalLightmap(int index, unsigned int texId);
+    static void ClearGlobalLightmaps();
+
     // 3-axis translation gizmo in the editor
     // activeAxis: 0=none 1=X 2=Y 3=Z 4=XY 5=XZ 6=YZ
     static void DrawTranslationGizmo(const glm::vec3& pos, int activeAxis,
@@ -97,6 +101,7 @@ private:
     // Gizmo meshes (created once in Init)
     static unsigned int s_GizmoSphereVAO, s_GizmoSphereCount;
     static unsigned int s_GizmoLineVAO,   s_GizmoLineCount;
+    static unsigned int s_GlobalLightmaps[4];
 
     // ---- 2D shadow map (directional / spot) ----
     static unsigned int s_ShadowShader;
@@ -125,7 +130,11 @@ private:
         int numLights;
         int useNormal, useORM;
         int roughness, metallic, aoValue, tiling, worldSpaceUV;
-        int useLightmap, lightmapTex, lightmapST;
+        int useLightmap, lightmapTex, lightmapST, lightmapIntensity;
+        int lightmapTexX, lightmapTexY, lightmapTexZ;
+        int lightmapSTX, lightmapSTY, lightmapSTZ;
+        // Sky ambient
+        int ambientSky, ambientGround;
         // Fog
         int fogType, fogColor, fogDensity, fogStart, fogEnd;
         struct LightLoc {

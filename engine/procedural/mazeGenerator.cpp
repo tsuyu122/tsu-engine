@@ -4,6 +4,7 @@
 #include "renderer/lightmapManager.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <random>
 #include <chrono>
 
@@ -217,73 +218,87 @@ int MazeGenerator::PickWeightedRandom(const RoomSet& set, std::mt19937& rng)
 // Spawn mesh entities for each block + interior decoration
 // ----------------------------------------------------------------
 void MazeGenerator::SpawnRoomEntities(Scene& scene,
+                                       int genIdx,
                                        const RoomTemplate& room,
                                        int ax, int az, int rotation,
                                        float blockSize,
                                        const glm::vec3& genPos,
                                        MazeGeneratorComponent::LiveRoom& live)
 {
-    // For each block, create a cube entity
-    for (const auto& b : room.Blocks)
-    {
-        int rx, rz;
-        RotateXZ(b.X, b.Z, rotation, rx, rz);
-        float wx = genPos.x + (ax + rx) * blockSize;
-        float wy = genPos.y + b.Y * blockSize;
-        float wz = genPos.z + (az + rz) * blockSize;
+    // Create a parent empty entity for this room, named "RoomName(N)"
+    int roomCount = (int)scene.MazeGenerators[genIdx].SpawnedRooms.size();
+    std::string roomGroupName = room.Name + "(" + std::to_string(roomCount) + ")";
+    Entity groupEnt = scene.CreateEntity(roomGroupName);
+    int groupId = (int)scene.Transforms.size() - 1;
+    // Set world position BEFORE parenting so auto-conversion to local works
+    scene.Transforms[groupId].Position = glm::vec3(
+        genPos.x + ax * blockSize,
+        genPos.y,
+        genPos.z + az * blockSize
+    );
+    scene.SetEntityParent(groupId, genIdx);
+    live.EntityIds.push_back(groupId);
 
-        Entity e = scene.CreateEntity("MazeBlock");
-        int eid = (int)scene.Transforms.size() - 1;
-
-        scene.Transforms[eid].Position = glm::vec3(wx, wy, wz);
-        scene.Transforms[eid].Scale    = glm::vec3(blockSize, blockSize, blockSize);
-
-        // Assign a cube mesh
-        Mesh* mesh = new Mesh(Mesh::CreateCube("#AAAAAA"));
-        scene.MeshRenderers[eid].MeshPtr  = mesh;
-        scene.MeshRenderers[eid].MeshType = "cube";
-
-        // Remove from RootOrder display (maze entities shouldn't clutter hierarchy)
-        // They're still in the scene arrays but hidden from the user hierarchy.
-
-        live.EntityIds.push_back(eid);
-    }
-
-    // Spawn interior decoration (prefab-style nodes inside the room)
+    // Spawn interior nodes — these are the user-designed visual representation
+    // (RoomBlocks are invisible grid markers — NOT spawned as entities)
     for (const auto& node : room.Interior)
     {
-        Entity e = scene.CreateEntity(node.Name.empty() ? "MazeProp" : node.Name);
+        Entity e = scene.CreateEntity(node.Name.empty() ? "Interior" : node.Name);
         int eid = (int)scene.Transforms.size() - 1;
 
-        // Room-local transform → rotate + offset to world
-        float rx = node.Transform.Position.x;
-        float rz = node.Transform.Position.z;
+        // Room-local transform → rotate + offset to world position
+        float lx = node.Transform.Position.x;
+        float lz = node.Transform.Position.z;
         float cosA = 1.0f, sinA = 0.0f;
         if (rotation == 90)       { cosA = 0; sinA = 1; }
         else if (rotation == 180) { cosA = -1; sinA = 0; }
         else if (rotation == 270) { cosA = 0; sinA = -1; }
 
-        float wrx = rx * cosA - rz * sinA;
-        float wrz = rx * sinA + rz * cosA;
+        float wrx = lx * cosA - lz * sinA;
+        float wrz = lx * sinA + lz * cosA;
 
+        // Set WORLD position first, then parent — SetEntityParent converts to local
         scene.Transforms[eid].Position = glm::vec3(
             genPos.x + ax * blockSize + wrx * blockSize,
             genPos.y + node.Transform.Position.y * blockSize,
             genPos.z + az * blockSize + wrz * blockSize
         );
         scene.Transforms[eid].Rotation = node.Transform.Rotation;
-        scene.Transforms[eid].Scale    = node.Transform.Scale;
+        scene.Transforms[eid].Rotation.y += (float)rotation;
+        scene.Transforms[eid].Scale    = node.Transform.Scale * blockSize;
+        scene.SetEntityParent(eid, groupId);
 
         if (!node.MeshType.empty())
         {
+            // Resolve material color from MaterialName
+            std::string meshColor = "#DDDDDD";
+            int matIdx = -1;
+            if (!node.MaterialName.empty())
+            {
+                for (int mi = 0; mi < (int)scene.Materials.size(); ++mi)
+                {
+                    if (scene.Materials[mi].Name == node.MaterialName)
+                    {
+                        matIdx = mi;
+                        char hex[8];
+                        snprintf(hex, sizeof(hex), "#%02X%02X%02X",
+                            (int)(glm::clamp(scene.Materials[mi].Color.r, 0.0f, 1.0f) * 255.0f),
+                            (int)(glm::clamp(scene.Materials[mi].Color.g, 0.0f, 1.0f) * 255.0f),
+                            (int)(glm::clamp(scene.Materials[mi].Color.b, 0.0f, 1.0f) * 255.0f));
+                        meshColor = hex;
+                        break;
+                    }
+                }
+            }
+
             Mesh* mesh = nullptr;
             const std::string& mt = node.MeshType;
-            if      (mt == "cube")     mesh = new Mesh(Mesh::CreateCube("#DDDDDD"));
-            else if (mt == "sphere")   mesh = new Mesh(Mesh::CreateSphere("#DDDDDD"));
-            else if (mt == "pyramid")  mesh = new Mesh(Mesh::CreatePyramid("#DDDDDD"));
-            else if (mt == "cylinder") mesh = new Mesh(Mesh::CreateCylinder("#DDDDDD"));
-            else if (mt == "capsule")  mesh = new Mesh(Mesh::CreateCapsule("#DDDDDD"));
-            else if (mt == "plane")    mesh = new Mesh(Mesh::CreatePlane("#DDDDDD"));
+            if      (mt == "cube")     mesh = new Mesh(Mesh::CreateCube(meshColor));
+            else if (mt == "sphere")   mesh = new Mesh(Mesh::CreateSphere(meshColor));
+            else if (mt == "pyramid")  mesh = new Mesh(Mesh::CreatePyramid(meshColor));
+            else if (mt == "cylinder") mesh = new Mesh(Mesh::CreateCylinder(meshColor));
+            else if (mt == "capsule")  mesh = new Mesh(Mesh::CreateCapsule(meshColor));
+            else if (mt == "plane")    mesh = new Mesh(Mesh::CreatePlane(meshColor));
             else if (mt.size() > 4 && mt.substr(0, 4) == "obj:")
                 mesh = new Mesh(Mesh::LoadOBJ(mt.substr(4)));
             if (mesh)
@@ -291,6 +306,24 @@ void MazeGenerator::SpawnRoomEntities(Scene& scene,
                 scene.MeshRenderers[eid].MeshPtr  = mesh;
                 scene.MeshRenderers[eid].MeshType = mt;
             }
+
+            // Assign material index so renderer uses the full material (textures, PBR etc.)
+            if (matIdx >= 0 && eid < (int)scene.EntityMaterial.size())
+                scene.EntityMaterial[eid] = matIdx;
+        }
+
+        // Spawn light if the interior node has one
+        if (node.HasLight && eid < (int)scene.Lights.size())
+        {
+            scene.Lights[eid] = node.Light;
+            scene.Lights[eid].Active  = true;
+        }
+
+        // Spawn camera if the interior node has one
+        if (node.HasCamera && eid < (int)scene.GameCameras.size())
+        {
+            scene.GameCameras[eid] = node.Camera;
+            scene.GameCameras[eid].Active = true;
         }
 
         live.EntityIds.push_back(eid);
@@ -394,40 +427,80 @@ bool MazeGenerator::TrySpawnRoom(Scene& scene,
 
         for (int rot : rotOrder)
         {
-            if (!CellsFree(scene.MazeGenerators[genIdx], tmpl, gridX, gridZ, rot)) continue;
+            // Build candidate anchor positions.
+            // For door slots: offset anchor so a block with the matching door
+            //   face lands exactly on (gridX, gridZ).
+            // For non-door slots: anchor directly at (gridX, gridZ).
+            struct AnchorCand { int ax, az; };
+            std::vector<AnchorCand> anchors;
 
-            MazeGeneratorComponent::LiveRoom liveRoom;
-            liveRoom.TemplateIdx = tIdx;
-            liveRoom.GridX       = gridX;
-            liveRoom.GridZ       = gridZ;
-            liveRoom.Rotation    = rot;
-
-            // Mark occupied cells first
-            for (const auto& b : tmpl.Blocks)
-            {
-                int rx, rz;
-                RotateXZ(b.X, b.Z, rot, rx, rz);
-                scene.MazeGenerators[genIdx].OccupiedCells.push_back({ gridX + rx, gridZ + rz });
-            }
-
-            // Spawn entities
-            SpawnRoomEntities(scene, tmpl, gridX, gridZ, rot, blockSize, genPos, liveRoom);
-
-            // Register door exits (after spawn so gen is up to date)
-            RegisterDoorExits(scene, genIdx, tmpl, gridX, gridZ, rot, liveRoom);
-
-            // If this cell was a pending door slot, remove it
             if (isDoorSlot)
             {
-                auto& slots = scene.MazeGenerators[genIdx].PendingDoorSlots;
-                slots.erase(std::remove_if(slots.begin(), slots.end(),
-                    [gridX, gridZ](const MazeGeneratorComponent::DoorSlot& s) {
-                        return s.gridX == gridX && s.gridZ == gridZ;
-                    }), slots.end());
+                for (const auto& door : tmpl.Doors)
+                {
+                    int ldx, ldz;
+                    DoorFaceToLocalDelta(door.Face, ldx, ldz);
+                    int rdx, rdz;
+                    RotateXZ(ldx, ldz, rot, rdx, rdz);
+                    if (DeltaToDoorFace(rdx, rdz) != reqFace) continue;
+
+                    int rbx, rbz;
+                    RotateXZ(door.BlockX, door.BlockZ, rot, rbx, rbz);
+                    int ax = gridX - rbx;
+                    int az = gridZ - rbz;
+
+                    bool dup = false;
+                    for (const auto& a : anchors)
+                        if (a.ax == ax && a.az == az) { dup = true; break; }
+                    if (!dup) anchors.push_back({ax, az});
+                }
+            }
+            else
+            {
+                anchors.push_back({gridX, gridZ});
             }
 
-            scene.MazeGenerators[genIdx].SpawnedRooms.push_back(std::move(liveRoom));
-            return true;
+            for (const auto& anch : anchors)
+            {
+                if (!CellsFree(scene.MazeGenerators[genIdx], tmpl, anch.ax, anch.az, rot))
+                    continue;
+
+                MazeGeneratorComponent::LiveRoom liveRoom;
+                liveRoom.TemplateIdx = tIdx;
+                liveRoom.GridX       = anch.ax;
+                liveRoom.GridZ       = anch.az;
+                liveRoom.Rotation    = rot;
+
+                // Mark occupied cells
+                for (const auto& b : tmpl.Blocks)
+                {
+                    int rx, rz;
+                    RotateXZ(b.X, b.Z, rot, rx, rz);
+                    scene.MazeGenerators[genIdx].OccupiedCells.push_back(
+                        { anch.ax + rx, anch.az + rz });
+                }
+
+                // Spawn entities
+                SpawnRoomEntities(scene, genIdx, tmpl,
+                                  anch.ax, anch.az, rot, blockSize, genPos, liveRoom);
+
+                // Register door exits
+                RegisterDoorExits(scene, genIdx, tmpl,
+                                  anch.ax, anch.az, rot, liveRoom);
+
+                // Remove the door slot (original exit cell, not the anchor)
+                if (isDoorSlot)
+                {
+                    auto& slots = scene.MazeGenerators[genIdx].PendingDoorSlots;
+                    slots.erase(std::remove_if(slots.begin(), slots.end(),
+                        [gridX, gridZ](const MazeGeneratorComponent::DoorSlot& s) {
+                            return s.gridX == gridX && s.gridZ == gridZ;
+                        }), slots.end());
+                }
+
+                scene.MazeGenerators[genIdx].SpawnedRooms.push_back(std::move(liveRoom));
+                return true;
+            }
         }
     }
     return false;
@@ -443,11 +516,15 @@ void MazeGenerator::Update(Scene& scene, float dt)
     glm::vec3 playerPos;
     if (!GetPlayerPosition(scene, playerPos)) return;
 
+    // Collect entity IDs to delete AFTER the generator loop finishes.
+    // Deleting mid-loop would shift parallel arrays and invalidate indices.
+    std::vector<int> deferredDeleteIds;
+
     // Snapshot count — new entities created by spawning append to the end
     // and should NOT be iterated as generators.
     const int genCount = (int)scene.MazeGenerators.size();
 
-    for (int gi = 0; gi < genCount; ++gi)
+    for (int gi = 0; gi < genCount && gi < (int)scene.MazeGenerators.size(); ++gi)
     {
         // Use index-based access throughout to avoid dangling references
         // after CreateEntity / DeleteEntity reallocate the parallel arrays.
@@ -504,22 +581,10 @@ void MazeGenerator::Update(Scene& scene, float dt)
 
                 // Copy entity IDs before deletion (room ref is about to be erased)
                 std::vector<int> deadIds = room.EntityIds;
-                std::sort(deadIds.begin(), deadIds.end(), std::greater<int>());
 
+                // Defer the actual entity deletion to after the loop
                 for (int eid : deadIds)
-                {
-                    if (eid >= 0 && eid < (int)scene.Transforms.size())
-                        scene.DeleteEntity(eid);
-                }
-
-                // Fix entity IDs in other live rooms after deletions
-                for (int rj = 0; rj < (int)scene.MazeGenerators[gi].SpawnedRooms.size(); ++rj)
-                {
-                    if (rj == ri) continue;
-                    for (auto& eid : scene.MazeGenerators[gi].SpawnedRooms[rj].EntityIds)
-                        for (int deletedId : deadIds)
-                            if (eid > deletedId) --eid;
-                }
+                    deferredDeleteIds.push_back(eid);
 
                 scene.MazeGenerators[gi].SpawnedRooms.erase(
                     scene.MazeGenerators[gi].SpawnedRooms.begin() + ri);
@@ -566,37 +631,43 @@ void MazeGenerator::Update(Scene& scene, float dt)
             }
         }
 
-        // 2b) Spawn rooms in empty grid cells around the player within generate radius
-        int gridRadius = (int)std::ceil(genRad / blockSize);
-        int pgx = (int)std::round((playerPos.x - genPos.x) / blockSize);
-        int pgz = (int)std::round((playerPos.z - genPos.z) / blockSize);
-
-        for (int r = 0; r <= gridRadius; ++r)
+        // 2b) If no rooms exist yet, spawn the initial room at the player's grid cell.
+        //     After that, expansion happens ONLY through PendingDoorSlots (step 2a)
+        //     to respect door connectivity — so a corridor template only grows
+        //     in the directions its doors face.
+        if (scene.MazeGenerators[gi].SpawnedRooms.empty())
         {
-            for (int dx = -r; dx <= r; ++dx)
+            int pgx = 0;
+            int pgz = 0;
+            TrySpawnRoom(scene, gi, roomSetIdx, pgx, pgz, blockSize, genPos);
+        }
+    }
+
+    // ---- Deferred entity deletion (safe: no more index-dependent iteration) ----
+    if (!deferredDeleteIds.empty())
+    {
+        // Sort descending so highest indices are deleted first (no shift issues)
+        std::sort(deferredDeleteIds.begin(), deferredDeleteIds.end(), std::greater<int>());
+        deferredDeleteIds.erase(
+            std::unique(deferredDeleteIds.begin(), deferredDeleteIds.end()),
+            deferredDeleteIds.end());
+
+        for (int eid : deferredDeleteIds)
+        {
+            if (eid >= 0 && eid < (int)scene.Transforms.size())
+                scene.DeleteEntity(eid);
+        }
+
+        // After deletion, all entity IDs in live rooms that are > each deleted ID
+        // have shifted down. Fix them.
+        for (auto& gen : scene.MazeGenerators)
+        {
+            for (auto& lr : gen.SpawnedRooms)
             {
-                for (int dz = -r; dz <= r; ++dz)
+                for (auto& eid : lr.EntityIds)
                 {
-                    if (std::abs(dx) != r && std::abs(dz) != r) continue;
-
-                    int gx = pgx + dx;
-                    int gz = pgz + dz;
-
-                    float wx = genPos.x + gx * blockSize;
-                    float wz = genPos.z + gz * blockSize;
-                    float dist2Player = std::sqrt((playerPos.x - wx) * (playerPos.x - wx) +
-                                                   (playerPos.z - wz) * (playerPos.z - wz));
-                    if (dist2Player > genRad) continue;
-
-                    // Re-access occupied cells via index (safe after prior spawns)
-                    bool occupied = false;
-                    for (const auto& occ : scene.MazeGenerators[gi].OccupiedCells)
-                    {
-                        if (occ.first == gx && occ.second == gz) { occupied = true; break; }
-                    }
-                    if (occupied) continue;
-
-                    TrySpawnRoom(scene, gi, roomSetIdx, gx, gz, blockSize, genPos);
+                    for (int deletedId : deferredDeleteIds)
+                        if (eid > deletedId) --eid;
                 }
             }
         }

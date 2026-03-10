@@ -366,6 +366,21 @@ static void DrawMaterialModule(Scene& scene, int idx)
             }
             ImGui::EndDragDropTarget();
         }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::Text("Lightmap:");
+        if (idx < (int)scene.EntityStatic.size())
+        {
+            bool v = scene.EntityStatic[idx];
+            if (ImGui::Checkbox("Static##ent_static", &v)) scene.EntityStatic[idx] = v;
+        }
+        if (idx < (int)scene.EntityReceiveLightmap.size())
+        {
+            bool v = scene.EntityReceiveLightmap[idx];
+            if (ImGui::Checkbox("Receive Lightmap##ent_recv_lm", &v)) scene.EntityReceiveLightmap[idx] = v;
+        }
     }
 }
 
@@ -1207,6 +1222,18 @@ bool InspectorPanel::DrawLightSection(LightComponent& lc, int orderIdx, std::vec
     {
         TableDragFloat1("Width",  &lc.Width,  0.05f, 0.01f, 200.0f, &kWDef);
         TableDragFloat1("Height", &lc.Height, 0.05f, 0.01f, 200.0f, &kHDef);
+    }
+
+    // --- Bake Mode ---
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Baked Only");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::Checkbox("##lbakedonly", &lc.BakedOnly);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Excluded from real-time lighting;\ncontributes only to baked lightmaps.");
     }
 
     ImGui::EndTable();
@@ -2126,14 +2153,21 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
 
     ImGui::SetNextWindowPos(ImVec2((float)winX, (float)winY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2((float)panelW, (float)panelH), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.93f);
 
     ImGuiWindowFlags wf = ImGuiWindowFlags_NoMove        |
                           ImGuiWindowFlags_NoResize       |
                           ImGuiWindowFlags_NoCollapse     |
-                          ImGuiWindowFlags_NoBringToFrontOnFocus;
+                          ImGuiWindowFlags_NoBringToFrontOnFocus |
+                          ImGuiWindowFlags_NoTitleBar;
 
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.13f, 0.13f, 0.15f, 1.0f));
     ImGui::Begin("Inspector", nullptr, wf);
+
+    // Panel header
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.68f, 0.72f, 1.0f));
+    ImGui::TextUnformatted("INSPECTOR");
+    ImGui::PopStyleColor();
+    ImGui::Separator();
 
     // ---- Multi-select notice ----
     if (multiSelection && multiSelection->size() > 1)
@@ -2142,6 +2176,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
         ImGui::Spacing();
         ImGui::TextDisabled("Cannot edit multiple objects simultaneously.");
         ImGui::End();
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -2171,24 +2206,10 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
 
             ImGui::Spacing();
 
-            // Transform — with double-right-click to reset defaults
-            if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen))
-            {
-                static const float defPos[3] = {0.0f, 0.0f, 0.0f};
-                static const float defRot[3] = {0.0f, 0.0f, 0.0f};
-                static const float defScl[3] = {1.0f, 1.0f, 1.0f};
-                if (ImGui::BeginTable("##prefnodetfm", 2, ImGuiTableFlags_SizingStretchProp))
-                {
-                    ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-                    TableDragFloat3("Position", &node.Transform.Position.x, 0.1f, 0.0f, 0.0f, defPos);
-                    TableDragFloat3("Rotation", &node.Transform.Rotation.x, 0.5f, 0.0f, 0.0f, defRot);
-                    TableDragFloat3("Scale",    &node.Transform.Scale.x,    0.05f, 0.0f, 0.0f, defScl);
-                    ImGui::EndTable();
-                }
-            }
+            // ===== Transform (identical to main editor — per-axis colored XYZ) =====
+            DrawTransformSection(node.Transform);
 
-            // Mesh — editable type dropdown
+            // ===== Mesh — editable type dropdown =====
             {
                 ImGui::Spacing();
                 if (ImGui::CollapsingHeader("Mesh", ImGuiTreeNodeFlags_DefaultOpen))
@@ -2201,37 +2222,192 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                     ImGui::SetNextItemWidth(-1);
                     if (ImGui::Combo("##pref_meshtype", &current, meshTypes, 7))
                         node.MeshType = (current == 0) ? "" : meshTypes[current];
-
-                    // Material name editable
-                    static char matBuf[128];
-                    strncpy(matBuf, node.MaterialName.c_str(), 127); matBuf[127] = '\0';
-                    ImGui::Text("Material"); ImGui::SameLine();
-                    ImGui::SetNextItemWidth(-1);
-                    if (ImGui::InputText("##pref_matname", matBuf, 128, ImGuiInputTextFlags_EnterReturnsTrue))
-                        node.MaterialName = matBuf;
                 }
             }
 
-            // Light
+            // ===== Material — color picker + dropdown (same as main editor) =====
+            {
+                ImGui::Spacing();
+                if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    // Color edit: use material color if assigned, otherwise light-grey default
+                    int matIdx = -1;
+                    if (!node.MaterialName.empty())
+                        for (int mi = 0; mi < (int)scene.Materials.size(); ++mi)
+                            if (scene.Materials[mi].Name == node.MaterialName) { matIdx = mi; break; }
+                    bool hasMat = (matIdx >= 0 && matIdx < (int)scene.Materials.size());
+                    glm::vec3 color = hasMat ? scene.Materials[matIdx].Color : glm::vec3(0.867f);
+                    ImGui::Text("Color:");
+                    if (ImGui::ColorEdit3("##prefmatcolor", &color.x))
+                    {
+                        if (hasMat)
+                        {
+                            scene.Materials[matIdx].Color = color;
+                        }
+                        else
+                        {
+                            // Auto-create a material so the color change persists
+                            MaterialAsset newMat;
+                            newMat.Name  = node.Name.empty() ? "Material" : (node.Name + "_Mat");
+                            // Ensure unique name
+                            int suffix = 1;
+                            std::string baseName = newMat.Name;
+                            for (bool dup = true; dup; )
+                            {
+                                dup = false;
+                                for (const auto& m : scene.Materials)
+                                    if (m.Name == newMat.Name) { newMat.Name = baseName + " (" + std::to_string(++suffix) + ")"; dup = true; break; }
+                            }
+                            newMat.Color  = color;
+                            newMat.Hidden = true;
+                            scene.Materials.push_back(newMat);
+                            node.MaterialName = newMat.Name;
+                        }
+                    }
+
+                    // Material dropdown
+                    ImGui::Text("Material:");
+                    ImGui::SetNextItemWidth(-1.0f);
+                    const char* preview = hasMat ? scene.Materials[matIdx].Name.c_str() : "<None>";
+                    if (ImGui::BeginCombo("##prefmatsel", preview, ImGuiComboFlags_PopupAlignLeft))
+                    {
+                        if (ImGui::Selectable("<None>", !hasMat))
+                            node.MaterialName.clear();
+                        for (int i = 0; i < (int)scene.Materials.size(); ++i)
+                        {
+                            bool sel = (matIdx == i);
+                            if (ImGui::Selectable(scene.Materials[i].Name.c_str(), sel))
+                                node.MaterialName = scene.Materials[i].Name;
+                            if (sel) ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+                    // Drop target: drag material from asset browser
+                    if (ImGui::BeginDragDropTarget())
+                    {
+                        if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("MATERIAL_IDX"))
+                        {
+                            int newMat = *(const int*)p->Data;
+                            if (newMat >= 0 && newMat < (int)scene.Materials.size())
+                                node.MaterialName = scene.Materials[newMat].Name;
+                        }
+                        ImGui::EndDragDropTarget();
+                    }
+                }
+            }
+
+            // ===== Light (full parity with main editor) =====
             if (node.HasLight)
             {
                 ImGui::Spacing();
-                if (ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen))
+                bool lightOpen = ImGui::CollapsingHeader("Light", ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+
+                // Enable checkbox on header line
+                ImGui::SameLine(ImGui::GetContentRegionAvail().x - 20.0f);
+                ImGui::Checkbox("##prefLightEnable", &node.Light.Enabled);
+
+                if (lightOpen)
                 {
-                    static const char* ltNames[] = {"Directional","Point","Spot","Area"};
-                    int ltIdx = (int)node.Light.Type;
-                    ImGui::Text("Type"); ImGui::SameLine();
-                    ImGui::SetNextItemWidth(-1);
-                    if (ImGui::Combo("##pref_lighttype", &ltIdx, ltNames, 4))
-                        node.Light.Type = (LightType)ltIdx;
-                    ImGui::DragFloat("Intensity", &node.Light.Intensity, 0.05f, 0.0f, 100.0f);
-                    ImGui::ColorEdit3("Color", &node.Light.Color.x);
-                    if (node.Light.Type == LightType::Point || node.Light.Type == LightType::Spot)
-                        ImGui::DragFloat("Range", &node.Light.Range, 0.1f, 0.0f, 1000.0f);
-                    if (node.Light.Type == LightType::Spot) {
-                        ImGui::DragFloat("Inner Angle", &node.Light.InnerAngle, 0.5f, 0.0f, 90.0f);
-                        ImGui::DragFloat("Outer Angle", &node.Light.OuterAngle, 0.5f, 0.0f, 90.0f);
+                    if (ImGui::BeginTable("##preflt", 2))
+                    {
+                    ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+                    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+
+                    // Type combo
+                    {
+                        static const char* typeNames[] = { "Directional", "Point", "Spot", "Area" };
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Type");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::SetNextItemWidth(-1);
+                        int ti = (int)node.Light.Type;
+                        if (ImGui::Combo("##preflttype", &ti, typeNames, 4))
+                            node.Light.Type = (LightType)ti;
                     }
+
+                    // Color picker
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Color");
+                        ImGui::TableSetColumnIndex(1);
+                        float col[3] = {node.Light.Color.r, node.Light.Color.g, node.Light.Color.b};
+                        ImGui::SetNextItemWidth(-1);
+                        if (ImGui::ColorEdit3("##prefltcol", col))
+                            node.Light.Color = {col[0], col[1], col[2]};
+                    }
+
+                    // Temperature with Kelvin swatch
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Temp (K)");
+                        ImGui::TableSetColumnIndex(1);
+                        float t = (node.Light.Temperature - 1000.0f) / 11000.0f;
+                        float pr = t < 0.545f ? 1.0f : 1.0f - (t - 0.545f) * 0.55f;
+                        float pg = t < 0.12f  ? t * 5.0f : (t > 0.727f ? 1.0f - (t - 0.727f)*0.7f : 1.0f);
+                        float pb = t < 0.545f ? t * 1.65f : 1.0f;
+                        pr = glm::clamp(pr, 0.0f, 1.0f);
+                        pg = glm::clamp(pg, 0.0f, 1.0f);
+                        pb = glm::clamp(pb, 0.0f, 1.0f);
+                        ImGui::SetNextItemWidth(-38.0f);
+                        ImGui::DragFloat("##prefltemp", &node.Light.Temperature, 50.0f, 1000.0f, 12000.0f, "%.0f K");
+                        ImGui::SameLine(0, 4);
+                        ImGui::ColorButton("##preftprev", ImVec4(pr, pg, pb, 1.0f),
+                            ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoBorder,
+                            ImVec2(30.0f, ImGui::GetFrameHeight()));
+                    }
+
+                    // Intensity
+                    {
+                        static const float kIntDef = 1.f;
+                        TableDragFloat1("Intensity", &node.Light.Intensity, 0.01f, 0.0f, 200.0f, &kIntDef);
+                    }
+
+                    // Range (not for directional)
+                    if (node.Light.Type != LightType::Directional)
+                    {
+                        static const float kRangeDef = 10.f;
+                        TableDragFloat1("Range", &node.Light.Range, 0.1f, 0.0f, 2000.0f, &kRangeDef);
+                    }
+
+                    // Spot cone angles
+                    if (node.Light.Type == LightType::Spot)
+                    {
+                        static const float kInnerDef = 25.f, kOuterDef = 40.f;
+                        TableDragFloat1("Inner \xc2\xb0", &node.Light.InnerAngle, 0.5f, 0.0f, 89.9f, &kInnerDef);
+                        TableDragFloat1("Outer \xc2\xb0", &node.Light.OuterAngle, 0.5f, 0.0f, 90.0f, &kOuterDef);
+                        if (node.Light.InnerAngle > node.Light.OuterAngle)
+                            node.Light.InnerAngle = node.Light.OuterAngle;
+                    }
+
+                    // Area light dimensions
+                    if (node.Light.Type == LightType::Area)
+                    {
+                        static const float kWDef = 2.f, kHDef = 1.f;
+                        TableDragFloat1("Width",  &node.Light.Width,  0.05f, 0.01f, 200.0f, &kWDef);
+                        TableDragFloat1("Height", &node.Light.Height, 0.05f, 0.01f, 200.0f, &kHDef);
+                    }
+
+                    // Bake mode
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::AlignTextToFramePadding();
+                        ImGui::TextUnformatted("Baked Only");
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Checkbox("##ibakedonly", &node.Light.BakedOnly);
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Excluded from real-time lighting;\ncontributes only to baked lightmaps.");
+                    }
+
+                    ImGui::EndTable();
+                    }
+
                     ImGui::Spacing();
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.15f, 0.15f, 1.0f));
                     if (ImGui::Button("Remove Light", ImVec2(-1, 0)))
@@ -2240,15 +2416,22 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                 }
             }
 
-            // Camera
+            // ===== Camera (full parity with main editor) =====
             if (node.HasCamera)
             {
                 ImGui::Spacing();
                 if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen))
                 {
-                    ImGui::DragFloat("FOV", &node.Camera.FOV, 0.5f, 1.0f, 179.0f);
-                    ImGui::DragFloat("Near", &node.Camera.Near, 0.01f, 0.001f, 100.0f);
-                    ImGui::DragFloat("Far", &node.Camera.Far, 1.0f, 1.0f, 100000.0f);
+                    if (ImGui::BeginTable("##prefcam", 2, ImGuiTableFlags_SizingStretchProp))
+                    {
+                        ImGui::TableSetupColumn("l", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch);
+                        static const float fovDef = 60.f, nearDef = 0.1f, farDef = 1000.f;
+                        TableDragFloat1("FOV",  &node.Camera.FOV,  0.5f, 1.0f, 179.0f, &fovDef);
+                        TableDragFloat1("Near", &node.Camera.Near, 0.01f, 0.001f, 100.0f, &nearDef);
+                        TableDragFloat1("Far",  &node.Camera.Far,  1.0f, 1.0f, 100000.0f, &farDef);
+                        ImGui::EndTable();
+                    }
                     ImGui::Spacing();
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.15f, 0.15f, 1.0f));
                     if (ImGui::Button("Remove Camera", ImVec2(-1, 0)))
@@ -2257,7 +2440,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                 }
             }
 
-            // Add component buttons
+            // ===== Add component buttons =====
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -2270,6 +2453,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
                     node.Light.Intensity= 1.0f;
                     node.Light.Color    = glm::vec3(1.0f);
                     node.Light.Range    = 10.0f;
+                    node.Light.Temperature = 6500.0f;
                 }
             }
             if (!node.HasCamera) {
@@ -2284,9 +2468,14 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
         }
         else
         {
-            ImGui::TextDisabled("Select a node in the hierarchy to edit.");
+            // No node selected — show material editor if a material is selected in assets
+            if (selectedMaterial >= 0 && selectedMaterial < (int)scene.Materials.size())
+                DrawMaterialEditor(scene, selectedMaterial);
+            else
+                ImGui::TextDisabled("Select a node in the hierarchy to edit.");
         }
         ImGui::End();
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -2317,6 +2506,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
         ImGui::Spacing();
         ImGui::TextDisabled("Double-click in Assets to instantiate.");
         ImGui::End();
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -2325,6 +2515,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     {
         DrawTextureInspector(scene, selectedTexture);
         ImGui::End();
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -2333,6 +2524,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     {
         DrawMaterialEditor(scene, selectedMaterial);
         ImGui::End();
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -2344,6 +2536,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
         ImGui::TextDisabled("Environment settings (Fog / Sky / Post-Processing)");
         ImGui::TextDisabled("are accessible from the Game Camera component.");
         ImGui::End();
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -2353,6 +2546,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     {
         DrawGroupSection(scene.Groups[selectedGroup], selectedGroup);
         ImGui::End();
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -2360,6 +2554,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     {
         ImGui::TextDisabled("Invalid selection.");
         ImGui::End();
+        ImGui::PopStyleColor();
         return;
     }
 
@@ -2446,6 +2641,7 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     DrawAddComponentMenu(scene, selectedEntity, order);
 
     ImGui::End();
+    ImGui::PopStyleColor(); // WindowBg
 }
 
 } // namespace tsu

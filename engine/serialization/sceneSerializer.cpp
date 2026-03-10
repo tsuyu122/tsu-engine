@@ -97,7 +97,10 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         float       lightOuterAngle = 45.0f;
         float       lightWidth      = 1.0f;
         float       lightHeight     = 1.0f;
+        bool        lightBakedOnly  = false;
         int         materialIdx     = -1;   // index into scene.Materials
+        bool        isStatic        = true;
+        bool        receiveLightmap = true;
 
         // Maze Generator
         bool        hasMazeGen      = false;
@@ -148,6 +151,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         float tilingX   = 1.0f;
         float tilingY   = 1.0f;
         bool  worldSpaceUV = false;
+        bool  hidden       = false;
     };
 
     auto flushMaterial = [&](MaterialData& d)
@@ -170,6 +174,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         mat.AOValue     = d.aoValue;
         mat.Tiling      = {d.tilingX, d.tilingY};
         mat.WorldSpaceUV = d.worldSpaceUV;
+        mat.Hidden      = d.hidden;
         mat.ORM_Dirty   = true;   // repack on first draw
 
         // Try to resolve texture IDs from already-loaded scene textures
@@ -304,6 +309,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             lc.OuterAngle = d.lightOuterAngle;
             lc.Width      = d.lightWidth;
             lc.Height     = d.lightHeight;
+            lc.BakedOnly  = d.lightBakedOnly;
             if      (d.lightType == "point")  lc.Type = LightType::Point;
             else if (d.lightType == "spot")   lc.Type = LightType::Spot;
             else if (d.lightType == "area")   lc.Type = LightType::Area;
@@ -358,6 +364,9 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             ls.ScriptPath  = d.luaScriptPath;
             ls.ExposedVars = d.luaExposedVars;
         }
+
+        if (id < (uint32_t)scene.EntityStatic.size()) scene.EntityStatic[id] = d.isStatic;
+        if (id < (uint32_t)scene.EntityReceiveLightmap.size()) scene.EntityReceiveLightmap[id] = d.receiveLightmap;
 
         d = EntityData{};
     };
@@ -415,6 +424,9 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         float rarity = 1.0f;
         std::vector<RoomBlock> blocks;
         std::vector<DoorPlacement> doors;
+        std::vector<PrefabEntityData> interior;
+        PrefabEntityData curInterior;
+        bool buildingInterior = false;
         std::string lightmapPath;
         glm::vec4   lightmapST = {1,1,0,0};
     };
@@ -437,6 +449,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             t.Rarity      = rm.rarity;
             t.Blocks      = rm.blocks;
             t.Doors       = rm.doors;
+            t.Interior    = rm.interior;
             t.LightmapPath = rm.lightmapPath;
             t.LightmapST   = rm.lightmapST;
             scene.RoomSets[rm.setIdx].Rooms.push_back(t);
@@ -608,7 +621,10 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (k == "light_outer")      cur.lightOuterAngle    = std::stof(val);
             else if (k == "light_width")      cur.lightWidth         = std::stof(val);
             else if (k == "light_height")     cur.lightHeight        = std::stof(val);
+            else if (k == "light_baked_only") cur.lightBakedOnly     = (val == "true");
             else if (k == "entity_material")  cur.materialIdx        = std::stoi(val);
+            else if (k == "entity_static")    cur.isStatic           = (val == "true");
+            else if (k == "receive_lightmap") cur.receiveLightmap    = (val == "true");
             else if (k == "maze_gen")         cur.hasMazeGen         = (val == "true");
             else if (k == "mg_room_set")      cur.mgRoomSet          = std::stoi(val);
             else if (k == "mg_gen_radius")    cur.mgGenRadius        = std::stof(val);
@@ -661,6 +677,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (k == "sun_col") scene.Sky.SunColor        = parseVec3(val);
             else if (k == "sun_size")  scene.Sky.SunSize       = std::stof(val);
             else if (k == "sun_bloom") scene.Sky.SunBloom      = std::stof(val);
+            else if (k == "lightmap_intensity") scene.LightmapIntensity = std::stof(val);
         }
         else if (section == Section::PostProcess)
         {
@@ -711,6 +728,7 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (k == "mat_tiling_x")  curMat.tilingX    = std::stof(val);
             else if (k == "mat_tiling_y")  curMat.tilingY    = std::stof(val);
             else if (k == "mat_world_uv")  curMat.worldSpaceUV = (val == "true");
+            else if (k == "mat_hidden")    curMat.hidden = (val == "true");
         }
         else if (section == Section::Channel)
         {
@@ -744,6 +762,72 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
                 ds >> d.BlockX >> d.BlockZ >> d.BlockY >> faceInt;
                 d.Face = (DoorFace)faceInt;
                 curRm.doors.push_back(d);
+            }
+            else if (k == "interior_name")
+            {
+                curRm.curInterior = PrefabEntityData{};
+                curRm.buildingInterior = true;
+                curRm.curInterior.Name = (val == "_") ? "" : val;
+            }
+            else if (k == "interior_parent" && curRm.buildingInterior)
+                curRm.curInterior.ParentIdx = std::stoi(val);
+            else if (k == "interior_mesh" && curRm.buildingInterior)
+                curRm.curInterior.MeshType = (val == "_") ? "" : val;
+            else if (k == "interior_material" && curRm.buildingInterior)
+                curRm.curInterior.MaterialName = (val == "_") ? "" : val;
+            else if (k == "interior_pos" && curRm.buildingInterior)
+            {
+                std::istringstream ss(val);
+                ss >> curRm.curInterior.Transform.Position.x
+                   >> curRm.curInterior.Transform.Position.y
+                   >> curRm.curInterior.Transform.Position.z;
+            }
+            else if (k == "interior_rot" && curRm.buildingInterior)
+            {
+                std::istringstream ss(val);
+                ss >> curRm.curInterior.Transform.Rotation.x
+                   >> curRm.curInterior.Transform.Rotation.y
+                   >> curRm.curInterior.Transform.Rotation.z;
+            }
+            else if (k == "interior_scl" && curRm.buildingInterior)
+            {
+                std::istringstream ss(val);
+                ss >> curRm.curInterior.Transform.Scale.x
+                   >> curRm.curInterior.Transform.Scale.y
+                   >> curRm.curInterior.Transform.Scale.z;
+            }
+            else if (k == "interior_light" && curRm.buildingInterior)
+            {
+                curRm.curInterior.HasLight = true;
+                std::istringstream ss(val);
+                std::string ltStr;
+                ss >> ltStr;
+                if      (ltStr == "point")       curRm.curInterior.Light.Type = LightType::Point;
+                else if (ltStr == "spot")        curRm.curInterior.Light.Type = LightType::Spot;
+                else if (ltStr == "area")        curRm.curInterior.Light.Type = LightType::Area;
+                else                             curRm.curInterior.Light.Type = LightType::Directional;
+                ss >> curRm.curInterior.Light.Color.r >> curRm.curInterior.Light.Color.g >> curRm.curInterior.Light.Color.b
+                   >> curRm.curInterior.Light.Intensity >> curRm.curInterior.Light.Range
+                   >> curRm.curInterior.Light.InnerAngle >> curRm.curInterior.Light.OuterAngle
+                   >> curRm.curInterior.Light.Width >> curRm.curInterior.Light.Height;
+                curRm.curInterior.Light.Active  = true;
+                curRm.curInterior.Light.Enabled = true;
+            }
+            else if (k == "interior_light_baked_only" && curRm.buildingInterior)
+            {
+                curRm.curInterior.Light.BakedOnly = (val == "true") || (val == "1");
+            }
+            else if (k == "interior_camera" && curRm.buildingInterior)
+            {
+                curRm.curInterior.HasCamera = true;
+                std::istringstream ss(val);
+                ss >> curRm.curInterior.Camera.FOV >> curRm.curInterior.Camera.Yaw >> curRm.curInterior.Camera.Pitch;
+                curRm.curInterior.Camera.Active = true;
+            }
+            else if (k == "interior_end" && curRm.buildingInterior)
+            {
+                curRm.interior.push_back(curRm.curInterior);
+                curRm.buildingInterior = false;
             }
             else if (k == "lightmap_path") curRm.lightmapPath = val;
             else if (k == "lightmap_st")
@@ -805,6 +889,7 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
         file << "mat_tiling_x  = " << mat.Tiling.x  << "\n";
         file << "mat_tiling_y  = " << mat.Tiling.y  << "\n";
         if (mat.WorldSpaceUV) file << "mat_world_uv  = true\n";
+        if (mat.Hidden)      file << "mat_hidden    = true\n";
         file << "\n";
     }
 
@@ -853,7 +938,8 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
         file << "sun_dir   = " << s.SunDirection.x << " " << s.SunDirection.y << " " << s.SunDirection.z << "\n";
         file << "sun_col   = " << s.SunColor.r << " " << s.SunColor.g << " " << s.SunColor.b << "\n";
         file << "sun_size  = " << s.SunSize  << "\n";
-        file << "sun_bloom = " << s.SunBloom << "\n\n";
+        file << "sun_bloom = " << s.SunBloom << "\n";
+        file << "lightmap_intensity = " << scene.LightmapIntensity << "\n\n";
     }
 
     // ---- Post-Process ----
@@ -907,6 +993,11 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
 
         if (i < scene.EntityMaterial.size() && scene.EntityMaterial[i] >= 0)
             file << "entity_material = " << scene.EntityMaterial[i] << "\n";
+
+        bool isStatic = (i < scene.EntityStatic.size()) ? scene.EntityStatic[i] : true;
+        bool receiveLM = (i < scene.EntityReceiveLightmap.size()) ? scene.EntityReceiveLightmap[i] : true;
+        file << "entity_static = " << (isStatic ? "true" : "false") << "\n";
+        file << "receive_lightmap = " << (receiveLM ? "true" : "false") << "\n";
 
         if (gc.Active)
         {
@@ -990,6 +1081,7 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
             file << "light_outer     = " << lc.OuterAngle           << "\n";
             file << "light_width     = " << lc.Width                << "\n";
             file << "light_height    = " << lc.Height               << "\n";
+            if (lc.BakedOnly) file << "light_baked_only = true\n";
         }
 
         if (i < scene.MazeGenerators.size() && scene.MazeGenerators[i].Active)
@@ -1058,6 +1150,30 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
                 file << "block = " << b.X << " " << b.Y << " " << b.Z << "\n";
             for (const auto& d : room.Doors)
                 file << "door = " << d.BlockX << " " << d.BlockZ << " " << d.BlockY << " " << (int)d.Face << "\n";
+            for (int ni = 0; ni < (int)room.Interior.size(); ++ni)
+            {
+                const auto& n = room.Interior[ni];
+                file << "interior_name = " << (n.Name.empty() ? "_" : n.Name) << "\n";
+                file << "interior_parent = " << n.ParentIdx << "\n";
+                file << "interior_mesh = " << (n.MeshType.empty() ? "_" : n.MeshType) << "\n";
+                file << "interior_material = " << (n.MaterialName.empty() ? "_" : n.MaterialName) << "\n";
+                file << "interior_pos = " << n.Transform.Position.x << " " << n.Transform.Position.y << " " << n.Transform.Position.z << "\n";
+                file << "interior_rot = " << n.Transform.Rotation.x << " " << n.Transform.Rotation.y << " " << n.Transform.Rotation.z << "\n";
+                file << "interior_scl = " << n.Transform.Scale.x << " " << n.Transform.Scale.y << " " << n.Transform.Scale.z << "\n";
+                if (n.HasLight)
+                {
+                    static const char* ltN[] = { "directional","point","spot","area" };
+                    file << "interior_light = " << ltN[(int)n.Light.Type]
+                         << " " << n.Light.Color.r << " " << n.Light.Color.g << " " << n.Light.Color.b
+                         << " " << n.Light.Intensity << " " << n.Light.Range
+                         << " " << n.Light.InnerAngle << " " << n.Light.OuterAngle
+                         << " " << n.Light.Width << " " << n.Light.Height << "\n";
+                    if (n.Light.BakedOnly) file << "interior_light_baked_only = true\n";
+                }
+                if (n.HasCamera)
+                    file << "interior_camera = " << n.Camera.FOV << " " << n.Camera.Yaw << " " << n.Camera.Pitch << "\n";
+                file << "interior_end = 1\n";
+            }
             if (!room.LightmapPath.empty())
             {
                 file << "lightmap_path = " << room.LightmapPath << "\n";

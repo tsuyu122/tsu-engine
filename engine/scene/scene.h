@@ -132,6 +132,7 @@ struct MaterialAsset
 {
     std::string  Name   = "Material";
     int          Folder = -1;                   // index into scene-level folders, -1 = root
+    bool         Hidden = false;                // auto-generated materials hidden from asset browser
     glm::vec3    Color  = {1.0f, 1.0f, 1.0f};  // tint applied on top of albedo
 
     // ---- PBR texture paths (all optional) ----
@@ -286,6 +287,7 @@ struct LightComponent
     float     OuterAngle  = 45.0f;    // Spot outer cone angle (degrees)
     float     Width       = 1.0f;     // Area light width
     float     Height      = 1.0f;     // Area light height
+    bool      BakedOnly   = false;    // excluded from real-time; contributes only to lightmap bakes
 };
 
 // ================================================================
@@ -580,6 +582,8 @@ public:
     std::vector<std::vector<int>>      EntityChildren; // entity-children per entity
     std::vector<int>                   EntityMaterial; // per-entity material index (-1 = none)
     std::vector<glm::vec3>             EntityColors;   // per-entity color override (used when no material)
+    std::vector<bool>                  EntityStatic;   // bake candidate: static geometry
+    std::vector<bool>                  EntityReceiveLightmap; // receives baked lighting
     std::vector<PlayerControllerComponent> PlayerControllers;
     std::vector<MouseLookComponent>         MouseLooks;
     std::vector<LightComponent>             Lights;
@@ -591,6 +595,7 @@ public:
     FogSettings         Fog;
     SkySettings         Sky;
     PostProcessSettings PostProcess;
+    float               LightmapIntensity = 1.0f;  // baked GI multiplier (0=off, 1=default, >1=stronger)
 
     // --- Hierarchy display order ---
     std::vector<int>                   RootOrder;      // root-level entity display order

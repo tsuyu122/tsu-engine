@@ -11,8 +11,20 @@ glm::vec3 HexToRGB(const std::string& hex);
 class Mesh
 {
 public:
+    struct CpuVertex {
+        glm::vec3 pos;
+        glm::vec3 normal;
+        glm::vec3 color;
+        glm::vec2 uv0;
+        glm::vec2 uv2;
+    };
+
     Mesh();
     void Draw();
+
+    const std::vector<CpuVertex>& GetCpuVertices() const { return m_Vertices; }
+    bool HasValidUV2() const;
+    void GenerateAutoUV2(float padding = 0.08f);
 
     static Mesh CreateCube    (const std::string& hexColor = "#FFFFFF");
     static Mesh CreatePyramid (const std::string& hexColor = "#FFFFFF");
@@ -36,8 +48,11 @@ public:
 private:
     unsigned int VAO, VBO;
     int m_VertexCount = 0;
+    std::vector<CpuVertex> m_Vertices;
 
     static Mesh BuildFromVertices(const std::vector<float>& verts);
+    static Mesh BuildFromCpuVertices(const std::vector<CpuVertex>& verts);
+    void UploadGpuBuffer();
 };
 
 } // namespace tsu

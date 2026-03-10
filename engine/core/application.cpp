@@ -61,8 +61,234 @@ static std::string MakeUniqueEntityName(const Scene& scene, const std::string& b
 }
 
 Application::Application()
-    : m_Window(1280, 720, "TSU Engine  |  ALPHA 1.1.0 - NOT RELEASE VERSION, EXPECT BUGS")
+    : m_Window(1280, 720, "TSU Engine  |  ALPHA 1.2.0 - NOT RELEASE VERSION, EXPECT BUGS")
 {
+}
+
+void Application::StartSceneBakeAsync()
+{
+    if (m_BakeRunning.load()) return;
+
+    m_BakeError.clear();
+    m_BakeReady = false;
+    m_BakeProgress.store(0.0f);
+    {
+        std::lock_guard<std::mutex> lk(m_BakeMutex);
+        m_BakeStage = "Preparing bake";
+    }
+
+    // UV2 generation touches GL buffers, so keep it on the main thread.
+    int generatedUV2 = 0;
+    for (int i = 0; i < (int)m_Scene.MeshRenderers.size(); ++i) {
+        auto& mr = m_Scene.MeshRenderers[i];
+        if (mr.MeshPtr) {
+            mr.MeshPtr->GenerateAutoUV2();
+            generatedUV2++;
+        }
+    }
+    if (generatedUV2 > 0)
+        m_UIManager.Log("[LightBaker] Rebuilt UV2 for " + std::to_string(generatedUV2) + " mesh(es)");
+
+    Scene sceneCopy = m_Scene;
+    for (int i = 0; i < (int)sceneCopy.MeshRenderers.size(); ++i) {
+        Mesh* src = m_Scene.MeshRenderers[i].MeshPtr;
+        sceneCopy.MeshRenderers[i].MeshPtr = src ? new Mesh(*src) : nullptr;
+    }
+    auto lights = LightBaker::ExtractLights(sceneCopy);
+    auto params = m_UIManager.GetBakeParams();
+
+    m_BakeRunning.store(true);
+    if (m_BakeThread.joinable()) m_BakeThread.join();
+
+    m_BakeThread = std::thread([this, sceneCopy, lights, params]() mutable {
+        try {
+            auto result = LightBaker::BakeSceneAtlasUV2(
+                sceneCopy,
+                lights,
+                params,
+                [this](float p, const std::string& stage) {
+                    m_BakeProgress.store(p);
+                    std::lock_guard<std::mutex> lk(m_BakeMutex);
+                    m_BakeStage = stage;
+                });
+
+            if (result.pixels.empty()) {
+                std::lock_guard<std::mutex> lk(m_BakeMutex);
+                m_BakeError = "Error: bake returned empty atlas";
+            } else {
+                std::lock_guard<std::mutex> lk(m_BakeMutex);
+                m_BakeResult = std::move(result);
+                m_BakeReady = true;
+            }
+        } catch (const std::exception& ex) {
+            std::lock_guard<std::mutex> lk(m_BakeMutex);
+            m_BakeError = std::string("Error: ") + ex.what();
+        } catch (...) {
+            std::lock_guard<std::mutex> lk(m_BakeMutex);
+            m_BakeError = "Error: unknown bake failure";
+        }
+
+        for (auto& mr : sceneCopy.MeshRenderers)
+            if (mr.MeshPtr) { delete mr.MeshPtr; mr.MeshPtr = nullptr; }
+
+        m_BakeProgress.store(1.0f);
+        m_BakeRunning.store(false);
+    });
+}
+
+void Application::PollSceneBakeAsync()
+{
+    std::string stage;
+    {
+        std::lock_guard<std::mutex> lk(m_BakeMutex);
+        stage = m_BakeStage;
+    }
+    m_UIManager.SetBakeProgress(m_BakeRunning.load(), m_BakeProgress.load(), stage);
+
+    if (m_BakeRunning.load()) return;
+
+    if (m_BakeThread.joinable())
+        m_BakeThread.join();
+
+    std::string bakeError;
+    {
+        std::lock_guard<std::mutex> lk(m_BakeMutex);
+        bakeError = m_BakeError;
+        m_BakeError.clear();
+    }
+    if (!bakeError.empty()) {
+        m_UIManager.SetBakeProgress(false, 0.0f, "");
+        m_UIManager.SetBakeStatus(bakeError);
+        m_UIManager.Log("[LightBaker] " + bakeError);
+        m_BakeReady = false;
+        return;
+    }
+
+    LightBaker::AtlasBakeResult result;
+    {
+        std::lock_guard<std::mutex> lk(m_BakeMutex);
+        if (!m_BakeReady) return;
+        result = m_BakeResult;
+        m_BakeReady = false;
+    }
+
+    std::string outDir = "assets/lightmaps";
+    std::filesystem::create_directories(outDir);
+    std::string outPath = outDir + "/scene_atlas_0.tga";
+
+    bool saved = LightmapManager::SaveTGA(outPath, result.width, result.height, result.pixels.data());
+    if (!saved) {
+        m_UIManager.SetBakeProgress(false, 0.0f, "");
+        m_UIManager.SetBakeStatus("Error: failed to save atlas TGA");
+        m_UIManager.Log("[LightBaker] Error saving scene atlas TGA");
+        return;
+    }
+
+    LightmapManager::Instance().Evict(outPath);
+
+    // Upload linear HDR float data directly as GL_RGB16F (no gamma encode/decode).
+    // The TGA is still saved (gamma-encoded) for debug inspection on disk.
+    unsigned int lmID = 0;
+    if (!result.hdrPixels.empty()) {
+        lmID = LightmapManager::LoadFromFloat(result.width, result.height, result.hdrPixels.data());
+    }
+    if (lmID == 0) {
+        // Fallback: load from TGA if float path unavailable
+        lmID = LightmapManager::Instance().Load(outPath);
+    }
+    if (lmID == 0) {
+        m_UIManager.SetBakeProgress(false, 0.0f, "");
+        m_UIManager.SetBakeStatus("Error: failed to load atlas texture");
+        return;
+    }
+
+    m_SceneLightmapPath = outPath;
+    m_UIManager.SetSceneLightmapPath(outPath);
+    Renderer::ClearGlobalLightmaps();
+    Renderer::SetGlobalLightmap(0, lmID);
+    // Use the HDR peak from the bake so the normalized 0-1 lightmap values
+    // are scaled back to their original absolute irradiance at runtime.
+    m_Scene.LightmapIntensity = std::max(result.hdrMax, 0.01f);
+    m_UIManager.Log("[LightBaker] === BAKE v2-diag ===");
+    m_UIManager.Log("[LightBaker] Atlas: " + std::to_string(result.width) + "x" + std::to_string(result.height)
+                  + ", hdrMax=" + std::to_string(result.hdrMax)
+                  + ", LightmapIntensity=" + std::to_string(m_Scene.LightmapIntensity)
+                  + ", texID=" + std::to_string((int)lmID));
+
+    std::vector<glm::vec4> soByEntity(m_Scene.MeshRenderers.size(), glm::vec4(0,0,0,0));
+    std::vector<int> hasAssign(m_Scene.MeshRenderers.size(), 0);
+    int assignedCount = 0;
+    for (const auto& a : result.assignments) {
+        if (a.entity < 0 || a.entity >= (int)m_Scene.MeshRenderers.size()) continue;
+        soByEntity[a.entity] = a.scaleOffset;
+        hasAssign[a.entity] = 1;
+        assignedCount++;
+    }
+    m_UIManager.Log("[LightBaker] Atlas assignments: " + std::to_string(assignedCount));
+
+    int appliedCount = 0;
+
+    for (int ei = 0; ei < (int)m_Scene.MeshRenderers.size(); ++ei)
+    {
+        auto& mr = m_Scene.MeshRenderers[ei];
+        if (mr.MeshPtr == nullptr) continue;
+        bool isStatic = (ei < (int)m_Scene.EntityStatic.size()) ? m_Scene.EntityStatic[ei] : true;
+        bool receiveLM = (ei < (int)m_Scene.EntityReceiveLightmap.size()) ? m_Scene.EntityReceiveLightmap[ei] : true;
+        if (!isStatic || !receiveLM || !hasAssign[ei]) {
+            mr.LightmapID = 0;
+            mr.LightmapIndex = -1;
+            mr.LightmapST = {1,1,0,0};
+            continue;
+        }
+
+        mr.LightmapID = lmID;
+        mr.LightmapIndex = 0;
+        // LightmapManager now loads with stbi flip=false, so baker UV maps
+        // directly to GL UV y without any Y inversion.
+        mr.LightmapST = soByEntity[ei];
+
+        mr.LightmapIDX = 0;
+        mr.LightmapIDY = 0;
+        mr.LightmapIDZ = 0;
+        mr.LightmapSTX = {1,1,0,0};
+        mr.LightmapSTY = {1,1,0,0};
+        mr.LightmapSTZ = {1,1,0,0};
+        appliedCount++;
+
+        const std::string name = (ei < (int)m_Scene.EntityNames.size()) ? m_Scene.EntityNames[ei] : ("Entity_" + std::to_string(ei));
+        m_UIManager.Log("[LightBaker] Apply -> " + name + " idx=0 tex=" + std::to_string((int)lmID) + " so=("
+            + std::to_string(soByEntity[ei].x) + ","
+            + std::to_string(soByEntity[ei].y) + ","
+            + std::to_string(soByEntity[ei].z) + ","
+            + std::to_string(soByEntity[ei].w) + ") soGL=("
+            + std::to_string(mr.LightmapST.x) + ","
+            + std::to_string(mr.LightmapST.y) + ","
+            + std::to_string(mr.LightmapST.z) + ","
+            + std::to_string(mr.LightmapST.w) + ")");
+    }
+
+    std::string metaPath = outDir + "/scene_lightmap_data.json";
+    std::ofstream meta(metaPath, std::ios::trunc);
+    if (meta.is_open()) {
+        meta << "{\n  \"lightmaps\": [{\"index\": 0, \"path\": \"" << outPath << "\"}],\n";
+        meta << "  \"meshes\": [\n";
+        bool first = true;
+        for (int ei = 0; ei < (int)m_Scene.MeshRenderers.size(); ++ei) {
+            if (!hasAssign[ei]) continue;
+            if (!first) meta << ",\n";
+            first = false;
+            const std::string name = (ei < (int)m_Scene.EntityNames.size()) ? m_Scene.EntityNames[ei] : ("Entity_" + std::to_string(ei));
+            const glm::vec4 so = m_Scene.MeshRenderers[ei].LightmapST;
+            meta << "    {\"meshID\": \"" << name << "\", \"lightmapIndex\": 0, \"path\": \"" << outPath << "\", \"scaleOffset\": ["
+                 << so.x << ", " << so.y << ", " << so.z << ", " << so.w << "]}";
+        }
+        meta << "\n  ]\n}\n";
+    }
+
+    m_UIManager.Log("[LightBaker] Applied atlas to " + std::to_string(appliedCount) + " renderer(s)");
+    m_UIManager.SetBakeProgress(false, 0.0f, "");
+    m_UIManager.SetBakeStatus("Baked UV2 Atlas -> assets/lightmaps/scene_atlas_0.tga");
+    m_UIManager.Log("[LightBaker] UV2 atlas bake complete: " + outPath);
 }
 
 void Application::SaveEditorState()
@@ -92,11 +318,12 @@ void Application::RestoreEditorState()
         m_Scene.RigidBodies[i].IsGrounded       = false;
     }
 
-    // Clear maze generator runtime state (spawned rooms + occupancy)
+    // Clear maze generator runtime state (spawned rooms + occupancy + pending doors)
     for (auto& gen : m_Scene.MazeGenerators)
     {
         gen.SpawnedRooms.clear();
         gen.OccupiedCells.clear();
+        gen.PendingDoorSlots.clear();
     }
 }
 
@@ -550,6 +777,65 @@ void Application::RebuildRoomPreview()
                 if (m_RoomPreviewScene.Materials[mi].Name == node.MaterialName)
                     { m_RoomPreviewScene.EntityMaterial[ei] = mi; break; }
         }
+
+        // Light
+        if (node.HasLight)
+        {
+            m_RoomPreviewScene.Lights[ei] = node.Light;
+            m_RoomPreviewScene.Lights[ei].Active  = true;
+            m_RoomPreviewScene.Lights[ei].Enabled = true;
+        }
+
+        // Camera
+        if (node.HasCamera)
+        {
+            m_RoomPreviewScene.GameCameras[ei] = node.Camera;
+            m_RoomPreviewScene.GameCameras[ei].Active = true;
+        }
+
+        // Parent hierarchy
+        if (node.ParentIdx >= 0)
+            m_RoomPreviewScene.SetEntityParent(ei, node.ParentIdx + 1);
+    }
+
+    // ---- Add solid cube entities for room blocks (floor / walls) ----
+    for (int bi = 0; bi < (int)room.Blocks.size(); ++bi)
+    {
+        const auto& blk = room.Blocks[bi];
+        Entity ent = m_RoomPreviewScene.CreateEntity("_Block" + std::to_string(bi));
+        int ei = (int)ent.GetID();
+        m_RoomPreviewScene.Transforms[ei].Position = glm::vec3((float)blk.X, (float)blk.Y, (float)blk.Z);
+        m_RoomPreviewScene.Transforms[ei].Scale    = glm::vec3(1.0f);
+        Mesh* mesh = new Mesh(Mesh::CreateCube("#888888"));
+        m_RoomPreviewScene.MeshRenderers[ei].MeshPtr  = mesh;
+        m_RoomPreviewScene.MeshRenderers[ei].MeshType = "cube";
+    }
+
+    // ---- Apply lightmap to every preview entity (if room was baked) ----
+    if (!room.LightmapPath.empty())
+    {
+        // Load once; subsequent frames use cached ID without incrementing refcount
+        if (m_RoomPreviewLightmap != room.LightmapPath)
+        {
+            if (!m_RoomPreviewLightmap.empty())
+                LightmapManager::Instance().Release(m_RoomPreviewLightmap);
+            LightmapManager::Instance().Load(room.LightmapPath);
+            m_RoomPreviewLightmap = room.LightmapPath;
+        }
+        unsigned int lmID = LightmapManager::Instance().GetCachedID(room.LightmapPath);
+        if (lmID != 0)
+        {
+            for (int ei = 1; ei < (int)m_RoomPreviewScene.MeshRenderers.size(); ++ei)
+            {
+                m_RoomPreviewScene.MeshRenderers[ei].LightmapID = lmID;
+                m_RoomPreviewScene.MeshRenderers[ei].LightmapST = room.LightmapST;
+            }
+        }
+    }
+    else if (!m_RoomPreviewLightmap.empty())
+    {
+        LightmapManager::Instance().Release(m_RoomPreviewLightmap);
+        m_RoomPreviewLightmap.clear();
     }
 
     m_RoomPreviewSetIdx  = rsi;
@@ -671,10 +957,13 @@ void Application::HandlePrefabEditorInput(int winW, int winH)
         // Skip entity 0 (preview light)
         for (int ei = 1; ei < (int)m_PrefabPreviewScene.Transforms.size(); ++ei)
         {
-            if (!m_PrefabPreviewScene.MeshRenderers[ei].MeshPtr) continue;
+            bool hasMesh  = m_PrefabPreviewScene.MeshRenderers[ei].MeshPtr != nullptr;
+            bool hasLight = (ei < (int)m_PrefabPreviewScene.Lights.size() && m_PrefabPreviewScene.Lights[ei].Active);
+            bool hasCam   = (ei < (int)m_PrefabPreviewScene.GameCameras.size() && m_PrefabPreviewScene.GameCameras[ei].Active);
+            if (!hasMesh && !hasLight && !hasCam) continue;
             glm::vec3 pos  = m_PrefabPreviewScene.GetEntityWorldPos(ei);
             glm::vec3 sc   = m_PrefabPreviewScene.Transforms[ei].Scale;
-            float radius   = std::max({sc.x, sc.y, sc.z}) * 0.5f;
+            float radius   = hasMesh ? std::max({sc.x, sc.y, sc.z}) * 0.5f : 0.35f;
             glm::vec3 oc   = orig - pos;
             float b = glm::dot(oc, dir);
             float c = glm::dot(oc, oc) - radius * radius;
@@ -714,6 +1003,40 @@ void Application::SyncRoomPreviewBack()
         if (ei >= (int)m_RoomPreviewScene.Transforms.size()) break;
         room.Interior[ni].Transform = m_RoomPreviewScene.Transforms[ei];
         room.Interior[ni].Name      = m_RoomPreviewScene.EntityNames[ei];
+
+        // Sync mesh type
+        if (ei < (int)m_RoomPreviewScene.MeshRenderers.size())
+            room.Interior[ni].MeshType = m_RoomPreviewScene.MeshRenderers[ei].MeshType;
+
+        // Sync material name
+        int matIdx = (ei < (int)m_RoomPreviewScene.EntityMaterial.size())
+                     ? m_RoomPreviewScene.EntityMaterial[ei] : -1;
+        if (matIdx >= 0 && matIdx < (int)m_RoomPreviewScene.Materials.size())
+            room.Interior[ni].MaterialName = m_RoomPreviewScene.Materials[matIdx].Name;
+        else
+            room.Interior[ni].MaterialName.clear();
+
+        // Sync light
+        if (ei < (int)m_RoomPreviewScene.Lights.size() && m_RoomPreviewScene.Lights[ei].Active)
+        {
+            room.Interior[ni].HasLight = true;
+            room.Interior[ni].Light    = m_RoomPreviewScene.Lights[ei];
+        }
+        else
+        {
+            room.Interior[ni].HasLight = false;
+        }
+
+        // Sync camera
+        if (ei < (int)m_RoomPreviewScene.GameCameras.size() && m_RoomPreviewScene.GameCameras[ei].Active)
+        {
+            room.Interior[ni].HasCamera = true;
+            room.Interior[ni].Camera    = m_RoomPreviewScene.GameCameras[ei];
+        }
+        else
+        {
+            room.Interior[ni].HasCamera = false;
+        }
     }
 }
 
@@ -807,14 +1130,14 @@ void Application::HandleRoomEditorInput(int winW, int winH)
         {
             if (m_GizmoMode == GizmoMode::Move)
             {
-                glm::vec3 move = m_Gizmo.OnMouseDrag(m_EditorCamera,
+                glm::vec3 move = m_Gizmo.OnMouseDrag(m_RoomEditorCamera,
                                                        delta.x, delta.y,
                                                        winW, winH);
                 m_RoomPreviewScene.Transforms[selEntity].Position += move;
             }
             else if (m_GizmoMode == GizmoMode::Rotate)
             {
-                float deg = m_Gizmo.OnMouseDragRotation(m_EditorCamera,
+                float deg = m_Gizmo.OnMouseDragRotation(m_RoomEditorCamera,
                                                          delta.x, delta.y,
                                                          winW, winH);
                 auto axis = m_Gizmo.GetDragAxis();
@@ -827,7 +1150,7 @@ void Application::HandleRoomEditorInput(int winW, int winH)
             }
             else if (m_GizmoMode == GizmoMode::Scale)
             {
-                glm::vec3 sd = m_Gizmo.OnMouseDragScale(m_EditorCamera,
+                glm::vec3 sd = m_Gizmo.OnMouseDragScale(m_RoomEditorCamera,
                                                           delta.x, delta.y,
                                                           winW, winH);
                 m_RoomPreviewScene.Transforms[selEntity].Scale += sd;
@@ -843,7 +1166,7 @@ void Application::HandleRoomEditorInput(int winW, int winH)
 
     // ---- Build ray from camera every frame (used for arrow + block hover) ----
     float aspect = (float)winW / (float)winH;
-    glm::mat4 vp  = m_EditorCamera.GetProjection(aspect) * m_EditorCamera.GetViewMatrix();
+    glm::mat4 vp  = m_RoomEditorCamera.GetProjection(aspect) * m_RoomEditorCamera.GetViewMatrix();
     glm::mat4 vpI = glm::inverse(vp);
     float ndcX =  2.0f * mx / (float)winW - 1.0f;
     float ndcY = -2.0f * my / (float)winH + 1.0f;
@@ -852,10 +1175,11 @@ void Application::HandleRoomEditorInput(int winW, int winH)
     glm::vec3 rayOrig = glm::vec3(nearH) / nearH.w;
     glm::vec3 rayDir  = glm::normalize(glm::vec3(farH) / farH.w - rayOrig);
 
-    // ---- Compute per-block exposed face arrows ----
+    // ---- Compute per-block exposed face arrows (only when blocks are visible) ----
     m_MazeBlockArrows.clear();
     m_MazeHoveredArrowIdx = -1;
     m_MazeHoveredBlock    = -1;
+    if (m_UIManager.GetRoomShowBlocks())
     {
         int rsi = m_UIManager.GetEditingRoomSetIdx();
         int rri = m_UIManager.GetEditingRoomIdx();
@@ -948,7 +1272,34 @@ void Application::HandleRoomEditorInput(int winW, int winH)
                 int by = rm.Blocks[fa.blockIdx].Y;
                 int bz = rm.Blocks[fa.blockIdx].Z;
 
-                if (shiftHeld)
+                if (m_UIManager.IsDoorMode())
+                {
+                    // Door mode: toggle door on this exposed face (horizontal faces only)
+                    // dir: 0=+X 1=-X 2=+Z 3=-Z  (skip 4=+Y 5=-Y — no doors on floor/ceiling)
+                    if (fa.dir <= 3)
+                    {
+                        DoorFace df = (DoorFace)fa.dir;
+                        PushRoomEditState();
+                        bool found = false;
+                        for (int di = (int)rm.Doors.size() - 1; di >= 0; --di)
+                        {
+                            auto& d = rm.Doors[di];
+                            if (d.BlockX == bx && d.BlockZ == bz && d.BlockY == by && d.Face == df)
+                            {
+                                rm.Doors.erase(rm.Doors.begin() + di);
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found)
+                        {
+                            DoorPlacement dp;
+                            dp.BlockX = bx; dp.BlockZ = bz; dp.BlockY = by; dp.Face = df;
+                            rm.Doors.push_back(dp);
+                        }
+                    }
+                }
+                else if (shiftHeld)
                 {
                     // Erase: remove the block that owns this arrow (keep at least 1)
                     if ((int)rm.Blocks.size() > 1)
@@ -987,7 +1338,7 @@ void Application::HandleRoomEditorInput(int winW, int winH)
             int gizmoHitMode = (m_GizmoMode == GizmoMode::Rotate) ? 1 : 0;
             auto axis = m_Gizmo.OnMouseDown(
                 m_RoomPreviewScene.Transforms[selEntity].Position,
-                m_EditorCamera, mx, my, winW, winH, gizmoHitMode);
+                m_RoomEditorCamera, mx, my, winW, winH, gizmoHitMode);
             if (axis != EditorGizmo::Axis::None)
                 return;
         }
@@ -997,10 +1348,13 @@ void Application::HandleRoomEditorInput(int winW, int winH)
         int hitNode = -1;
         for (int ei = 1; ei < (int)m_RoomPreviewScene.Transforms.size(); ++ei)
         {
-            if (!m_RoomPreviewScene.MeshRenderers[ei].MeshPtr) continue;
+            bool hasMesh  = m_RoomPreviewScene.MeshRenderers[ei].MeshPtr != nullptr;
+            bool hasLight = (ei < (int)m_RoomPreviewScene.Lights.size() && m_RoomPreviewScene.Lights[ei].Active);
+            bool hasCam   = (ei < (int)m_RoomPreviewScene.GameCameras.size() && m_RoomPreviewScene.GameCameras[ei].Active);
+            if (!hasMesh && !hasLight && !hasCam) continue;
             glm::vec3 pos  = m_RoomPreviewScene.GetEntityWorldPos(ei);
             glm::vec3 sc   = m_RoomPreviewScene.Transforms[ei].Scale;
-            float radius   = std::max({sc.x, sc.y, sc.z}) * 0.5f;
+            float radius   = hasMesh ? std::max({sc.x, sc.y, sc.z}) * 0.5f : 0.35f;
             glm::vec3 oc   = rayOrig - pos;
             float b2 = glm::dot(oc, rayDir);
             float c2 = glm::dot(oc, oc) - radius * radius;
@@ -1548,36 +1902,30 @@ int Application::RaycastScene(float mx, float my, int winW, int winH)
 
 void Application::HandleToolbarInput()
 {
-    // Mouse click on the toolbar
-    if (InputManager::IsMouseDown(Mouse::Left))
+    // ImGui play/pause buttons (polled from UIManager)
+    if (m_UIManager.HasPendingPlayToggle())
     {
-        double mx, my;
-        InputManager::GetMousePosition(mx, my);
-        int winW = m_Window.GetWidth();
-        int winH = m_Window.GetHeight();
-
-        if (Renderer::ToolbarClickPlay((int)mx,(int)my, winW, winH, (float)UIManager::k_MenuBarH))
+        m_UIManager.ConsumePlayToggle();
+        if (m_Mode == EngineMode::Editor)
         {
-            if (m_Mode == EngineMode::Editor)
-            {
-                SaveEditorState();
-                m_Mode = EngineMode::Game;
-                LuaSystem::Init(m_Scene);
-                LuaSystem::StartScripts();
-            }
-            else
-            {
-                LuaSystem::Shutdown();
-                RestoreEditorState();
-                m_Mode = EngineMode::Editor;
-            }
+            SaveEditorState();
+            m_Mode = EngineMode::Game;
+            LuaSystem::Init(m_Scene);
+            LuaSystem::StartScripts();
         }
-
-        if (Renderer::ToolbarClickPause((int)mx,(int)my, winW, winH, (float)UIManager::k_MenuBarH))
+        else
         {
-            if (m_Mode == EngineMode::Game)   m_Mode = EngineMode::Paused;
-            else if (m_Mode == EngineMode::Paused) m_Mode = EngineMode::Game;
+            LuaSystem::Shutdown();
+            RestoreEditorState();
+            m_Mode = EngineMode::Editor;
         }
+    }
+
+    if (m_UIManager.HasPendingPauseToggle())
+    {
+        m_UIManager.ConsumePauseToggle();
+        if (m_Mode == EngineMode::Game)   m_Mode = EngineMode::Paused;
+        else if (m_Mode == EngineMode::Paused) m_Mode = EngineMode::Game;
     }
 
     // Atalho de teclado: F5 = play/stop, F6 = pause
@@ -1781,9 +2129,14 @@ void Application::Run()
         bool showMazeOverview  = (m_UIManager.GetViewportTab() == 4);
         bool showRoomEditor    = (m_UIManager.GetViewportTab() == 5);
 
-        // Editor camera update: needed when showing scene view, prefab editor, or room editor
+        // Editor camera update: scene/prefab use m_EditorCamera; room editor uses its own camera
         if (!showGameView && !showProjectView && !showMazeOverview)
-            m_EditorCamera.OnUpdate(deltaTime);
+        {
+            if (showRoomEditor)
+                m_RoomEditorCamera.OnUpdate(deltaTime);
+            else
+                m_EditorCamera.OnUpdate(deltaTime);
+        }
 
         // Prefab editor: rebuild preview scene when the edited prefab changes
         if (showPrefabEditor)
@@ -1800,6 +2153,66 @@ void Application::Run()
                     int ei = ni + 1; // offset for preview light
                     if (ei >= (int)m_PrefabPreviewScene.Transforms.size()) break;
                     m_PrefabPreviewScene.Transforms[ei] = pf.Nodes[ni].Transform;
+
+                    // Sync light
+                    if (pf.Nodes[ni].HasLight)
+                    {
+                        m_PrefabPreviewScene.Lights[ei] = pf.Nodes[ni].Light;
+                        m_PrefabPreviewScene.Lights[ei].Active  = true;
+                        m_PrefabPreviewScene.Lights[ei].Enabled = pf.Nodes[ni].Light.Enabled;
+                    }
+                    else
+                    {
+                        m_PrefabPreviewScene.Lights[ei].Active = false;
+                    }
+
+                    // Sync camera
+                    if (pf.Nodes[ni].HasCamera)
+                    {
+                        m_PrefabPreviewScene.GameCameras[ei] = pf.Nodes[ni].Camera;
+                        m_PrefabPreviewScene.GameCameras[ei].Active = true;
+                    }
+                    else
+                    {
+                        m_PrefabPreviewScene.GameCameras[ei].Active = false;
+                    }
+
+                    // Sync material by name
+                    if (!pf.Nodes[ni].MaterialName.empty())
+                    {
+                        int matIdx = -1;
+                        for (int mi = 0; mi < (int)m_PrefabPreviewScene.Materials.size(); ++mi)
+                            if (m_PrefabPreviewScene.Materials[mi].Name == pf.Nodes[ni].MaterialName)
+                                { matIdx = mi; break; }
+                        m_PrefabPreviewScene.EntityMaterial[ei] = matIdx;
+                    }
+                    else
+                    {
+                        m_PrefabPreviewScene.EntityMaterial[ei] = -1;
+                    }
+
+                    // Sync mesh type
+                    const std::string& mt = pf.Nodes[ni].MeshType;
+                    if (mt != m_PrefabPreviewScene.MeshRenderers[ei].MeshType)
+                    {
+                        delete m_PrefabPreviewScene.MeshRenderers[ei].MeshPtr;
+                        m_PrefabPreviewScene.MeshRenderers[ei].MeshPtr = nullptr;
+                        m_PrefabPreviewScene.MeshRenderers[ei].MeshType.clear();
+                        if (!mt.empty())
+                        {
+                            Mesh* mesh = nullptr;
+                            if      (mt == "cube")     mesh = new Mesh(Mesh::CreateCube("#DDDDDD"));
+                            else if (mt == "sphere")   mesh = new Mesh(Mesh::CreateSphere("#DDDDDD"));
+                            else if (mt == "pyramid")  mesh = new Mesh(Mesh::CreatePyramid("#DDDDDD"));
+                            else if (mt == "cylinder") mesh = new Mesh(Mesh::CreateCylinder("#DDDDDD"));
+                            else if (mt == "capsule")  mesh = new Mesh(Mesh::CreateCapsule("#DDDDDD"));
+                            else if (mt == "plane")    mesh = new Mesh(Mesh::CreatePlane("#DDDDDD"));
+                            if (mesh) {
+                                m_PrefabPreviewScene.MeshRenderers[ei].MeshPtr  = mesh;
+                                m_PrefabPreviewScene.MeshRenderers[ei].MeshType = mt;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1828,6 +2241,11 @@ void Application::Run()
         {
             if (m_RoomPreviewSetIdx >= 0)
             {
+                if (!m_RoomPreviewLightmap.empty())
+                {
+                    LightmapManager::Instance().Release(m_RoomPreviewLightmap);
+                    m_RoomPreviewLightmap.clear();
+                }
                 m_RoomPreviewScene = Scene();
                 m_RoomPreviewSetIdx = -1;
                 m_RoomPreviewRoomIdx = -1;
@@ -1854,11 +2272,11 @@ void Application::Run()
             glm::vec2 ndc = m_UIManager.ConsumePendingRoomClick(clickY);
 
             // Reconstruct the ray from camera
-            float vpW = (float)(winW - m_UIManager.GetPanelWidth() * 2);
+            float vpW = (float)(winW - m_UIManager.GetLeftPanelWidth() - m_UIManager.GetRightPanelWidth());
             float vpH = (float)(winH - UIManager::k_AssetH - UIManager::k_TopStackH);
             float aspect = vpW / std::max(vpH, 1.0f);
-            glm::mat4 proj = m_EditorCamera.GetProjection(aspect);
-            glm::mat4 view = m_EditorCamera.GetViewMatrix();
+            glm::mat4 proj = m_RoomEditorCamera.GetProjection(aspect);
+            glm::mat4 view = m_RoomEditorCamera.GetViewMatrix();
             glm::mat4 invVP = glm::inverse(proj * view);
 
             glm::vec4 nearNDC(ndc.x, ndc.y, -1.0f, 1.0f);
@@ -2045,39 +2463,49 @@ void Application::Run()
             }
         }
 
-        // ---- Lightmap bake request (raised by "Bake Lighting" toolbar button) ----
+        // ---- Lightmap bake request (async UV2 atlas baker) ----
         if (m_UIManager.HasPendingBakeLighting())
         {
             m_UIManager.ConsumePendingBakeLighting();
-            int rsi = m_UIManager.GetEditingRoomSetIdx();
-            int ri  = m_UIManager.GetEditingRoomIdx();
-            if (rsi >= 0 && rsi < (int)m_Scene.RoomSets.size() &&
-                ri  >= 0 && ri  < (int)m_Scene.RoomSets[rsi].Rooms.size())
+            StartSceneBakeAsync();
+        }
+        PollSceneBakeAsync();
+
+        // ---- Clear scene lightmap request ----
+        if (m_UIManager.HasPendingClearSceneLightmap())
+        {
+            m_UIManager.ConsumePendingClearSceneLightmap();
+            Renderer::ClearGlobalLightmaps();
+            if (!m_SceneLightmapPath.empty())
             {
-                RoomTemplate& room = m_Scene.RoomSets[rsi].Rooms[ri];
-                auto lights = LightBaker::ExtractLights(m_Scene);
-                LightBaker::BakeResult result = LightBaker::BakeRoom(room, lights);
-
-                // Build output path: assets/lightmaps/<roomName>.tga
-                std::string outDir  = "assets/lightmaps";
-                std::filesystem::create_directories(outDir);
-                std::string outPath = outDir + "/" + room.Name + ".tga";
-                bool saved = LightmapManager::SaveTGA(
-                    outPath, result.width, result.height, result.pixels.data());
-
-                if (saved)
-                {
-                    room.LightmapPath = outPath;
-                    room.LightmapST   = result.lightmapST;
-                    m_UIManager.SetBakeStatus("Baked!");
-                    m_UIManager.Log("[LightBaker] Baked: " + outPath);
-                }
-                else
-                {
-                    m_UIManager.SetBakeStatus("Error: save failed");
-                    m_UIManager.Log("[LightBaker] Error: could not save to " + outPath);
-                }
+                LightmapManager::Instance().Release(m_SceneLightmapPath);
+                m_SceneLightmapPath.clear();
             }
+            if (!m_SceneLightmapPathX.empty())
+            {
+                LightmapManager::Instance().Release(m_SceneLightmapPathX);
+                m_SceneLightmapPathX.clear();
+            }
+            if (!m_SceneLightmapPathZ.empty())
+            {
+                LightmapManager::Instance().Release(m_SceneLightmapPathZ);
+                m_SceneLightmapPathZ.clear();
+            }
+            m_UIManager.SetSceneLightmapPath("");
+            for (int ei = 0; ei < (int)m_Scene.MeshRenderers.size(); ++ei)
+            {
+                auto& mr = m_Scene.MeshRenderers[ei];
+                mr.LightmapID  = 0;
+                mr.LightmapIndex = -1;
+                mr.LightmapIDX = 0;
+                mr.LightmapIDY = 0;
+                mr.LightmapIDZ = 0;
+                mr.LightmapST  = {1,1,0,0};
+                mr.LightmapSTX = {1,1,0,0};
+                mr.LightmapSTY = {1,1,0,0};
+                mr.LightmapSTZ = {1,1,0,0};
+            }
+            m_UIManager.SetBakeProgress(false, 0.0f, "");
         }
 
         // Compute viewport drop position for drag-to-viewport
@@ -2115,7 +2543,7 @@ void Application::Run()
         else if (showRoomEditor)
         {
             // Render the room preview scene (interior entities + floor)
-            Renderer::RenderSceneEditor(m_RoomPreviewScene, m_EditorCamera, winW, winH);
+            Renderer::RenderSceneEditor(m_RoomPreviewScene, m_RoomEditorCamera, winW, winH);
 
             // Draw wireframe block outlines + door markers + expansion arrows
             int rsi = m_UIManager.GetEditingRoomSetIdx();
@@ -2123,18 +2551,21 @@ void Application::Run()
             if (rsi >= 0 && rsi < (int)m_Scene.RoomSets.size() &&
                 rri >= 0 && rri < (int)m_Scene.RoomSets[rsi].Rooms.size())
             {
-                Renderer::DrawRoomBlockWireframes(
-                    m_Scene.RoomSets[rsi].Rooms[rri],
-                    m_UIManager.GetMazeSelectedBlock(),
-                    m_MazeHoveredBlock,
-                    m_EditorCamera, winW, winH);
+                if (m_UIManager.GetRoomShowBlocks())
+                {
+                    Renderer::DrawRoomBlockWireframes(
+                        m_Scene.RoomSets[rsi].Rooms[rri],
+                        m_UIManager.GetMazeSelectedBlock(),
+                        m_MazeHoveredBlock,
+                        m_RoomEditorCamera, winW, winH);
 
-                if (!m_MazeBlockArrows.empty())
-                    Renderer::DrawRoomExpansionArrows(
-                        m_MazeBlockArrows.data(), (int)m_MazeBlockArrows.size(),
-                        m_MazeHoveredArrowIdx,
-                        InputManager::IsKeyPressed(Key::LeftShift),
-                        m_EditorCamera, winW, winH);
+                    if (!m_MazeBlockArrows.empty())
+                        Renderer::DrawRoomExpansionArrows(
+                            m_MazeBlockArrows.data(), (int)m_MazeBlockArrows.size(),
+                            m_MazeHoveredArrowIdx,
+                            InputManager::IsKeyPressed(Key::LeftShift),
+                            m_RoomEditorCamera, winW, winH);
+                }
             }
 
             // Draw gizmo on selected interior node
@@ -2145,11 +2576,11 @@ void Application::Run()
                 int axisInt = (int)m_Gizmo.GetDragAxis();
                 glm::vec3 gizmoPos = m_RoomPreviewScene.Transforms[selEnt].Position;
                 if (m_GizmoMode == GizmoMode::Move)
-                    Renderer::DrawTranslationGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+                    Renderer::DrawTranslationGizmo(gizmoPos, axisInt, m_RoomEditorCamera, winW, winH);
                 else if (m_GizmoMode == GizmoMode::Rotate)
-                    Renderer::DrawRotationGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+                    Renderer::DrawRotationGizmo(gizmoPos, axisInt, m_RoomEditorCamera, winW, winH);
                 else if (m_GizmoMode == GizmoMode::Scale)
-                    Renderer::DrawScaleGizmo(gizmoPos, axisInt, m_EditorCamera, winW, winH);
+                    Renderer::DrawScaleGizmo(gizmoPos, axisInt, m_RoomEditorCamera, winW, winH);
             }
         }
         else if (!showProjectView && !showMazeOverview)
@@ -2189,12 +2620,8 @@ void Application::Run()
             ImGui::End();
         }
 
-        // Toolbar always visible on top
-        Renderer::RenderToolbar(
-            m_Mode != EngineMode::Editor,
-            m_Mode == EngineMode::Paused,
-            winW, winH,
-            (float)UIManager::k_MenuBarH);
+        // Feed play/pause state to UIManager (rendered as ImGui buttons)
+        m_UIManager.SetPlayState(m_Mode != EngineMode::Editor, m_Mode == EngineMode::Paused);
 
         // UI panels — always visible in all modes
         m_UIManager.Render(m_Scene, m_SelectedEntity, winW, winH, s_DroppedFiles, m_GizmoMode);
@@ -2277,6 +2704,9 @@ void Application::Run()
 
         m_Window.Update();
     }
+
+    if (m_BakeThread.joinable())
+        m_BakeThread.join();
 
     m_UIManager.Shutdown();
     LightmapManager::Instance().ReleaseAll();

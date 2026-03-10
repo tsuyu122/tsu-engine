@@ -2,6 +2,7 @@
 #include "renderer/lightmapManager.h"
 #include <glad/glad.h>
 #include <stb_image.h>
+// stbi_set_flip_vertically_on_load is declared in stb_image.h
 #include <cstdio>
 #include <cstring>
 
@@ -23,16 +24,25 @@ unsigned int LightmapManager::Load(const std::string& path)
     }
 
     // Load via stb_image (already defined in textureLoader.cpp)
+    // Our lightmap TGA is saved with top-left origin (0x20).  We load with
+    // flip=false so the first row stays at the top, mapping directly to
+    // GL UV y=0.  This matches the baker's coordinate system exactly and
+    // avoids any dependency on the global stbi flip state.
+    stbi_set_flip_vertically_on_load(false);
     int w, h, ch;
     unsigned char* data = stbi_load(path.c_str(), &w, &h, &ch, 3);
+    stbi_set_flip_vertically_on_load(true); // restore for regular textures
     if (!data) return 0;
 
     unsigned int id = 0;
     glGenTextures(1, &id);
     glBindTexture(GL_TEXTURE_2D, id);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    // GL_SRGB: OpenGL auto-linearises on sample so the shader receives correct linear values.
+    // The baker writes gamma-encoded TGA (pow 1/2.2), this load undoes that.
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+    // Lightmap atlases have many empty regions; mipmaps can bleed black into valid charts.
+    // Keep single-level sampling to preserve baked lighting fidelity.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -49,6 +59,21 @@ unsigned int LightmapManager::GetCachedID(const std::string& path) const
     return (it != m_Cache.end()) ? it->second.texId : 0u;
 }
 
+unsigned int LightmapManager::LoadFromFloat(int w, int h, const float* rgbFloat)
+{
+    if (!rgbFloat || w <= 0 || h <= 0) return 0;
+    unsigned int id = 0;
+    glGenTextures(1, &id);
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, w, h, 0, GL_RGB, GL_FLOAT, rgbFloat);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    return id;
+}
+
 void LightmapManager::Release(const std::string& path)
 {
     auto it = m_Cache.find(path);
@@ -58,6 +83,14 @@ void LightmapManager::Release(const std::string& path)
         glDeleteTextures(1, &it->second.texId);
         m_Cache.erase(it);
     }
+}
+
+void LightmapManager::Evict(const std::string& path)
+{
+    auto it = m_Cache.find(path);
+    if (it == m_Cache.end()) return;
+    glDeleteTextures(1, &it->second.texId);
+    m_Cache.erase(it);
 }
 
 void LightmapManager::ReleaseAll()

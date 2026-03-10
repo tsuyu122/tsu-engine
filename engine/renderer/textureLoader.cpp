@@ -3,6 +3,7 @@
 #include <glad/glad.h>
 #include "renderer/textureLoader.h"
 #include <vector>
+#include <cstdio>
 
 namespace tsu {
 
@@ -77,6 +78,8 @@ unsigned int PackORM(const std::string& aoPath,
                 stbi_image_free(raw);
                 return v;
             }
+            printf("[PackORM] WARN: failed to load '%s': %s\n",
+                   p.c_str(), stbi_failure_reason());
         }
         outW = 0; outH = 0;
         return {};

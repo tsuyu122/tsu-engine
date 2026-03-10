@@ -57,6 +57,10 @@ private:
     std::vector<int> m_MultiSelection;
     int              m_LastSelected      = -1;
 
+    // Clipboard for Ctrl+C / Ctrl+V
+    std::vector<int> m_ClipboardEntities;  // source entity indices (main scene)
+    std::vector<int> m_ClipboardPrefabNodes; // source node indices (prefab/room editor)
+
     // Prefab editor state (set externally)
     bool             m_PrefabEditorActive = false;
     int              m_PrefabEditorIdx    = -1;

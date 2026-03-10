@@ -1,5 +1,7 @@
 #include "lua/luaSystem.h"
 #include "scene/scene.h"
+#include "scene/entity.h"
+#include "input/inputmanager.h"
 
 extern "C" {
 #include <lua.h>
@@ -201,6 +203,68 @@ static int lua_elapsed(lua_State* L)
 }
 
 // ----------------------------------------------------------------
+// Entity spawn / destroy
+// ----------------------------------------------------------------
+
+static int lua_spawnEntity(lua_State* L)
+{
+    const char* name = luaL_optstring(L, 1, "Entity");
+    if (!gScene) { lua_pushinteger(L, -1); return 1; }
+    Entity e = gScene->CreateEntity(name);
+    lua_pushinteger(L, (lua_Integer)(lua_Integer)e.GetID());
+    return 1;
+}
+
+static int lua_destroyEntity(lua_State* L)
+{
+    int idx = (int)luaL_checkinteger(L, 1);
+    if (!gScene || idx <= 0 || idx >= (int)gScene->Transforms.size())
+        return 0; // ignore invalid / entity 0 (scene root)
+    // Mark all components inactive so the entity is effectively removed at runtime
+    gScene->Lights[idx].Active           = false;
+    gScene->PlayerControllers[idx].Active = false;
+    gScene->MouseLooks[idx].Active        = false;
+    gScene->Triggers[idx].Active          = false;
+    gScene->Animators[idx].Active         = false;
+    gScene->LuaScripts[idx].Active        = false;
+    gScene->MazeGenerators[idx].Active    = false;
+    // Hide the entity name with a tombstone prefix so it won't be picked by findEntity
+    gScene->EntityNames[idx] = "__destroyed__" + gScene->EntityNames[idx];
+    return 0;
+}
+
+// ----------------------------------------------------------------
+// Input queries accessible from Lua
+// ----------------------------------------------------------------
+
+static int lua_getMouseDelta(lua_State* L)
+{
+    MouseDelta d = InputManager::GetMouseDelta();
+    lua_pushnumber(L, d.x);
+    lua_pushnumber(L, d.y);
+    return 2;
+}
+
+static int lua_isMouseDown(lua_State* L)
+{
+    int btn = (int)luaL_optinteger(L, 1, 0); // 0=Left 1=Right 2=Middle
+    lua_pushboolean(L, InputManager::IsMouseDown(btn) ? 1 : 0);
+    return 1;
+}
+
+static int lua_isKeyDown(lua_State* L)
+{
+    // Accepts either an integer GLFW key code or a string key name ("W", "Space", etc.)
+    int code = -1;
+    if (lua_type(L, 1) == LUA_TNUMBER)
+        code = (int)lua_tointeger(L, 1);
+    else if (lua_type(L, 1) == LUA_TSTRING)
+        code = InputManager::KeyNameToCode(lua_tostring(L, 1));
+    lua_pushboolean(L, (code >= 0 && InputManager::IsKeyDown(code)) ? 1 : 0);
+    return 1;
+}
+
+// ----------------------------------------------------------------
 // Register the `scene` table into the global state
 // ----------------------------------------------------------------
 static void RegisterSceneAPI()
@@ -224,6 +288,11 @@ static void RegisterSceneAPI()
         { "setContrast",    lua_setContrast    },
         { "setBrightness",  lua_setBrightness  },
         { "elapsed",        lua_elapsed        },
+        { "spawnEntity",    lua_spawnEntity    },
+        { "destroyEntity",  lua_destroyEntity  },
+        { "getMouseDelta",  lua_getMouseDelta  },
+        { "isMouseDown",    lua_isMouseDown    },
+        { "isKeyDown",      lua_isKeyDown      },
         { nullptr, nullptr }
     };
     luaL_newlib(gL, kAPI);        // creates the table with all functions

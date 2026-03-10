@@ -29,6 +29,7 @@ unsigned int Renderer::s_GizmoSphereVAO   = 0;
 unsigned int Renderer::s_GizmoSphereCount = 0;
 unsigned int Renderer::s_GizmoLineVAO     = 0;
 unsigned int Renderer::s_GizmoLineCount   = 0;
+unsigned int Renderer::s_GlobalLightmaps[4] = {0,0,0,0};
 
 unsigned int Renderer::s_ShadowShader    = 0;
 unsigned int Renderer::s_ShadowFBO       = 0;
@@ -49,6 +50,17 @@ float        Renderer::s_PointShadowFar      = 25.0f;
 Renderer::ShaderLocs Renderer::s_Locs = {};
 std::vector<glm::mat4> Renderer::s_CachedWorldMats;
 bool Renderer::s_EditorPostEnabled = false;
+
+void Renderer::SetGlobalLightmap(int index, unsigned int texId)
+{
+    if (index < 0 || index >= 4) return;
+    s_GlobalLightmaps[index] = texId;
+}
+
+void Renderer::ClearGlobalLightmaps()
+{
+    for (unsigned int& id : s_GlobalLightmaps) id = 0;
+}
 
 // Build world matrix cache once per frame — avoids redundant recursive parent traversal
 void Renderer::CacheWorldMatrices(Scene& scene)
@@ -108,18 +120,20 @@ void Renderer::Init()
         layout(location=0) in vec3 aPos;
         layout(location=1) in vec3 aNormal;
         layout(location=2) in vec3 aColor;
-        out vec3 vColor; out vec3 vNormal; out vec3 vFragPos; out vec3 vLocalPos;
+        layout(location=4) in vec2 aUV2;
+        out vec3 vColor; out vec3 vNormal; out vec3 vFragPos; out vec3 vLocalPos; out vec2 vUV2;
         uniform mat4 u_MVP; uniform mat4 u_Model;
         void main(){
             vColor    = aColor;
             vLocalPos = aPos;
             vNormal   = mat3(transpose(inverse(u_Model))) * aNormal;
             vFragPos  = vec3(u_Model * vec4(aPos, 1.0));
+            vUV2      = aUV2;
             gl_Position = u_MVP * vec4(aPos, 1.0);
         }
     )", R"(
         #version 460 core
-        in vec3 vColor; in vec3 vNormal; in vec3 vFragPos; in vec3 vLocalPos;
+        in vec3 vColor; in vec3 vNormal; in vec3 vFragPos; in vec3 vLocalPos; in vec2 vUV2;
         out vec4 FragColor;
 
         // ---------- Light system ----------
@@ -150,10 +164,21 @@ void Renderer::Init()
         uniform vec2      u_Tiling;
         uniform int       u_WorldSpaceUV;
 
-        // ---------- Lightmap (prebaked indirect, unit 5) ----------
+        // ---------- Lightmap (prebaked indirect, units 5/6/7) ----------
         uniform int       u_UseLightmap;
-        uniform sampler2D u_LightmapTex;  // unit 5
-        uniform vec4      u_LightmapST;   // xy=scale, zw=offset (world XZ → UV)
+        uniform sampler2D u_LightmapTex;   // legacy / Y projection (unit 5)
+        uniform vec4      u_LightmapST;
+        uniform sampler2D u_LightmapTexX;  // world YZ projection (unit 6)
+        uniform sampler2D u_LightmapTexY;  // world XZ projection (unit 5)
+        uniform sampler2D u_LightmapTexZ;  // world XY projection (unit 7)
+        uniform vec4      u_LightmapSTX;
+        uniform vec4      u_LightmapSTY;
+        uniform vec4      u_LightmapSTZ;
+        uniform float     u_LightmapIntensity; // runtime brightness multiplier
+
+        // ---------- Sky ambient ----------
+        uniform vec3      u_AmbientSky;    // upper hemisphere (zenith) colour
+        uniform vec3      u_AmbientGround; // lower hemisphere (ground) colour
 
         // ---------- Fog ----------
         uniform int   u_FogType;     // 0=off 1=linear 2=exp 3=exp2
@@ -287,20 +312,7 @@ void Renderer::Init()
 
             vec3 Lo = vec3(0.0);
 
-            if(u_NumLights == 0){
-                // Fallback single light
-                vec3 L = normalize(vec3(0.6, 1.0, 0.4));
-                vec3 H = normalize(V + L);
-                float NdotL = max(dot(N,L), 0.0);
-                float NdotH = max(dot(N,H), 0.0);
-                float HdotV = max(dot(H,V), 0.0);
-                vec3  F     = FresnelSchlick(HdotV, F0);
-                float G     = GeoSmith(NdotV, NdotL, roughness);
-                float D     = DistGGX(NdotH, a2);
-                vec3 specular = (D * G * F) / (4.0 * NdotV * NdotL + 0.0001);
-                vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-                Lo += (kD * albedo / PI + specular) * vec3(1.0) * NdotL;
-            } else {
+            if(u_NumLights > 0){
                 for(int i=0; i<u_NumLights && i<MAX_LIGHTS; i++){
                     if(u_Lights[i].type==0) continue;
                     vec3  L; float atten=1.0;
@@ -337,21 +349,32 @@ void Renderer::Init()
                     if(u_HasPointShadow != 0 && i == u_PointShadowLightIdx)
                         shadowAtten = min(shadowAtten, calcPointShadow(vFragPos));
 
-                    Lo += (kD * albedo / PI + specular) * u_Lights[i].color * NdotL * atten * shadowAtten;
+                    // When lightmap is active, the diffuse irradiance (kD*albedo/PI) is
+                    // already baked. Only keep specular, which is view-dependent.
+                    vec3 diffBRDF = (u_UseLightmap != 0) ? vec3(0.0) : kD * albedo / PI;
+                    Lo += (diffBRDF + specular) * u_Lights[i].color * NdotL * atten * shadowAtten;
                 }
             }
 
-            // Ambient
+            // Ambient / Indirect
             vec3 kS_amb = FresnelRoughness(NdotV, F0, roughness);
             vec3 kD_amb = (1.0 - kS_amb) * (1.0 - metallic);
-            vec3 indirectColor;
+            float upFactor = dot(N, vec3(0.0, 1.0, 0.0)) * 0.5 + 0.5;
+            vec3 skyAmb    = mix(u_AmbientGround, u_AmbientSky, upFactor);
+
+            vec3 skyAmbient = skyAmb * 0.18;
+            vec3 fallbackAmbient = kD_amb * albedo * (skyAmbient * ao);
+
+            vec3 ambient = fallbackAmbient;
             if (u_UseLightmap != 0) {
-                vec2 lmUV = clamp(vFragPos.xz * u_LightmapST.xy + u_LightmapST.zw, 0.0, 1.0);
-                indirectColor = texture(u_LightmapTex, lmUV).rgb;
-            } else {
-                indirectColor = vec3(0.08 * ao);
+                vec2 lmUV = vUV2 * u_LightmapST.xy + u_LightmapST.zw;
+                float valid = float(lmUV.x >= 0.0 && lmUV.x <= 1.0 && lmUV.y >= 0.0 && lmUV.y <= 1.0);
+                // Lightmap stores total diffuse irradiance (direct + ambient, AO included).
+                // Multiply by kD_amb * albedo to match the runtime diffuse term.
+                vec3 bakedIrr = max(texture(u_LightmapTex, clamp(lmUV, 0.0, 1.0)).rgb, vec3(0.0)) * u_LightmapIntensity;
+                vec3 bakedAmbient = kD_amb * albedo * bakedIrr;
+                ambient = mix(fallbackAmbient, bakedAmbient, valid);
             }
-            vec3 ambient = kD_amb * albedo * indirectColor;
 
             vec3 color = ambient + Lo;
 
@@ -785,9 +808,18 @@ void Renderer::Init()
         s_Locs.aoValue       = L("u_AOValue");
         s_Locs.tiling        = L("u_Tiling");
         s_Locs.worldSpaceUV  = L("u_WorldSpaceUV");
-        s_Locs.useLightmap   = L("u_UseLightmap");
-        s_Locs.lightmapTex   = L("u_LightmapTex");
-        s_Locs.lightmapST    = L("u_LightmapST");
+        s_Locs.useLightmap        = L("u_UseLightmap");
+        s_Locs.lightmapTex        = L("u_LightmapTex");
+        s_Locs.lightmapST         = L("u_LightmapST");
+        s_Locs.lightmapTexX       = L("u_LightmapTexX");
+        s_Locs.lightmapTexY       = L("u_LightmapTexY");
+        s_Locs.lightmapTexZ       = L("u_LightmapTexZ");
+        s_Locs.lightmapSTX        = L("u_LightmapSTX");
+        s_Locs.lightmapSTY        = L("u_LightmapSTY");
+        s_Locs.lightmapSTZ        = L("u_LightmapSTZ");
+        s_Locs.lightmapIntensity  = L("u_LightmapIntensity");
+        s_Locs.ambientSky    = L("u_AmbientSky");
+        s_Locs.ambientGround = L("u_AmbientGround");
         s_Locs.fogType       = L("u_FogType");
         s_Locs.fogColor      = L("u_FogColor");
         s_Locs.fogDensity    = L("u_FogDensity");
@@ -851,6 +883,9 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
     glUniform1i(L.ormMap,    3);   // ORM     → unit 3
     glUniform1i(L.pointShadowMap, 4); // point shadow cubemap → unit 4
     glUniform1i(L.lightmapTex,   5); // lightmap            → unit 5
+    glUniform1i(L.lightmapTexY,  5); // tri-planar Y (XZ)   → unit 5
+    glUniform1i(L.lightmapTexX,  6); // tri-planar X (YZ)   → unit 6
+    glUniform1i(L.lightmapTexZ,  7); // tri-planar Z (XY)   → unit 7
 
     // ---- Camera world position ----
     glm::vec3 viewPos = glm::vec3(glm::inverse(view)[3]);
@@ -894,6 +929,13 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
     glUniform1f(L.fogStart,   scene.Fog.Start);
     glUniform1f(L.fogEnd,     scene.Fog.End);
 
+    // ---- Sky ambient uniforms ----
+    glUniform3fv(L.ambientSky,    1, &scene.Sky.ZenithColor[0]);
+    glUniform3fv(L.ambientGround, 1, &scene.Sky.GroundColor[0]);
+
+    // ---- Lightmap intensity ----
+    glUniform1f(L.lightmapIntensity, scene.LightmapIntensity);
+
     // ---- Gather active lights (up to 8) ----
     auto kelvinRGB = [](float T) -> glm::vec3 {
         T = glm::clamp(T, 1000.0f, 12000.0f) / 100.0f;
@@ -910,6 +952,7 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
     {
         const auto& lc = scene.Lights[li];
         if (!lc.Active || !lc.Enabled) continue;
+        if (lc.BakedOnly) continue; // baked-only: skipped at runtime, used only during lightmap bake
         glm::mat4 wm  = s_CachedWorldMats[li];
         glm::vec3 pos = glm::vec3(wm[3]);
         glm::vec3 fwd = glm::normalize(glm::vec3(wm * glm::vec4(1,0,0,0)));
@@ -1055,14 +1098,18 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
         glUniformMatrix4fv(L.mvp,   1, GL_FALSE, &mvp[0][0]);
         glUniformMatrix4fv(L.model, 1, GL_FALSE, &model[0][0]);
 
-        // ---- Bind lightmap (unit 5) ----
+        // ---- Bind atlas lightmap (unit 5) ----
         {
             const auto& mr = scene.MeshRenderers[i];
-            if (mr.LightmapID != 0) {
+            unsigned int lmTex = mr.LightmapID;
+            if (mr.LightmapIndex >= 0 && mr.LightmapIndex < 4 && s_GlobalLightmaps[mr.LightmapIndex] != 0)
+                lmTex = s_GlobalLightmaps[mr.LightmapIndex];
+
+            if (mr.LightmapIndex >= 0 && lmTex != 0) {
                 glUniform1i(L.useLightmap, 1);
                 glUniform4fv(L.lightmapST, 1, &mr.LightmapST[0]);
                 glActiveTexture(GL_TEXTURE5);
-                glBindTexture(GL_TEXTURE_2D, mr.LightmapID);
+                glBindTexture(GL_TEXTURE_2D, lmTex);
                 glActiveTexture(GL_TEXTURE0);
             } else {
                 glUniform1i(L.useLightmap, 0);
@@ -1072,7 +1119,7 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
         scene.MeshRenderers[i].MeshPtr->Draw();
     }
     // Unbind texture units (2D + cubemap)
-    for (int u : {0, 1, 2, 3, 5}) {
+    for (int u : {0, 1, 2, 3, 5, 6, 7}) {
         glActiveTexture(GL_TEXTURE0 + u);
         glBindTexture(GL_TEXTURE_2D, 0);
     }

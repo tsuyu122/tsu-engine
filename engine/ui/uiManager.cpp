@@ -1,4 +1,4 @@
-#include "ui/uiManager.h"
+﻿#include "ui/uiManager.h"
 #include "core/application.h"
 #include "renderer/renderer.h"
 #include "renderer/textureLoader.h"
@@ -13,6 +13,7 @@
 #include <imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <cmath>
 #include <filesystem>
@@ -55,21 +56,98 @@ void UIManager::Init(GLFWwindow* window)
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Dark theme
+    // Modern dark theme (Godot-inspired)
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 4.0f;
-    style.FrameRounding  = 3.0f;
-    style.ItemSpacing    = ImVec2(6, 4);
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.13f, 0.13f, 0.15f, 0.95f);
-    style.Colors[ImGuiCol_Header]          = ImVec4(0.25f, 0.40f, 0.70f, 0.6f);
-    style.Colors[ImGuiCol_HeaderHovered]   = ImVec4(0.35f, 0.55f, 0.85f, 0.8f);
-    style.Colors[ImGuiCol_HeaderActive]    = ImVec4(0.45f, 0.65f, 0.95f, 1.0f);
-    style.Colors[ImGuiCol_FrameBg]         = ImVec4(0.20f, 0.20f, 0.22f, 1.0f);
-    style.Colors[ImGuiCol_Button]          = ImVec4(0.25f, 0.40f, 0.70f, 0.8f);
-    style.Colors[ImGuiCol_ButtonHovered]   = ImVec4(0.35f, 0.55f, 0.85f, 1.0f);
-    style.Colors[ImGuiCol_TitleBg]         = ImVec4(0.10f, 0.10f, 0.12f, 1.0f);
-    style.Colors[ImGuiCol_TitleBgActive]   = ImVec4(0.15f, 0.25f, 0.45f, 1.0f);
+
+    // ---- Geometry ----
+    style.WindowRounding    = 0.0f;   // sharp window edges â€” modular look
+    style.ChildRounding     = 2.0f;
+    style.FrameRounding     = 3.0f;
+    style.PopupRounding     = 4.0f;
+    style.ScrollbarRounding = 6.0f;
+    style.GrabRounding      = 3.0f;
+    style.TabRounding       = 4.0f;
+    style.WindowBorderSize  = 1.0f;
+    style.FrameBorderSize   = 0.0f;
+    style.PopupBorderSize   = 1.0f;
+    style.FramePadding      = ImVec2(6, 4);
+    style.ItemSpacing       = ImVec2(6, 4);
+    style.ItemInnerSpacing  = ImVec2(4, 4);
+    style.IndentSpacing     = 16.0f;
+    style.ScrollbarSize     = 12.0f;
+    style.GrabMinSize       = 8.0f;
+    style.WindowPadding     = ImVec2(8, 6);
+    style.WindowTitleAlign  = ImVec2(0.0f, 0.5f);
+
+    // ---- Palette ----
+    // Background tones  (near-black â†’ dark grey)
+    const ImVec4 bgDark      (0.11f, 0.11f, 0.13f, 1.00f);   // deepest bg
+    const ImVec4 bgMid       (0.14f, 0.14f, 0.16f, 1.00f);   // panels
+    const ImVec4 bgLight     (0.18f, 0.18f, 0.21f, 1.00f);   // frames / inputs
+    const ImVec4 bgLighter   (0.22f, 0.22f, 0.25f, 1.00f);   // hover frames
+    // Accent (calm blue, similar to Godot)
+    const ImVec4 accent      (0.26f, 0.56f, 0.98f, 1.00f);
+    const ImVec4 accentDim   (0.20f, 0.42f, 0.78f, 0.70f);
+    const ImVec4 accentBright(0.38f, 0.66f, 1.00f, 1.00f);
+    // Text
+    const ImVec4 textNorm    (0.86f, 0.87f, 0.88f, 1.00f);
+    const ImVec4 textDim     (0.50f, 0.52f, 0.56f, 1.00f);
+    // Borders
+    const ImVec4 border      (0.24f, 0.24f, 0.28f, 1.00f);
+    const ImVec4 borderLight (0.32f, 0.32f, 0.38f, 1.00f);
+    // Tab bar
+    const ImVec4 tabBg       (0.12f, 0.12f, 0.14f, 1.00f);
+    const ImVec4 tabActive   (0.18f, 0.18f, 0.22f, 1.00f);
+    const ImVec4 tabHover    (0.22f, 0.22f, 0.28f, 1.00f);
+
+    auto& c = style.Colors;
+    c[ImGuiCol_Text]                  = textNorm;
+    c[ImGuiCol_TextDisabled]          = textDim;
+    c[ImGuiCol_WindowBg]              = bgMid;
+    c[ImGuiCol_ChildBg]               = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    c[ImGuiCol_PopupBg]               = ImVec4(0.12f, 0.12f, 0.14f, 0.96f);
+    c[ImGuiCol_Border]                = border;
+    c[ImGuiCol_BorderShadow]          = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    c[ImGuiCol_FrameBg]               = bgLight;
+    c[ImGuiCol_FrameBgHovered]        = bgLighter;
+    c[ImGuiCol_FrameBgActive]         = ImVec4(0.26f, 0.26f, 0.30f, 1.0f);
+    c[ImGuiCol_TitleBg]               = bgDark;
+    c[ImGuiCol_TitleBgActive]         = ImVec4(0.14f, 0.14f, 0.17f, 1.0f);
+    c[ImGuiCol_TitleBgCollapsed]      = bgDark;
+    c[ImGuiCol_MenuBarBg]             = bgDark;
+    c[ImGuiCol_ScrollbarBg]           = ImVec4(0.10f, 0.10f, 0.12f, 0.6f);
+    c[ImGuiCol_ScrollbarGrab]         = ImVec4(0.30f, 0.30f, 0.35f, 1.0f);
+    c[ImGuiCol_ScrollbarGrabHovered]  = ImVec4(0.40f, 0.40f, 0.46f, 1.0f);
+    c[ImGuiCol_ScrollbarGrabActive]   = accent;
+    c[ImGuiCol_CheckMark]             = accent;
+    c[ImGuiCol_SliderGrab]            = accentDim;
+    c[ImGuiCol_SliderGrabActive]      = accent;
+    c[ImGuiCol_Button]                = ImVec4(0.22f, 0.22f, 0.26f, 1.0f);
+    c[ImGuiCol_ButtonHovered]         = ImVec4(0.30f, 0.30f, 0.36f, 1.0f);
+    c[ImGuiCol_ButtonActive]          = accent;
+    c[ImGuiCol_Header]                = ImVec4(0.22f, 0.22f, 0.26f, 1.0f);
+    c[ImGuiCol_HeaderHovered]         = ImVec4(0.28f, 0.28f, 0.34f, 1.0f);
+    c[ImGuiCol_HeaderActive]          = accentDim;
+    c[ImGuiCol_Separator]             = border;
+    c[ImGuiCol_SeparatorHovered]      = accentDim;
+    c[ImGuiCol_SeparatorActive]       = accent;
+    c[ImGuiCol_ResizeGrip]            = ImVec4(0.26f, 0.56f, 0.98f, 0.20f);
+    c[ImGuiCol_ResizeGripHovered]     = ImVec4(0.26f, 0.56f, 0.98f, 0.67f);
+    c[ImGuiCol_ResizeGripActive]      = accent;
+    c[ImGuiCol_Tab]                   = tabBg;
+    c[ImGuiCol_TabHovered]            = tabHover;
+    c[ImGuiCol_TabActive]             = tabActive;
+    c[ImGuiCol_TabUnfocused]          = tabBg;
+    c[ImGuiCol_TabUnfocusedActive]    = tabActive;
+    c[ImGuiCol_DragDropTarget]        = accent;
+    c[ImGuiCol_NavHighlight]          = accent;
+    c[ImGuiCol_TableHeaderBg]         = ImVec4(0.16f, 0.16f, 0.19f, 1.0f);
+    c[ImGuiCol_TableBorderStrong]     = border;
+    c[ImGuiCol_TableBorderLight]      = ImVec4(0.20f, 0.20f, 0.24f, 1.0f);
+    c[ImGuiCol_TableRowBg]            = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    c[ImGuiCol_TableRowBgAlt]         = ImVec4(1.0f, 1.0f, 1.0f, 0.02f);
+    c[ImGuiCol_ModalWindowDimBg]      = ImVec4(0.0f, 0.0f, 0.0f, 0.55f);
 
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 460");
@@ -90,9 +168,9 @@ void UIManager::BeginFrame()
 }
 
 // ---------------------------------------------------------------------------
-// DrawEngineLogo  —  smiley-face logo drawn via ImDrawList
+// DrawEngineLogo  â€”  smiley-face logo drawn via ImDrawList
 //   cx/cy    : screen-space centre
-//   sz       : bounding square size (maps SVG viewBox 200x200 → sz×sz)
+//   sz       : bounding square size (maps SVG viewBox 200x200 â†’ szÃ—sz)
 //   col      : base colour (fully opaque), used with per-part alpha overrides
 //   ringProgress  : 0..1 how much of the outer ring is drawn (stroke)
 //   eyeAlpha      : 0..1 opacity of the two eye dots
@@ -128,8 +206,8 @@ void UIManager::DrawEngineLogo(ImDrawList* dl, float cx, float cy,
         dl->AddCircleFilled(ImVec2(cx + 35.0f * s, cy - 20.0f * s), 14.0f * s, eCol, 32);
     }
 
-    // --- Smile arc (centre ≈ 100,100 in SVG, r=60, 10°→170°) ---
-    // In ImGui Y-down coords: 0°=right, 90°=down  → arc 10°..170° is the bottom smile curve.
+    // --- Smile arc (centre â‰ˆ 100,100 in SVG, r=60, 10Â°â†’170Â°) ---
+    // In ImGui Y-down coords: 0Â°=right, 90Â°=down  â†’ arc 10Â°..170Â° is the bottom smile curve.
     if (smileProgress > 0.0f)
     {
         const float aSmileMin = 10.0f  * kPi / 180.0f;
@@ -168,7 +246,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         // ---- Engine logo (top-left, before menu items) ----
         {
             const float barH = (float)k_MenuBarH;
-            const float sz   = (barH - 4.0f) * 0.70f;  // 70% of full height — less obtrusive
+            const float sz   = (barH - 4.0f) * 0.70f;  // 70% of full height â€” less obtrusive
             ImDrawList* dl   = ImGui::GetWindowDrawList();
             ImVec2      pos  = ImGui::GetCursorScreenPos();
             float cx = pos.x + sz * 0.5f;
@@ -209,6 +287,11 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             {
                 m_MazeWindowOpen = true;
                 m_RequestViewportTab = 4;
+            }
+            if (ImGui::MenuItem("Lighting Settings"))
+            {
+                m_LightmapSettingsOpen = true;
+                m_RequestViewportTab = 6;
             }
             ImGui::EndMenu();
         }
@@ -364,9 +447,9 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         droppedFiles.clear();
     }
 
-    // Side panels start just below the OpenGL toolbar (same Y as the tab strip),
-    // filling the gap that previously appeared on the left/right of the camera tabs.
-    const int sideY = topMenuH + topToolH;  // k_MenuBarH + k_ToolbarH = 58px
+    // Side panels start just below the main menu bar, filling the full height
+    // minus the bottom asset panel.
+    const int sideY = topMenuH;
     const int sideH = winH - k_AssetH - sideY;
 
     // --- Panel resize handles (run every frame before panels are drawn) ---
@@ -374,8 +457,8 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         const float handleW = 6.0f;
         const float hy0 = (float)sideY;
         const float hy1 = (float)(winH - k_AssetH);
-        const float lx  = (float)m_PanelWidth;
-        const float rx  = (float)(winW - m_PanelWidth);
+        const float lx  = (float)m_LeftPanelWidth;
+        const float rx  = (float)(winW - m_RightPanelWidth);
         ImGuiIO& rio = ImGui::GetIO();
         float mx2 = rio.MousePos.x;
         float my2 = rio.MousePos.y;
@@ -392,12 +475,12 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         if (m_DraggingLeft)
         {
             int nw = (int)mx2;
-            m_PanelWidth = nw < 150 ? 150 : (nw > winW/3 ? winW/3 : nw);
+            m_LeftPanelWidth = nw < 150 ? 150 : (nw > winW/3 ? winW/3 : nw);
         }
         if (m_DraggingRight)
         {
             int nw = winW - (int)mx2;
-            m_PanelWidth = nw < 150 ? 150 : (nw > winW/3 ? winW/3 : nw);
+            m_RightPanelWidth = nw < 150 ? 150 : (nw > winW/3 ? winW/3 : nw);
         }
         if (nearLeft || nearRight || m_DraggingLeft || m_DraggingRight)
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
@@ -499,8 +582,125 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         m_Hierarchy.SetPrefabOverride(&m_RoomAsPrefab);
     }
 
-    m_Hierarchy.Render(scene, selectedEntity,
-                       0, sideY, m_PanelWidth, sideH);
+    // ---------------------------------------------------------------
+    // Panel Docking Tab System
+    // ---------------------------------------------------------------
+    static constexpr float k_SlotTabH = 26.0f;
+    const char* dockPanelNames[2] = { "Hierarchy", "Inspector" };
+
+    // Count panels per slot
+    int leftPanelCnt = 0, rightPanelCnt = 0;
+    int leftPanelIds[2] = {-1,-1}, rightPanelIds[2] = {-1,-1};
+    for (int p = 0; p < 2; p++) {
+        if (m_PanelSlot[p] == 0)
+            leftPanelIds[leftPanelCnt++] = p;
+        else
+            rightPanelIds[rightPanelCnt++] = p;
+    }
+
+    int leftActivePanel = -1, rightActivePanel = -1;
+
+    // Lambda: render a slot's tab bar and return the active panel ID
+    auto drawSlotTabs = [&](int slotId, float sx, float sy, float sw,
+                            int* slotPanels, int panelCnt) -> int
+    {
+        if (panelCnt == 0) return -1;
+
+        char wid[32]; snprintf(wid, sizeof(wid), "##slottab%d", slotId);
+        ImGui::SetNextWindowPos(ImVec2(sx, sy), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(sw, k_SlotTabH), ImGuiCond_Always);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 2));
+        ImGui::Begin(wid, nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+        int activePanel = slotPanels[0];
+
+        char tabBarId[32]; snprintf(tabBarId, sizeof(tabBarId), "##stb%d", slotId);
+        if (ImGui::BeginTabBar(tabBarId))
+        {
+            for (int i = 0; i < panelCnt; i++)
+            {
+                int pid = slotPanels[i];
+                if (ImGui::BeginTabItem(dockPanelNames[pid]))
+                {
+                    activePanel = pid;
+                    ImGui::EndTabItem();
+                }
+                // Begin drag on tab
+                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 8.0f))
+                {
+                    m_DraggingPanel = true;
+                    m_DragPanelId   = pid;
+                }
+                // Right-click context menu
+                if (ImGui::BeginPopupContextItem())
+                {
+                    const char* moveLabel = (slotId == 0)
+                        ? "Move to Right" : "Move to Left";
+                    if (ImGui::MenuItem(moveLabel))
+                        m_PanelSlot[pid] = 1 - slotId;
+                    ImGui::EndPopup();
+                }
+            }
+            ImGui::EndTabBar();
+        }
+
+        ImGui::PopStyleVar();
+        ImGui::End();
+        return activePanel;
+    };
+
+    // Render tab bars for both slots
+    leftActivePanel  = drawSlotTabs(0, 0, (float)sideY,
+                                    (float)m_LeftPanelWidth,
+                                    leftPanelIds, leftPanelCnt);
+    rightActivePanel = drawSlotTabs(1, (float)(winW - m_RightPanelWidth), (float)sideY,
+                                    (float)m_RightPanelWidth,
+                                    rightPanelIds, rightPanelCnt);
+
+    // Handle panel dragging (floating label + release to dock)
+    if (m_DraggingPanel)
+    {
+        ImVec2 mp = ImGui::GetMousePos();
+        ImGui::SetNextWindowPos(ImVec2(mp.x + 12, mp.y + 4));
+        ImGui::SetNextWindowBgAlpha(0.8f);
+        ImGui::Begin("##dragpanel", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+        ImGui::TextUnformatted(dockPanelNames[m_DragPanelId]);
+        ImGui::End();
+
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        {
+            int targetSlot = (mp.x < winW * 0.5f) ? 0 : 1;
+            m_PanelSlot[m_DragPanelId] = targetSlot;
+            m_DraggingPanel = false;
+            m_DragPanelId   = -1;
+        }
+    }
+
+    // Compute panel positions based on docking slot
+    int hierSlot = m_PanelSlot[0];
+    bool hierVisible = (hierSlot == 0) ? (leftActivePanel == 0)
+                                       : (rightActivePanel == 0);
+    int hierX = (hierSlot == 0) ? 0 : (winW - m_RightPanelWidth);
+    int hierW = (hierSlot == 0) ? m_LeftPanelWidth : m_RightPanelWidth;
+
+    int inspSlot = m_PanelSlot[1];
+    bool inspVisible = (inspSlot == 0) ? (leftActivePanel == 1)
+                                       : (rightActivePanel == 1);
+    int inspX = (inspSlot == 0) ? 0 : (winW - m_RightPanelWidth);
+    int inspW = (inspSlot == 0) ? m_LeftPanelWidth : m_RightPanelWidth;
+
+    const int tabOff = (int)k_SlotTabH;
+
+    // Hierarchy
+    if (hierVisible)
+        m_Hierarchy.Render(scene, selectedEntity,
+                           hierX, sideY + tabOff, hierW, sideH - tabOff);
 
     // Sync hierarchy changes back to room Interior
     if (roomEditorActive)
@@ -538,9 +738,13 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         m_Inspector.SetPrefabEditorState(prefabEditorActive, m_EditingPrefabIdx, m_PrefabSelectedNode);
         m_Inspector.SetPrefabOverride(nullptr);
     }
-    m_Inspector.Render(scene, selectedEntity, selectedGroup,
-                       winW - m_PanelWidth, sideY, m_PanelWidth, sideH,
-                       inspMat, inspTex, inspPrf, multiSel);
+    // Room editor: shrink inspector so lightmap panel doesn't overlap
+    const float lmPanelH = roomEditorActive ? 260.0f : 0.0f;
+    if (inspVisible)
+        m_Inspector.Render(scene, selectedEntity, selectedGroup,
+                           inspX, sideY + tabOff, inspW,
+                           sideH - tabOff - (int)lmPanelH,
+                           inspMat, inspTex, inspPrf, multiSel);
 
     // Sync inspector changes back to room Interior
     if (roomEditorActive)
@@ -554,14 +758,12 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     // ---------------------------------------------------------------
     if (roomEditorActive)
     {
-        const float lmPanelH = 180.0f;
-        const float panelX   = (float)(winW - m_PanelWidth);
-        const float panelY   = (float)(sideY + sideH) - lmPanelH;
-        const float panelW   = (float)m_PanelWidth;
+        const float lmpX = (float)inspX;
+        const float lmpY = (float)(sideY + sideH) - lmPanelH;
+        const float lmpW = (float)inspW;
 
-        ImGui::SetNextWindowPos (ImVec2(panelX, panelY), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(panelW, lmPanelH), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.93f);
+        ImGui::SetNextWindowPos (ImVec2(lmpX, lmpY), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(lmpW, lmPanelH), ImGuiCond_Always);
         ImGui::Begin("##lmInspector", nullptr,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar |
@@ -595,7 +797,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             if (lmId != 0)
             {
                 // Calculate preview size (square, fits remaining width minus padding)
-                const float prevSz = std::min(panelW - 16.0f, lmPanelH - 72.0f);
+                const float prevSz = std::min(lmpW - 16.0f, lmPanelH - 72.0f);
                 ImGui::Image((ImTextureID)(intptr_t)lmId, ImVec2(prevSz, prevSz),
                              ImVec2(0, 0), ImVec2(1, 1));
             }
@@ -616,55 +818,105 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     }
 
     // ---------------------------------------------------------------
-    // Top panel: camera tabs (same style as Assets/Console)
+    // Top panel: toolbar + camera tabs (spans viewport width)
     // ---------------------------------------------------------------
     {
-        const float topH = (float)topTabsH;
-        const float y = (float)(topMenuH + topToolH);
-        ImGui::SetNextWindowPos (ImVec2((float)m_PanelWidth, y), ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2((float)(winW - m_PanelWidth * 2), topH), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.90f);
+        const float topH = (float)(topToolH + topTabsH);
+        const float y = (float)(topMenuH);
+        const float panelX = (float)m_LeftPanelWidth;
+        const float panelW = (float)(winW - m_LeftPanelWidth - m_RightPanelWidth);
+        ImGui::SetNextWindowPos (ImVec2(panelX, y), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(panelW, topH), ImGuiCond_Always);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.11f, 0.11f, 0.13f, 1.0f));
         ImGui::Begin("##cameratop", nullptr,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar |
+            ImGuiWindowFlags_NoScrollbar);
 
         // Gizmo mode buttons (Move / Rotate / Scale) on the left
         {
-            float btnSz = topH - 10.0f;
+            float btnSz = 26.0f;
             auto gizmoBtn = [&](const char* label, GizmoMode mode) {
                 bool active = (gizmoMode == mode);
                 if (active) {
-                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.25f, 0.55f, 0.85f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.35f, 0.65f, 0.95f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.26f, 0.56f, 0.98f, 0.85f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.33f, 0.63f, 1.00f, 1.0f));
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.18f, 0.22f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
                 }
                 if (ImGui::Button(label, ImVec2(btnSz, btnSz)))
                     gizmoMode = mode;
-                if (active)
-                    ImGui::PopStyleColor(2);
+                ImGui::PopStyleColor(2);
             };
             gizmoBtn("W", GizmoMode::Move);
             ImGui::SameLine(0, 2);
             gizmoBtn("E", GizmoMode::Scale);
             ImGui::SameLine(0, 2);
             gizmoBtn("R", GizmoMode::Rotate);
-            ImGui::SameLine(0, 12);
+            ImGui::SameLine(0, 10);
 
             // Post-processing toggle (editor viewport only)
             if (m_ViewportTab == 0)
             {
                 bool postOn = Renderer::s_EditorPostEnabled;
                 if (postOn) {
-                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.70f, 0.40f, 1.0f));
-                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.80f, 0.50f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.62f, 0.38f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.72f, 0.46f, 1.0f));
+                } else {
+                    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.18f, 0.22f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
                 }
-                if (ImGui::Button("Post", ImVec2(btnSz * 1.6f, btnSz)))
+                if (ImGui::Button("Post", ImVec2(btnSz * 2.0f, btnSz)))
                     Renderer::s_EditorPostEnabled = !Renderer::s_EditorPostEnabled;
-                if (postOn)
-                    ImGui::PopStyleColor(2);
+                ImGui::PopStyleColor(2);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Toggle post-processing on the editor viewport");
-                ImGui::SameLine(0, 12);
+                ImGui::SameLine(0, 10);
             }
+        }
+
+        // ---- Play / Pause buttons (centered) ----
+        {
+            float playBtnW = 60.0f;
+            float pauseBtnW = 60.0f;
+            float gap = 6.0f;
+            float totalBtnW = playBtnW + pauseBtnW + gap;
+            float centerX = panelW * 0.5f - totalBtnW * 0.5f;
+            ImGui::SameLine(centerX);
+
+            // Play / Stop button
+            if (m_IsPlaying) {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.78f, 0.18f, 0.18f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.90f, 0.28f, 0.28f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.62f, 0.30f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.24f, 0.74f, 0.38f, 1.0f));
+            }
+            if (ImGui::Button(m_IsPlaying ? "Stop" : "Play", ImVec2(playBtnW, 26.0f)))
+                m_PendingPlayToggle = true;
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(m_IsPlaying ? "Stop and return to editor (F1)" : "Play the game (F1)");
+
+            ImGui::SameLine(0, gap);
+
+            // Pause button
+            if (m_IsPaused) {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.85f, 0.75f, 0.15f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.95f, 0.85f, 0.25f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.22f, 0.24f, 0.68f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.32f, 0.80f, 1.0f));
+            }
+            bool pauseDisabled = !m_IsPlaying;
+            if (pauseDisabled) ImGui::BeginDisabled();
+            if (ImGui::Button(m_IsPaused ? "Resume" : "Pause", ImVec2(pauseBtnW, 26.0f)))
+                m_PendingPauseToggle = true;
+            if (pauseDisabled) ImGui::EndDisabled();
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered() && !pauseDisabled)
+                ImGui::SetTooltip(m_IsPaused ? "Resume game (F2)" : "Pause game (F2)");
         }
 
         if (ImGui::BeginTabBar("##cameratabs"))
@@ -762,23 +1014,41 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 }
             }
 
+            // Lighting Settings tab (closeable, tab index 6)
+            if (m_LightmapSettingsOpen)
+            {
+                bool keepLight = true;
+                if (ImGui::BeginTabItem("Lighting##lightingtab", &keepLight,
+                    (reqTab == 6) ? ImGuiTabItemFlags_SetSelected : 0))
+                {
+                    m_ViewportTab = 6;
+                    ImGui::EndTabItem();
+                }
+                if (!keepLight)
+                {
+                    m_LightmapSettingsOpen = false;
+                    if (m_ViewportTab == 6) m_ViewportTab = 0;
+                }
+            }
+
             m_RequestViewportTab = -1;
             ImGui::EndTabBar();
         }
         ImGui::End();
+        ImGui::PopStyleColor(); // WindowBg
     }
 
     // Project settings view (third viewport mode)
     if (m_ViewportTab == 2)
     {
-        const float vx = (float)m_PanelWidth;
+        const float vx = (float)m_LeftPanelWidth;
         const float vy = (float)topStackH;
-        const float vw = (float)(winW - m_PanelWidth * 2);
+        const float vw = (float)(winW - m_LeftPanelWidth - m_RightPanelWidth);
         const float vh = (float)(winH - k_AssetH - topStackH);
 
         ImGui::SetNextWindowPos(ImVec2(vx, vy), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(vw, vh), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.95f);
+        // (theme-managed bg)
         ImGui::Begin("##projectsettings_view", nullptr,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
@@ -928,9 +1198,9 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                                    strcmp(peeked->DataType, "MESH_ASSET") == 0);
         if (hasDrag)
         {
-            const float vx = (float)m_PanelWidth;
+            const float vx = (float)m_LeftPanelWidth;
             const float vy = (float)topStackH;
-            const float vw = (float)(winW - m_PanelWidth * 2);
+            const float vw = (float)(winW - m_LeftPanelWidth - m_RightPanelWidth);
             const float vh = (float)(winH - k_AssetH - topStackH);
 
             ImGui::SetNextWindowPos(ImVec2(vx, vy));
@@ -1039,18 +1309,18 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     }
 
     // ---------------------------------------------------------------
-    // Procedural Maze overview (tab 4) — viewport-area panel
+    // Procedural Maze overview (tab 4) â€” viewport-area panel
     // ---------------------------------------------------------------
     if (m_ViewportTab == 4 && m_MazeWindowOpen)
     {
-        const float vx = (float)m_PanelWidth;
+        const float vx = (float)m_LeftPanelWidth;
         const float vy = (float)topStackH;
-        const float vw = (float)(winW - m_PanelWidth * 2);
+        const float vw = (float)(winW - m_LeftPanelWidth - m_RightPanelWidth);
         const float vh = (float)(winH - k_AssetH - topStackH);
 
         ImGui::SetNextWindowPos(ImVec2(vx, vy), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(vw, vh), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.95f);
+        // (theme-managed bg)
         ImGui::Begin("##maze_overview", nullptr,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
@@ -1217,7 +1487,163 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     }
 
     // ---------------------------------------------------------------
-    // Room Editor 3D viewport toolbar (tab 5) — block / door controls
+    // Lighting Settings viewport panel (tab 6)
+    // ---------------------------------------------------------------
+    if (m_ViewportTab == 6 && m_LightmapSettingsOpen)
+    {
+        const float vx = (float)m_LeftPanelWidth;
+        const float vy = (float)topStackH;
+        const float vw = (float)(winW - m_LeftPanelWidth - m_RightPanelWidth);
+        const float vh = (float)(winH - k_AssetH - topStackH);
+
+        ImGui::SetNextWindowPos(ImVec2(vx, vy), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(vw, vh), ImGuiCond_Always);
+        ImGui::Begin("##lighting_view", nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+
+        ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), "Lighting Settings");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        float sliderW = std::min(vw * 0.5f, 300.0f);
+
+        // ---- Runtime lightmap intensity (real-time, no rebake needed) ----
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "Lightmap Runtime");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderFloat("Lightmap Intensity##lm", &scene.LightmapIntensity, 0.0f, 4.0f, "%.2f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Runtime multiplier for baked GI.\n0 = disable baked contribution, 1 = default, >1 = stronger bake.\nAdjust without re-baking.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ---- Bake Parameters ----
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "Bake Parameters");
+        ImGui::TextDisabled("(require re-bake to take effect)");
+        ImGui::Spacing();
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderInt("Resolution##lm", &m_BakeParams.resolution, 32, 2048);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Output lightmap texture size. Higher = better quality, slower bake.");
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderInt("AO Samples##lm", &m_BakeParams.aoSamples, 4, 512);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Hemisphere samples for ambient occlusion. More = less noise.");
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderInt("Indirect Samples##lm", &m_BakeParams.indirectSamples, 8, 512);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("GI hemisphere samples per texel. More = smoother indirect lighting, slower bake.");
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderInt("Bounce Count##lm", &m_BakeParams.bounceCount, 1, 4);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Simplified indirect bounce count. 2 is usually enough for indoor scenes.");
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderFloat("AO Radius##lm", &m_BakeParams.aoRadius, 0.5f, 20.0f, "%.2f units");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Max occlusion search distance.");
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderFloat("Ambient Level##lm", &m_BakeParams.ambientLevel, 0.0f, 1.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Base brightness in occluded/shadowed areas.");
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderFloat("Direct Scale##lm", &m_BakeParams.directScale, 0.0f, 5.0f, "%.3f");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Multiplier for direct light contribution in the bake.");
+
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderInt("Denoise Radius##lm", &m_BakeParams.denoiseRadius, 0, 3);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Post-bake blur radius in texels. 1-2 reduces noise and banding.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // ---- Bake button ----
+        bool baking = m_BakeInProgress;
+        if (baking) ImGui::BeginDisabled();
+        if (ImGui::Button("Bake Scene Lighting##lm", ImVec2(200, 36)))
+        {
+            m_PendingBakeLighting = true;
+            m_BakeStatus.clear();
+            m_BakeProgress = 0.0f;
+            m_BakeStage = "Preparing bake";
+        }
+        if (baking) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered() && !baking)
+            ImGui::SetTooltip("UV2 atlas bake (no top-down projection).\nRuns asynchronously and applies to static receivers.");
+
+        if (m_BakeInProgress)
+        {
+            ImGui::Spacing();
+            ImGui::Text("%s", m_BakeStage.empty() ? "Baking..." : m_BakeStage.c_str());
+            ImGui::ProgressBar(m_BakeProgress, ImVec2(std::min(vw * 0.55f, 340.0f), 0.0f));
+        }
+
+        // ---- Clear Bake button ----
+        ImGui::SameLine();
+        bool hasBake = !m_SceneLightmapPath.empty();
+        if (!hasBake) ImGui::BeginDisabled();
+        if (ImGui::Button("Clear Bake##lm", ImVec2(120, 36)) && hasBake)
+        {
+            m_PendingClearSceneLightmap = true;
+            m_SceneLightmapPath.clear();
+            m_BakeStatus.clear();
+        }
+        if (!hasBake) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Remove the baked lightmap from all scene entities.");
+
+        // ---- Status line ----
+        if (!m_BakeStatus.empty())
+        {
+            ImGui::Spacing();
+            bool ok = (m_BakeStatus.rfind("Error", 0) != 0);
+            if (ok)
+                ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.4f, 1.0f), "%s", m_BakeStatus.c_str());
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s", m_BakeStatus.c_str());
+        }
+
+        // ---- Lightmap preview ----
+        if (!m_SceneLightmapPath.empty())
+        {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            std::string disp = m_SceneLightmapPath;
+            if (disp.size() > 50) disp = "..." + disp.substr(disp.size() - 47);
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", disp.c_str());
+
+            unsigned int lmId = LightmapManager::Instance().GetCachedID(m_SceneLightmapPath);
+            if (lmId == 0) lmId = LightmapManager::Instance().Load(m_SceneLightmapPath);
+            if (lmId != 0)
+            {
+                float previewSz = std::min(vw * 0.35f, 256.0f);
+                ImGui::Image((ImTextureID)(intptr_t)lmId,
+                             ImVec2(previewSz, previewSz),
+                             ImVec2(0, 1), ImVec2(1, 0));
+            }
+        }
+
+        ImGui::End();
+    }
+
+    // ---------------------------------------------------------------
+    // Room Editor 3D viewport toolbar (tab 5) â€” block / door controls
     // The 3D scene + wireframes are rendered by Application.
     // This horizontal toolbar sits at the bottom of the viewport.
     // ---------------------------------------------------------------
@@ -1225,9 +1651,9 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         m_EditingRoomSetIdx >= 0 && m_EditingRoomSetIdx < (int)scene.RoomSets.size() &&
         m_EditingRoomIdx >= 0 && m_EditingRoomIdx < (int)scene.RoomSets[m_EditingRoomSetIdx].Rooms.size())
     {
-        const float vx = (float)m_PanelWidth;
+        const float vx = (float)m_LeftPanelWidth;
         const float vy = (float)topStackH;
-        const float vw = (float)(winW - m_PanelWidth * 2);
+        const float vw = (float)(winW - m_LeftPanelWidth - m_RightPanelWidth);
         const float vh = (float)(winH - k_AssetH - topStackH);
 
         RoomTemplate& editRoom = scene.RoomSets[m_EditingRoomSetIdx].Rooms[m_EditingRoomIdx];
@@ -1236,7 +1662,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         float barH = 38.0f;
         ImGui::SetNextWindowPos(ImVec2(vx + 4.0f, vy + 4.0f), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(vw - 8.0f, barH), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(0.82f);
+        // (theme-managed bg)
         ImGui::Begin("##roombar", nullptr,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar |
@@ -1247,9 +1673,12 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             if (active) {
                 ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.20f, 0.50f, 0.90f, 1.0f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.62f, 1.00f, 1.0f));
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.18f, 0.18f, 0.22f, 1.0f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.25f, 0.30f, 1.0f));
             }
         };
-        auto popToolStyle = [](bool active) { if (active) ImGui::PopStyleColor(2); };
+        auto popToolStyle = [](bool /*active*/) { ImGui::PopStyleColor(2); };
 
         bool blockActive = !m_MazeDoorMode;
         pushToolStyle(blockActive);
@@ -1262,6 +1691,18 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         if (ImGui::Button("Door")) m_MazeDoorMode = true;
         popToolStyle(m_MazeDoorMode);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("LMB=toggle door on block face");
+
+        ImGui::SameLine();
+        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
+        ImGui::SameLine();
+
+        // ---- Show/hide block wireframes ----
+        pushToolStyle(m_RoomShowBlocks);
+        if (ImGui::Button(m_RoomShowBlocks ? "Blocks: ON" : "Blocks: OFF"))
+            m_RoomShowBlocks = !m_RoomShowBlocks;
+        popToolStyle(m_RoomShowBlocks);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Toggle block wireframe + face arrows\n(hide to edit interior props freely)");
 
         ImGui::SameLine();
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
@@ -1317,7 +1758,8 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         // Skip if an arrow was handled this frame (prevents double-placement)
         bool blockClick = m_BlockNextRoomClick;
         m_BlockNextRoomClick = false;
-        if (!blockClick && !ImGui::GetIO().WantCaptureMouse &&
+        if (!blockClick && m_RoomShowBlocks &&
+            !ImGui::GetIO().WantCaptureMouse &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
             ImVec2 mpos = ImGui::GetIO().MousePos;
@@ -1341,9 +1783,11 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     // ---------------------------------------------------------------
     ImGui::SetNextWindowPos (ImVec2(0.0f, (float)(winH - k_AssetH)), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2((float)winW, (float)k_AssetH),   ImGuiCond_Always);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.12f, 0.12f, 0.14f, 1.0f));
     ImGui::Begin("##bottompanel", nullptr,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                 ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+                 ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar |
+                 ImGuiWindowFlags_NoScrollbar);
 
     // Tab bar: Assets | Console
     if (ImGui::BeginTabBar("##bottomtabs"))
@@ -1363,8 +1807,9 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(); // ChildBg
         ImGui::End();
+        ImGui::PopStyleColor(); // WindowBg
         return ImGui::GetIO().WantCaptureMouse;
     }
 
@@ -1377,7 +1822,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
 
     const bool inFolder = (m_CurrentFolder >= 0 && m_CurrentFolder < (int)scene.Folders.size());
 
-    // Build chain: [grandparent, parent, current] (root → current)
+    // Build chain: [grandparent, parent, current] (root â†’ current)
     {
         std::vector<int> chain;
         int cur = m_CurrentFolder;
@@ -1425,7 +1870,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     }
     ImGui::Separator();
 
-    // Scrollable child for all asset icons — ensures drop zone covers full area
+    // Scrollable child for all asset icons â€” ensures drop zone covers full area
     ImGui::BeginChild("##assetscroll", ImVec2(0, 0), false);
 
     const float iconSz = 72.0f;
@@ -1501,7 +1946,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 scene.FolderParents.erase(scene.FolderParents.begin()+fi);
                 if (m_SelectedFolder==fi) m_SelectedFolder=-1; else if(m_SelectedFolder>fi) m_SelectedFolder--;
                 if (m_CurrentFolder==fi) m_CurrentFolder=fp;   else if(m_CurrentFolder>fi) m_CurrentFolder--;
-                ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End();
+                ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End(); ImGui::PopStyleColor();
                 return ImGui::GetIO().WantCaptureMouse;
             }
             ImGui::EndPopup();
@@ -1545,18 +1990,18 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             if (!ImGui::IsItemActive() && !ImGui::IsItemFocused()) { renameBuf[0]='\0'; renameFolderIdx=-1; }
         } else {
             std::string lbl=scene.Folders[fi];
-            if (lbl.size()>10) lbl=lbl.substr(0,9)+"\xe2\x80\xa6";
-            ImGui::TextUnformatted(lbl.c_str());
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + iconSz); ImGui::TextUnformatted(lbl.c_str()); ImGui::PopTextWrapPos();
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))
             { renameFolderIdx=fi; renameBuf[0]='\0'; }
         }
         ImGui::NextColumn(); ImGui::PopID();
     }
 
-    // ---- MATERIALS (filtered by current folder) ----
+    // ---- MATERIALS (filtered by current folder, skip hidden) ----
     for (int mi = 0; mi < (int)scene.Materials.size(); ++mi)
     {
         if (scene.Materials[mi].Folder != m_CurrentFolder) continue;
+        if (scene.Materials[mi].Hidden) continue;
         ImGui::PushID(20000 + mi);
         bool sel = (m_SelectedMaterial==mi);
         ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0,0,0,0));
@@ -1579,7 +2024,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             if (ImGui::MenuItem("Delete")) {
                 scene.Materials.erase(scene.Materials.begin()+mi);
                 if (m_SelectedMaterial==mi) m_SelectedMaterial=-1; else if(m_SelectedMaterial>mi) m_SelectedMaterial--;
-                ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End();
+                ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End(); ImGui::PopStyleColor();
                 return ImGui::GetIO().WantCaptureMouse;
             }
             ImGui::EndPopup();
@@ -1613,8 +2058,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             if (!ImGui::IsItemActive() && !ImGui::IsItemFocused()) { renameBuf[0]='\0'; renameMatIdx=-1; }
         } else {
             std::string lbl=scene.Materials[mi].Name;
-            if (lbl.size()>10) lbl=lbl.substr(0,9)+"\xe2\x80\xa6";
-            ImGui::TextUnformatted(lbl.c_str());
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + iconSz); ImGui::TextUnformatted(lbl.c_str()); ImGui::PopTextWrapPos();
             if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))
             { renameMatIdx=mi; renameBuf[0]='\0'; }
         }
@@ -1659,13 +2103,13 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                     scene.TextureSettings.erase(scene.TextureSettings.begin()+ti);
                 if (m_SelectedTexture == ti) m_SelectedTexture = -1;
                 else if (m_SelectedTexture > ti) m_SelectedTexture--;
-                ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End();
+                ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End(); ImGui::PopStyleColor();
                 return ImGui::GetIO().WantCaptureMouse;
             }
             ImGui::EndPopup();
         }
 
-        // Thumbnail: UV inverted ({0,1}→{1,0}) because texture was loaded with flip=true
+        // Thumbnail: UV inverted ({0,1}â†’{1,0}) because texture was loaded with flip=true
         if (scene.TextureIDs[ti] > 0) {
             ImGui::GetWindowDrawList()->AddImage(
                 (ImTextureID)(intptr_t)scene.TextureIDs[ti],
@@ -1695,7 +2139,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             ImGui::EndDragDropSource();
         }
 
-        { std::string lbl=fname; if(lbl.size()>10) lbl=lbl.substr(0,9)+"\xe2\x80\xa6"; ImGui::TextUnformatted(lbl.c_str()); }
+        { ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + iconSz); ImGui::TextUnformatted(fname.c_str()); ImGui::PopTextWrapPos(); }
         ImGui::NextColumn(); ImGui::PopID();
     }
 
@@ -1794,7 +2238,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                     for (auto& src : scene.EntityPrefabSource) { if (src == pi) src = -1; else if (src > pi) src--; }
                     if (m_EditingPrefabIdx == pi) { m_PrefabEditorOpen = false; m_EditingPrefabIdx = -1; if (m_ViewportTab == 3) m_ViewportTab = 0; }
                     else if (m_EditingPrefabIdx > pi) m_EditingPrefabIdx--;
-                    ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End();
+                    ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End(); ImGui::PopStyleColor();
                     return ImGui::GetIO().WantCaptureMouse;
                 }
                 ImGui::EndPopup();
@@ -1828,8 +2272,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 if (!ImGui::IsItemActive() && !ImGui::IsItemFocused()) renamePrefabIdx=-1;
             } else {
                 std::string lbl = scene.Prefabs[pi].Name;
-                if (lbl.size() > 10) lbl = lbl.substr(0,9) + "\xe2\x80\xa6";
-                ImGui::TextUnformatted(lbl.c_str());
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + iconSz); ImGui::TextUnformatted(lbl.c_str()); ImGui::PopTextWrapPos();
             }
             ImGui::NextColumn(); ImGui::PopID();
         }
@@ -1885,7 +2328,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 if (ImGui::MenuItem("Delete")) {
                     scene.MeshAssets.erase(scene.MeshAssets.begin() + oi);
                     scene.MeshAssetFolders.erase(scene.MeshAssetFolders.begin() + oi);
-                    ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End();
+                    ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End(); ImGui::PopStyleColor();
                     return ImGui::GetIO().WantCaptureMouse;
                 }
                 ImGui::EndPopup();
@@ -1909,7 +2352,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 ImGui::EndDragDropSource();
             }
 
-            { std::string lbl = oName; if (lbl.size()>10) lbl=lbl.substr(0,9)+"\xe2\x80\xa6"; ImGui::TextUnformatted(lbl.c_str()); }
+            { ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + iconSz); ImGui::TextUnformatted(oName.c_str()); ImGui::PopTextWrapPos(); }
             ImGui::NextColumn(); ImGui::PopID();
         }
         ImGui::Columns(1);
@@ -1970,13 +2413,13 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 if (ImGui::MenuItem("Delete")) {
                     scene.ScriptAssets.erase(scene.ScriptAssets.begin() + si);
                     scene.ScriptAssetFolders.erase(scene.ScriptAssetFolders.begin() + si);
-                    ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End();
+                    ImGui::EndPopup(); ImGui::PopID(); ImGui::Columns(1); ImGui::EndChild(); ImGui::End(); ImGui::PopStyleColor();
                     return ImGui::GetIO().WantCaptureMouse;
                 }
                 ImGui::EndPopup();
             }
 
-            // Drag source — carries the script path
+            // Drag source â€” carries the script path
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                 ImGui::SetDragDropPayload("SCRIPT_ASSET", sPath.c_str(), sPath.size()+1);
                 drawScriptIconDL({4,4}, false);
@@ -1984,13 +2427,13 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 ImGui::EndDragDropSource();
             }
 
-            { std::string lbl = sName; if (lbl.size()>10) lbl=lbl.substr(0,9)+"\xe2\x80\xa6"; ImGui::TextUnformatted(lbl.c_str()); }
+            { ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + iconSz); ImGui::TextUnformatted(sName.c_str()); ImGui::PopTextWrapPos(); }
             ImGui::NextColumn(); ImGui::PopID();
         }
         ImGui::Columns(1);
     }
 
-    // Full-area ENTITY drop target — covers the ENTIRE scroll child window
+    // Full-area ENTITY drop target â€” covers the ENTIRE scroll child window
     {
         ImGuiWindow* childWin = ImGui::GetCurrentWindow();
         if (ImGui::BeginDragDropTargetCustom(childWin->ContentRegionRect, childWin->ID)) {
@@ -2087,6 +2530,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
 
     ImGui::EndChild(); // end ##assetscroll
     ImGui::End();
+    ImGui::PopStyleColor(); // WindowBg
     return ImGui::GetIO().WantCaptureMouse;
 }
 
@@ -2102,7 +2546,7 @@ bool UIManager::WantCaptureMouse() const
 }
 
 // ---------------------------------------------------------------------------
-// DrawSplash  —  full-screen animated splash for the first ~3.2 s
+// DrawSplash  â€”  full-screen animated splash for the first ~3.2 s
 // ---------------------------------------------------------------------------
 void UIManager::DrawSplash(float t, int w, int h)
 {

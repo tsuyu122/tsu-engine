@@ -17,12 +17,21 @@ public:
     // Returns GL texture ID (> 0 on success, 0 on failure).
     unsigned int Load(const std::string& path);
 
+    // Create a GL_RGB16F texture directly from linear float RGB data.
+    // Returns GL texture ID (> 0 on success, 0 on failure).
+    // The data is NOT cached by path; caller is responsible for evicting old textures.
+    static unsigned int LoadFromFloat(int w, int h, const float* rgbFloat);
+
     // Returns the cached GL texture ID without loading or changing the ref count.
     // Returns 0 if the path has not been loaded yet.
     unsigned int GetCachedID(const std::string& path) const;
 
     // Decrement ref count; deletes GL texture when it reaches 0.
     void Release(const std::string& path);
+
+    // Force-evict a path from cache (deletes GL texture regardless of refcount).
+    // Use before re-Load() when the file on disk has changed (e.g. re-bake).
+    void Evict(const std::string& path);
 
     // Free all loaded lightmaps (call on shutdown or scene unload).
     void ReleaseAll();

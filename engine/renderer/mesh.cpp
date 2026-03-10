@@ -4,6 +4,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
@@ -35,22 +36,162 @@ glm::vec3 HexToRGB(const std::string& hex)
 
 Mesh::Mesh() : VAO(0), VBO(0), m_VertexCount(0) {}
 
+bool Mesh::HasValidUV2() const
+{
+    if (m_Vertices.empty()) return false;
+    glm::vec2 mn( std::numeric_limits<float>::max());
+    glm::vec2 mx(-std::numeric_limits<float>::max());
+    for (const auto& v : m_Vertices) {
+        mn = glm::min(mn, v.uv2);
+        mx = glm::max(mx, v.uv2);
+    }
+    glm::vec2 ex = mx - mn;
+    return (ex.x > 1e-4f || ex.y > 1e-4f);
+}
+
+void Mesh::GenerateAutoUV2(float padding)
+{
+    if (m_Vertices.empty()) return;
+
+    struct BucketInfo {
+        glm::vec2 mn = glm::vec2( std::numeric_limits<float>::max());
+        glm::vec2 mx = glm::vec2(-std::numeric_limits<float>::max());
+        bool used = false;
+    };
+    BucketInfo buckets[6]; // +X -X +Y -Y +Z -Z
+    std::vector<int> bucketOf(m_Vertices.size(), 0);
+    std::vector<glm::vec2> rawUV(m_Vertices.size(), glm::vec2(0.0f));
+
+    auto pickBucket = [](const glm::vec3& n) -> int {
+        glm::vec3 an = glm::abs(n);
+        if (an.x >= an.y && an.x >= an.z) return (n.x >= 0.0f) ? 0 : 1;
+        if (an.y >= an.x && an.y >= an.z) return (n.y >= 0.0f) ? 2 : 3;
+        return (n.z >= 0.0f) ? 4 : 5;
+    };
+
+    auto project = [](int b, const glm::vec3& p) -> glm::vec2 {
+        switch (b)
+        {
+            case 0: return glm::vec2( p.z, p.y); // +X
+            case 1: return glm::vec2(-p.z, p.y); // -X
+            case 2: return glm::vec2( p.x, p.z); // +Y
+            case 3: return glm::vec2( p.x,-p.z); // -Y
+            case 4: return glm::vec2( p.x, p.y); // +Z
+            default:return glm::vec2(-p.x, p.y); // -Z
+        }
+    };
+
+    // Assign buckets PER TRIANGLE using the face normal.
+    // This ensures all 3 vertices of each triangle share the same bucket/cell,
+    // preventing UV2 from jumping across chart boundaries on curved surfaces.
+    const size_t triCount = m_Vertices.size() / 3;
+    for (size_t t = 0; t < triCount; ++t)
+    {
+        size_t i0 = t * 3, i1 = t * 3 + 1, i2 = t * 3 + 2;
+        // Face normal from triangle edges (geometric, not vertex normal)
+        glm::vec3 edge1 = m_Vertices[i1].pos - m_Vertices[i0].pos;
+        glm::vec3 edge2 = m_Vertices[i2].pos - m_Vertices[i0].pos;
+        glm::vec3 faceN = glm::cross(edge1, edge2);
+        float fLen = glm::length(faceN);
+        if (fLen > 1e-8f) faceN /= fLen;
+        else faceN = m_Vertices[i0].normal; // degenerate: fall back to vertex normal
+
+        int b = pickBucket(faceN);
+        for (size_t vi = i0; vi <= i2; ++vi) {
+            glm::vec2 uv = project(b, m_Vertices[vi].pos);
+            bucketOf[vi] = b;
+            rawUV[vi] = uv;
+            buckets[b].mn = glm::min(buckets[b].mn, uv);
+            buckets[b].mx = glm::max(buckets[b].mx, uv);
+            buckets[b].used = true;
+        }
+    }
+
+    const int cols = 3;
+    const int rows = 2;
+    const float cellW = 1.0f / (float)cols;
+    const float cellH = 1.0f / (float)rows;
+    const float inset = glm::clamp(padding, 0.0f, 0.45f) * std::min(cellW, cellH);
+
+    for (size_t i = 0; i < m_Vertices.size(); ++i)
+    {
+        int b = bucketOf[i];
+        glm::vec2 ex = buckets[b].mx - buckets[b].mn;
+        if (ex.x < 1e-6f) ex.x = 1.0f;
+        if (ex.y < 1e-6f) ex.y = 1.0f;
+        glm::vec2 nuv = (rawUV[i] - buckets[b].mn) / ex;
+
+        int cx = b % cols;
+        int cy = b / cols;
+        float ox = cx * cellW;
+        float oy = cy * cellH;
+        m_Vertices[i].uv2 = glm::vec2(
+            ox + inset + nuv.x * (cellW - 2.0f * inset),
+            oy + inset + nuv.y * (cellH - 2.0f * inset));
+    }
+
+    UploadGpuBuffer();
+}
+
+void Mesh::UploadGpuBuffer()
+{
+    if (m_Vertices.empty()) return;
+
+    std::vector<float> packed;
+    packed.reserve(m_Vertices.size() * 13);
+    for (const auto& v : m_Vertices) {
+        packed.push_back(v.pos.x); packed.push_back(v.pos.y); packed.push_back(v.pos.z);
+        packed.push_back(v.normal.x); packed.push_back(v.normal.y); packed.push_back(v.normal.z);
+        packed.push_back(v.color.x); packed.push_back(v.color.y); packed.push_back(v.color.z);
+        packed.push_back(v.uv0.x); packed.push_back(v.uv0.y);
+        packed.push_back(v.uv2.x); packed.push_back(v.uv2.y);
+    }
+
+    m_VertexCount = (int)m_Vertices.size();
+    if (VAO == 0) glGenVertexArrays(1, &VAO);
+    if (VBO == 0) glGenBuffers(1, &VBO);
+
+    glBindVertexArray(VAO);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, packed.size() * sizeof(float), packed.data(), GL_STATIC_DRAW);
+
+    const GLsizei stride = 13 * sizeof(float);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, (void*)(6 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, stride, (void*)(9 * sizeof(float)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(4, 2, GL_FLOAT, GL_FALSE, stride, (void*)(11 * sizeof(float)));
+    glEnableVertexAttribArray(4);
+
+    glBindVertexArray(0);
+}
+
 Mesh Mesh::BuildFromVertices(const std::vector<float>& verts)
 {
+    std::vector<CpuVertex> cpu;
+    cpu.reserve(verts.size() / 9);
+    for (size_t i = 0; i + 8 < verts.size(); i += 9)
+    {
+        CpuVertex cv;
+        cv.pos    = glm::vec3(verts[i+0], verts[i+1], verts[i+2]);
+        cv.normal = glm::vec3(verts[i+3], verts[i+4], verts[i+5]);
+        cv.color  = glm::vec3(verts[i+6], verts[i+7], verts[i+8]);
+        cv.uv0    = glm::vec2(0.0f);
+        cv.uv2    = glm::vec2(0.0f);
+        cpu.push_back(cv);
+    }
+    return BuildFromCpuVertices(cpu);
+}
+
+Mesh Mesh::BuildFromCpuVertices(const std::vector<CpuVertex>& verts)
+{
     Mesh mesh;
-    mesh.m_VertexCount = (int)(verts.size() / 9);
-    glGenVertexArrays(1, &mesh.VAO);
-    glGenBuffers(1, &mesh.VBO);
-    glBindVertexArray(mesh.VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, mesh.VBO);
-    glBufferData(GL_ARRAY_BUFFER, verts.size()*sizeof(float), verts.data(), GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 9*sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 9*sizeof(float), (void*)(3*sizeof(float)));
-    glEnableVertexAttribArray(1);
-    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 9*sizeof(float), (void*)(6*sizeof(float)));
-    glEnableVertexAttribArray(2);
-    glBindVertexArray(0);
+    mesh.m_Vertices = verts;
+    mesh.UploadGpuBuffer();
     return mesh;
 }
 
@@ -423,8 +564,8 @@ Mesh Mesh::LoadOBJ(const std::string& path)
     if (!err.empty()) std::cerr << "[OBJ] " << err << "\n";
     if (!ok)          return Mesh{};
 
-    std::vector<float> verts;
-    verts.reserve(shapes.size() * 3 * 9);
+    std::vector<CpuVertex> verts;
+    verts.reserve(shapes.size() * 3 * 3);
 
     for (const auto& shape : shapes)
     {
@@ -448,10 +589,19 @@ Mesh Mesh::LoadOBJ(const std::string& path)
                     nz = attrib.normals[3 * idx.normal_index + 2];
                 }
 
-                // v1.0.6 has no per-vertex color field; default to light grey
-                const float cr = 0.87f, cg = 0.87f, cb = 0.87f;
+                float u0 = 0.0f, v0 = 0.0f;
+                if (idx.texcoord_index >= 0 && !attrib.texcoords.empty()) {
+                    u0 = attrib.texcoords[2 * idx.texcoord_index + 0];
+                    v0 = attrib.texcoords[2 * idx.texcoord_index + 1];
+                }
 
-                verts.insert(verts.end(), {px, py, pz, nx, ny, nz, cr, cg, cb});
+                CpuVertex cv;
+                cv.pos    = glm::vec3(px, py, pz);
+                cv.normal = glm::vec3(nx, ny, nz);
+                cv.color  = glm::vec3(0.87f);
+                cv.uv0    = glm::vec2(u0, v0);
+                cv.uv2    = glm::vec2(0.0f);
+                verts.push_back(cv);
             }
             indexOffset += fv;
         }
@@ -461,8 +611,8 @@ Mesh Mesh::LoadOBJ(const std::string& path)
 
     // Compute AABB from all vertex positions
     glm::vec3 lo( 1e30f), hi(-1e30f);
-    for (size_t i = 0; i < verts.size(); i += 9) {
-        glm::vec3 p(verts[i], verts[i+1], verts[i+2]);
+    for (const auto& v : verts) {
+        glm::vec3 p = v.pos;
         lo = glm::min(lo, p);
         hi = glm::max(hi, p);
     }
@@ -473,16 +623,17 @@ Mesh Mesh::LoadOBJ(const std::string& path)
     if (maxExtent > 1e-6f) {
         float scaleFactor = 1.0f / maxExtent;
         glm::vec3 center = (lo + hi) * 0.5f;
-        for (size_t i = 0; i < verts.size(); i += 9) {
-            verts[i+0] = (verts[i+0] - center.x) * scaleFactor;
-            verts[i+1] = (verts[i+1] - center.y) * scaleFactor;
-            verts[i+2] = (verts[i+2] - center.z) * scaleFactor;
+        for (auto& v : verts) {
+            v.pos.x = (v.pos.x - center.x) * scaleFactor;
+            v.pos.y = (v.pos.y - center.y) * scaleFactor;
+            v.pos.z = (v.pos.z - center.z) * scaleFactor;
         }
         lo = (lo - center) * scaleFactor;
         hi = (hi - center) * scaleFactor;
     }
 
-    Mesh m = BuildFromVertices(verts);
+    Mesh m = BuildFromCpuVertices(verts);
+    m.GenerateAutoUV2();
     m.BoundsMin = lo;
     m.BoundsMax = hi;
     return m;

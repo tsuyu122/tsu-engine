@@ -53,6 +53,7 @@ private:
 
     // Spawn mesh entities for each block of a room template
     static void SpawnRoomEntities(Scene& scene,
+                                  int genIdx,
                                   const RoomTemplate& room,
                                   int anchorX, int anchorZ,
                                   int rotation,

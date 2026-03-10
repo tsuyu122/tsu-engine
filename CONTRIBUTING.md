@@ -11,10 +11,9 @@ Open an issue on [GitHub Issues](https://github.com/tsuyu122/tsu-engine/issues) 
 - A clear, descriptive title
 - Steps to reproduce the bug
 - Expected vs. actual behavior
-- Your OS and GPU (e.g., Windows 11, NVIDIA RTX 3060)
 - Any relevant console output or error messages
 
-If you prefer not to use GitHub, you can also send an email to [vhmarchiore@gmail.com](mailto:vhmarchiore@gmail.com) with the subject **"github tsu engine sugestion"** and describe the bug there.
+If you prefer not to use GitHub, you can also send an email to [vhmarchiore@gmail.com](mailto:vhmarchiore@gmail.com) with the subject **"github tsu engine bug"** and describe the bug there.
 
 ---
 
@@ -26,7 +25,7 @@ Open an issue with the label `enhancement`. Describe:
 - How you envision it working
 - Any alternatives you have considered
 
-Alternatively, send an email to [vhmarchiore@gmail.com](mailto:vhmarchiore@gmail.com) with the subject **"github tsu engine sugestion"**.
+Alternatively, send an email to [vhmarchiore@gmail.com](mailto:vhmarchiore@gmail.com) with the subject **"github tsu engine Suggestion"**.
 
 ---
 

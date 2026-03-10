@@ -360,7 +360,8 @@ static glm::vec3 ClosestPointOnTriangle(const glm::vec3& p,
 
     float vc = d1 * d4 - d3 * d2;
     if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
-        float v = d1 / (d1 - d3);
+        float denom = d1 - d3;
+        float v = (std::abs(denom) > 1e-12f) ? d1 / denom : 0.5f;
         return a + ab * v;
     }
 
@@ -370,18 +371,22 @@ static glm::vec3 ClosestPointOnTriangle(const glm::vec3& p,
 
     float vb = d5 * d2 - d1 * d6;
     if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
-        float w = d2 / (d2 - d6);
+        float denom = d2 - d6;
+        float w = (std::abs(denom) > 1e-12f) ? d2 / denom : 0.5f;
         return a + ac * w;
     }
 
     float va = d3 * d6 - d5 * d4;
     if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) {
-        float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        float denom = (d4 - d3) + (d5 - d6);
+        float w = (std::abs(denom) > 1e-12f) ? (d4 - d3) / denom : 0.5f;
         return b + (c - b) * w;
     }
 
-    float denom = 1.0f / (va + vb + vc);
-    float v = vb * denom, w = vc * denom;
+    float denomFace = va + vb + vc;
+    if (std::abs(denomFace) < 1e-12f) return a; // degenerate triangle
+    float invDenom = 1.0f / denomFace;
+    float v = vb * invDenom, w = vc * invDenom;
     return a + ab * v + ac * w;
 }
 
@@ -699,7 +704,7 @@ static glm::vec3 OBBContactCentroid(const OBB& obb, const glm::vec3& dir)
             count++;
         }
     }
-    return sum / (float)count;
+    return (count > 0) ? sum / (float)count : obb.center;
 }
 
 void PhysicsSystem::Update(Scene& scene, float dt)
