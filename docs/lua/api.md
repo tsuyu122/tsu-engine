@@ -60,6 +60,11 @@ For more complete examples see [`docs/lua/examples.md`](examples.md).
 | `scene.getEntityCount()` | `number` | Total entity count in scene |
 | `scene.getChannel(idx)` | `boolean` | Boolean value of input channel |
 | `scene.setChannel(idx, value)` | — | Set boolean value of input channel |
+| `scene.spawnEntity(name)` | `number` | Spawn a new entity; returns its index |
+| `scene.destroyEntity(idx)` | — | Destroy (tombstone) entity at runtime |
+| `scene.isKeyDown(key)` | `boolean` | Keyboard state by key code or name |
+| `scene.isMouseDown(button)` | `boolean` | Mouse button state (0=L 1=R 2=M) |
+| `scene.getMouseDelta()` | `dx, dy` | Mouse movement delta this frame |
 | `scene.getPostEnabled()` | `boolean` | Whether post-processing is on |
 | `scene.setPostEnabled(enabled)` | — | Enable / disable post-processing |
 | `scene.setExposure(value)` | — | Linear brightness multiplier |
@@ -157,6 +162,62 @@ Returns the total number of entities in the scene.
 
 ```lua
 local n = scene.getEntityCount()
+```
+
+---
+
+## scene — Entity Lifecycle
+
+### `scene.spawnEntity(name)`
+Spawns a new empty entity with the given name at runtime. Returns its index.
+
+```lua
+local bullet = scene.spawnEntity("Bullet")
+scene.setPos(bullet, 0, 1, 0)
+```
+
+---
+
+### `scene.destroyEntity(idx)`
+Destroys entity `idx` at runtime. All its components are deactivated and the entity is tombstoned so it will not be found by `findEntity`. The index stays stable for the rest of the frame.
+
+```lua
+scene.destroyEntity(enemy)
+```
+
+---
+
+## scene — Input
+
+### `scene.isKeyDown(key)`
+Returns `true` if the given key is currently held. `key` can be an **integer** GLFW key code or a **string** key name (`"W"`, `"Space"`, `"Escape"`, etc.).
+
+```lua
+if scene.isKeyDown("Space") then
+    -- jump
+end
+```
+
+---
+
+### `scene.isMouseDown(button)`
+Returns `true` if the given mouse button is held. `0` = left, `1` = right, `2` = middle.
+
+```lua
+if scene.isMouseDown(0) then
+    -- left click held
+end
+```
+
+---
+
+### `scene.getMouseDelta()`
+Returns the mouse movement delta `(dx, dy)` in pixels since the last frame. Useful for camera look scripts.
+
+```lua
+local dx, dy = scene.getMouseDelta()
+local rx, ry, rz = scene.getRot(entity_idx)
+scene.setRot(entity_idx, rx - dy * 0.1, ry - dx * 0.1, rz)
 ```
 
 ---

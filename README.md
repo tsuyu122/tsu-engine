@@ -5,7 +5,7 @@
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
   [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
   [![OpenGL 4.6](https://img.shields.io/badge/OpenGL-4.6-red.svg)](https://www.opengl.org/)
-  [![Status: Alpha](https://img.shields.io/badge/Status-Alpha%201.1-orange.svg)]()
+  [![Status: Alpha](https://img.shields.io/badge/Status-Alpha%201.2.0-orange.svg)]()
   [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)]()
 </div>
 
