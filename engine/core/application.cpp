@@ -86,7 +86,7 @@ static void FreeSceneMeshes(Scene& scene)
 }
 
 Application::Application()
-    : m_Window(1280, 720, "TSU Engine  |  ALPHA 1.2.0 - NOT RELEASE VERSION, EXPECT BUGS")
+    : m_Window(1280, 720, "TSU Engine  |  ALPHA 1.3.0 - NOT RELEASE VERSION, EXPECT BUGS")
 {
 }
 
