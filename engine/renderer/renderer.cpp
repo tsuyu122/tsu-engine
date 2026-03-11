@@ -8,6 +8,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <cmath>
+#include <fstream>
+#include <filesystem>
 
 namespace tsu {
 
@@ -34,6 +36,7 @@ unsigned int Renderer::s_GlobalLightmaps[4] = {0,0,0,0};
 unsigned int Renderer::s_ShadowShader    = 0;
 unsigned int Renderer::s_ShadowFBO       = 0;
 unsigned int Renderer::s_ShadowDepthTex  = 0;
+static int s_ShadowDepthSize = 1024;
 glm::mat4    Renderer::s_ShadowLightSpace = glm::mat4(1.0f);
 glm::vec3    Renderer::s_ShadowLightDir  = {0.0f,-1.0f,0.0f};
 int          Renderer::s_HasShadow       = 0;
@@ -42,6 +45,7 @@ int          Renderer::s_ShadowLightIdx  = -1;
 unsigned int Renderer::s_PointShadowShader   = 0;
 unsigned int Renderer::s_PointShadowFBO      = 0;
 unsigned int Renderer::s_PointShadowCubemap  = 0;
+static int s_PointShadowSize = 512;
 int          Renderer::s_HasPointShadow      = 0;
 int          Renderer::s_PointShadowLightIdx = -1;
 glm::vec3    Renderer::s_PointShadowPos      = {0,0,0};
@@ -519,6 +523,7 @@ void Renderer::Init()
         "in  vec2 vUV;\n"
         "out vec4 FragColor;\n"
         "uniform sampler2D u_SceneTex;\n"
+        "uniform sampler2D u_LUTTex;\n"
         "uniform vec2  u_TexelSize;\n"
         "// Bloom\n"
         "uniform int   u_BloomEnabled;\n"
@@ -560,6 +565,14 @@ void Renderer::Init()
         "// Pixelate\n"
         "uniform int   u_PixelateEnabled;\n"
         "uniform float u_PixelateSize;\n"
+        "// LUT\n"
+        "uniform int   u_LUTEnabled;\n"
+        "uniform float u_LUTStrength;\n"
+        "uniform float u_LUTSlices;\n"
+        "// SSAO-lite\n"
+        "uniform int   u_SSAOEnabled;\n"
+        "uniform float u_SSAOIntensity;\n"
+        "uniform float u_SSAORadius;\n"
         "float rand(vec2 co){ return fract(sin(dot(co, vec2(12.9898,78.233))) * 43758.5453); }\n"
         "void main() {\n"
         "  vec2 uv = vUV;\n"
@@ -654,6 +667,35 @@ void Renderer::Init()
         "    col *= mix(1.0, vig, u_VignetteStrength);\n"
         "  }\n"
         "  col = clamp(col, 0.0, 1.0);\n"
+        // LUT strip (height = slices, width = dimension^2). Assumes vertical slices laid out along Y.
+        "  if (u_LUTEnabled != 0) {\n"
+        "    float slices = max(u_LUTSlices, 1.0);\n"
+        "    float b = clamp(col.b, 0.0, 0.999999);\n"
+        "    float slice = floor(b * slices);\n"
+        "    float v = (slice + col.g) / slices;\n"
+        "    vec2 luv = vec2(col.r, v);\n"
+        "    vec3 mapped = texture(u_LUTTex, luv).rgb;\n"
+        "    col = mix(col, mapped, u_LUTStrength);\n"
+        "  }\n"
+        // SSAO-lite: screen-space darkening via blurred luma
+        "  if (u_SSAOEnabled != 0) {\n"
+        "    float rad = max(1.0, u_SSAORadius);\n"
+        "    float wsum = 0.0;\n"
+        "    float lsum = 0.0;\n"
+        "    for (int bx=-2; bx<=2; ++bx) {\n"
+        "      for (int by=-2; by<=2; ++by) {\n"
+        "        vec2 duv = vec2(bx,by) * u_TexelSize * rad;\n"
+        "        vec3 s = texture(u_SceneTex, uv + duv).rgb;\n"
+        "        float lum = dot(s, vec3(0.2126,0.7152,0.0722));\n"
+        "        float w = 1.0 / (1.0 + float(bx*bx+by*by));\n"
+        "        lsum += lum * w;\n"
+        "        wsum += w;\n"
+        "      }\n"
+        "    }\n"
+        "    float avg = lsum / max(wsum, 0.0001);\n"
+        "    float occl = clamp((avg - dot(col, vec3(0.2126,0.7152,0.0722))) * u_SSAOIntensity * 2.0, 0.0, 1.0);\n"
+        "    col *= 1.0 - occl;\n"
+        "  }\n"
         "  FragColor = vec4(col, 1.0);\n"
         "}\n"
     );
@@ -690,6 +732,13 @@ void Renderer::Init()
         s_PostLocs.scanlinesFrequency    = PL("u_ScanlinesFrequency");
         s_PostLocs.pixelateEnabled       = PL("u_PixelateEnabled");
         s_PostLocs.pixelateSize          = PL("u_PixelateSize");
+        s_PostLocs.ssaoEnabled           = PL("u_SSAOEnabled");
+        s_PostLocs.ssaoIntensity         = PL("u_SSAOIntensity");
+        s_PostLocs.ssaoRadius            = PL("u_SSAORadius");
+        s_PostLocs.lutEnabled            = PL("u_LUTEnabled");
+        s_PostLocs.lutTex                = PL("u_LUTTex");
+        s_PostLocs.lutStrength           = PL("u_LUTStrength");
+        s_PostLocs.lutSlices             = PL("u_LUTSlices");
     }
 
     // ----------------------------------------------------------------
@@ -923,15 +972,18 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
     glActiveTexture(GL_TEXTURE0);
 
     // ---- Fog uniforms ----
-    glUniform1i(L.fogType,    (int)scene.Fog.Type);
+    int fogType = scene.Realtime.UseFog ? (int)scene.Fog.Type : 0;
+    glUniform1i(L.fogType,    fogType);
     glUniform3fv(L.fogColor,  1, &scene.Fog.Color[0]);
     glUniform1f(L.fogDensity, scene.Fog.Density);
     glUniform1f(L.fogStart,   scene.Fog.Start);
     glUniform1f(L.fogEnd,     scene.Fog.End);
 
     // ---- Sky ambient uniforms ----
-    glUniform3fv(L.ambientSky,    1, &scene.Sky.ZenithColor[0]);
-    glUniform3fv(L.ambientGround, 1, &scene.Sky.GroundColor[0]);
+    glm::vec3 ambSky = scene.Realtime.UseSkyAmbient ? scene.Sky.ZenithColor : glm::vec3(0.05f, 0.05f, 0.05f);
+    glm::vec3 ambGround = scene.Realtime.UseSkyAmbient ? scene.Sky.GroundColor : glm::vec3(0.05f, 0.05f, 0.05f);
+    glUniform3fv(L.ambientSky,    1, &ambSky[0]);
+    glUniform3fv(L.ambientGround, 1, &ambGround[0]);
 
     // ---- Lightmap intensity ----
     glUniform1f(L.lightmapIntensity, scene.LightmapIntensity);
@@ -947,8 +999,9 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
         return {r, g, b};
     };
 
+    int maxRealtimeLights = std::max(1, std::min(8, scene.Realtime.MaxRealtimeLights));
     int nl = 0;
-    for (int li = 0; li < (int)scene.Lights.size() && nl < 8; ++li)
+    for (int li = 0; li < (int)scene.Lights.size() && nl < maxRealtimeLights; ++li)
     {
         const auto& lc = scene.Lights[li];
         if (!lc.Active || !lc.Enabled) continue;
@@ -1001,9 +1054,10 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
         glm::mat4 model = s_CachedWorldMats[(int)i];
         glm::mat4 mvp   = proj * view * model;
 
+        glm::vec3 wpos = glm::vec3(model[3]);
         // ---- Frustum cull: conservative bounding sphere ----
+        if (scene.Realtime.FrustumCulling)
         {
-            glm::vec3 wpos = glm::vec3(model[3]);
             const auto& sc = scene.Transforms[i].Scale;
             float radius   = glm::max(glm::max(glm::abs(sc.x), glm::abs(sc.y)), glm::abs(sc.z)) * 1.75f;
             bool outside = false;
@@ -1014,6 +1068,11 @@ void Renderer::DrawScene(Scene& scene, const glm::mat4& view,
                 }
             }
             if (outside) continue;
+        }
+        if (scene.Realtime.DistanceCulling)
+        {
+            float d = glm::length(wpos - viewPos);
+            if (d > std::max(1.0f, scene.Realtime.MaxDrawDistance)) continue;
         }
 
         // ---- Resolve material ----
@@ -1554,9 +1613,131 @@ void Renderer::DrawSky(const Scene& scene, const glm::mat4& view, const glm::mat
 // ----------------------------------------------------------------
 // RenderPostProcess — blit HDR FBO to default framebuffer with effects
 // ----------------------------------------------------------------
-void Renderer::RenderPostProcess(const Scene& scene, int winW, int winH)
+void Renderer::RenderPostProcess(Scene& scene, int winW, int winH)
 {
-    const auto& pp = scene.PostProcess;
+    auto& pp = scene.PostProcess;
+    static std::string s_LastPostPath;
+    static std::filesystem::file_time_type s_LastPostStamp{};
+    static std::string s_LastColorCfgPath;
+    static std::filesystem::file_time_type s_LastColorCfgStamp{};
+    static std::string s_LastLUTPath;
+    static std::filesystem::file_time_type s_LastLUTStamp{};
+    static unsigned int s_LUTTexID = 0;
+    static int s_LUTSlices = 16;
+    if (pp.UseExternalColorCfg && !pp.ExternalColorCfgPath.empty())
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(pp.ExternalColorCfgPath, ec))
+        {
+            auto st = std::filesystem::last_write_time(pp.ExternalColorCfgPath, ec);
+            if (!ec && (pp.ExternalColorCfgPath != s_LastColorCfgPath || st != s_LastColorCfgStamp))
+            {
+                s_LastColorCfgPath = pp.ExternalColorCfgPath;
+                s_LastColorCfgStamp = st;
+                std::ifstream cfg(pp.ExternalColorCfgPath);
+                if (cfg.is_open())
+                {
+                    std::string line;
+                    while (std::getline(cfg, line))
+                    {
+                        auto eq = line.find('=');
+                        if (eq == std::string::npos) continue;
+                        std::string k = line.substr(0, eq);
+                        std::string v = line.substr(eq+1);
+                        if (k == "exposure")    pp.Exposure   = std::stof(v);
+                        else if (k == "saturation") pp.Saturation = std::stof(v);
+                        else if (k == "contrast")   pp.Contrast   = std::stof(v);
+                        else if (k == "brightness") pp.Brightness = std::stof(v);
+                    }
+                }
+            }
+        }
+    }
+    if (pp.UseExternalPostShader && !pp.ExternalPostPath.empty())
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(pp.ExternalPostPath, ec))
+        {
+            auto st = std::filesystem::last_write_time(pp.ExternalPostPath, ec);
+            if (!ec && (pp.ExternalPostPath != s_LastPostPath || st != s_LastPostStamp))
+            {
+                s_LastPostPath = pp.ExternalPostPath;
+                s_LastPostStamp = st;
+                std::ifstream fs(pp.ExternalPostPath);
+                std::string fsrc;
+                if (fs.is_open())
+                {
+                    fsrc.assign(std::istreambuf_iterator<char>(fs), std::istreambuf_iterator<char>());
+                    fs.close();
+                    unsigned int extProg = LinkProgram(
+                        "#version 460 core\n"
+                        "out vec2 vUV;\n"
+                        "void main(){ float x=float((gl_VertexID&1)*2)*2.0-1.0; float y=float((gl_VertexID>>1)*2)*2.0-1.0; vUV=vec2(x,y)*0.5+0.5; gl_Position=vec4(x,y,0.0,1.0); }\n",
+                        fsrc.c_str());
+                    if (extProg != 0)
+                    {
+                        s_PostShader = extProg;
+                        auto PL = [](const char* n){ return glGetUniformLocation(s_PostShader, n); };
+                        s_PostLocs.sceneTex              = PL("u_SceneTex");
+                        s_PostLocs.texelSize             = PL("u_TexelSize");
+                        s_PostLocs.bloomEnabled          = PL("u_BloomEnabled");
+                        s_PostLocs.bloomThreshold        = PL("u_BloomThreshold");
+                        s_PostLocs.bloomIntensity        = PL("u_BloomIntensity");
+                        s_PostLocs.bloomRadius           = PL("u_BloomRadius");
+                        s_PostLocs.vignetteEnabled       = PL("u_VignetteEnabled");
+                        s_PostLocs.vignetteRadius        = PL("u_VignetteRadius");
+                        s_PostLocs.vignetteStrength      = PL("u_VignetteStrength");
+                        s_PostLocs.grainEnabled          = PL("u_GrainEnabled");
+                        s_PostLocs.grainStrength         = PL("u_GrainStrength");
+                        s_PostLocs.grainTime             = PL("u_GrainTime");
+                        s_PostLocs.chromaEnabled         = PL("u_ChromaEnabled");
+                        s_PostLocs.chromaStrength        = PL("u_ChromaStrength");
+                        s_PostLocs.exposure              = PL("u_Exposure");
+                        s_PostLocs.saturation            = PL("u_Saturation");
+                        s_PostLocs.contrast              = PL("u_Contrast");
+                        s_PostLocs.brightness            = PL("u_Brightness");
+                        s_PostLocs.sharpenEnabled        = PL("u_SharpenEnabled");
+                        s_PostLocs.sharpenStrength       = PL("u_SharpenStrength");
+                        s_PostLocs.lensDistortEnabled    = PL("u_LensDistortEnabled");
+                        s_PostLocs.lensDistortStrength   = PL("u_LensDistortStrength");
+                        s_PostLocs.sepiaEnabled          = PL("u_SepiaEnabled");
+                        s_PostLocs.sepiaStrength         = PL("u_SepiaStrength");
+                        s_PostLocs.posterizeEnabled      = PL("u_PosterizeEnabled");
+                        s_PostLocs.posterizeLevels       = PL("u_PosterizeLevels");
+                        s_PostLocs.scanlinesEnabled      = PL("u_ScanlinesEnabled");
+                        s_PostLocs.scanlinesStrength     = PL("u_ScanlinesStrength");
+                        s_PostLocs.scanlinesFrequency    = PL("u_ScanlinesFrequency");
+                        s_PostLocs.pixelateEnabled       = PL("u_PixelateEnabled");
+                        s_PostLocs.pixelateSize          = PL("u_PixelateSize");
+                        s_PostLocs.ssaoEnabled           = PL("u_SSAOEnabled");
+                        s_PostLocs.ssaoIntensity         = PL("u_SSAOIntensity");
+                        s_PostLocs.ssaoRadius            = PL("u_SSAORadius");
+                    }
+                }
+            }
+        }
+    }
+    if (pp.LUTEnabled && !pp.LUTPath.empty())
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(pp.LUTPath, ec))
+        {
+            auto st = std::filesystem::last_write_time(pp.LUTPath, ec);
+            if (!ec && (pp.LUTPath != s_LastLUTPath || st != s_LastLUTStamp || s_LUTTexID == 0))
+            {
+                s_LastLUTPath = pp.LUTPath;
+                s_LastLUTStamp = st;
+                unsigned int tid = tsu::LoadTexture(pp.LUTPath);
+                if (tid != 0)
+                {
+                    s_LUTTexID = tid;
+                    // Guess slices from texture height (common strips use 16)
+                    // We cannot query GL texture size reliably here; use default 16 if unknown.
+                    s_LUTSlices = 16;
+                }
+            }
+        }
+    }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, winW, winH);
@@ -1568,6 +1749,13 @@ void Renderer::RenderPostProcess(const Scene& scene, int winW, int winH)
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, s_PostColorTex);
     glUniform1i(s_PostLocs.sceneTex, 0);
+    if (pp.LUTEnabled && s_LUTTexID != 0)
+    {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, s_LUTTexID);
+        glUniform1i(s_PostLocs.lutTex, 1);
+        glUniform1f(s_PostLocs.lutSlices, (float)s_LUTSlices);
+    }
 
     glm::vec2 ts(1.0f / winW, 1.0f / winH);
     glUniform2fv(s_PostLocs.texelSize, 1, &ts[0]);
@@ -1602,6 +1790,11 @@ void Renderer::RenderPostProcess(const Scene& scene, int winW, int winH)
     glUniform1f(s_PostLocs.scanlinesFrequency,   pp.ScanlinesFrequency);
     glUniform1i(s_PostLocs.pixelateEnabled,      pp.PixelateEnabled       ? 1 : 0);
     glUniform1f(s_PostLocs.pixelateSize,         pp.PixelateSize);
+    glUniform1i(s_PostLocs.ssaoEnabled,          pp.SSAOEnabled           ? 1 : 0);
+    glUniform1f(s_PostLocs.ssaoIntensity,        pp.SSAOIntensity);
+    glUniform1f(s_PostLocs.ssaoRadius,           pp.SSAORadius);
+    glUniform1i(s_PostLocs.lutEnabled,           pp.LUTEnabled            ? 1 : 0);
+    glUniform1f(s_PostLocs.lutStrength,          pp.LUTStrength);
 
     glBindVertexArray(s_ScreenQuadVAO);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -1695,6 +1888,14 @@ void Renderer::RenderSceneGame(Scene& scene, int winW, int winH)
 
 void Renderer::RenderShadowPass(Scene& scene)
 {
+    if (!scene.Realtime.EnableShadows)
+    {
+        s_HasShadow = 0;
+        s_HasPointShadow = 0;
+        s_ShadowLightIdx = -1;
+        s_PointShadowLightIdx = -1;
+        return;
+    }
     s_HasShadow        = 0;
     s_HasPointShadow   = 0;
     s_ShadowLightIdx       = -1;
@@ -1709,6 +1910,7 @@ void Renderer::RenderShadowPass(Scene& scene)
     {
         const auto& lc = scene.Lights[li];
         if (!lc.Active || !lc.Enabled) continue;
+        if (lc.BakedOnly) continue;
         entries[numShaderLights] = { li, lc.Type };
         numShaderLights++;
     }
@@ -1730,9 +1932,11 @@ void Renderer::RenderShadowPass(Scene& scene)
             glm::mat4 lightView, lightProj;
             if (lc.Type == LightType::Directional)
             {
-                glm::vec3 eye = -fwd * 40.0f;
+                float dist = std::max(1.0f, scene.Realtime.DirectionalShadowDistance);
+                float ortho = std::max(1.0f, scene.Realtime.DirectionalShadowOrtho);
+                glm::vec3 eye = -fwd * dist;
                 lightView = glm::lookAt(eye, glm::vec3(0,0,0), up);
-                lightProj = glm::ortho(-30.0f, 30.0f, -30.0f, 30.0f, 0.1f, 100.0f);
+                lightProj = glm::ortho(-ortho, ortho, -ortho, ortho, 0.1f, std::max(10.0f, dist * 4.0f));
             }
             else // Spot
             {
@@ -1746,7 +1950,15 @@ void Renderer::RenderShadowPass(Scene& scene)
             s_ShadowLightIdx   = si;
             s_HasShadow        = 1;
 
-            glViewport(0, 0, 1024, 1024);
+            int shadow2D = std::max(128, std::min(4096, scene.Realtime.ShadowMapSize2D));
+            if (shadow2D != s_ShadowDepthSize)
+            {
+                s_ShadowDepthSize = shadow2D;
+                glBindTexture(GL_TEXTURE_2D, s_ShadowDepthTex);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, s_ShadowDepthSize, s_ShadowDepthSize, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+                glBindTexture(GL_TEXTURE_2D, 0);
+            }
+            glViewport(0, 0, shadow2D, shadow2D);
             glBindFramebuffer(GL_FRAMEBUFFER, s_ShadowFBO);
             glClear(GL_DEPTH_BUFFER_BIT);
             glCullFace(GL_FRONT);
@@ -1788,7 +2000,16 @@ void Renderer::RenderShadowPass(Scene& scene)
             for (int f = 0; f < 6; f++)
                 shadowMats[f] = shadowProj * shadowViews[f];
 
-            const int CUBE_SZ = 512;
+            const int CUBE_SZ = std::max(64, std::min(2048, scene.Realtime.ShadowMapSizeCube));
+            if (CUBE_SZ != s_PointShadowSize)
+            {
+                s_PointShadowSize = CUBE_SZ;
+                glBindTexture(GL_TEXTURE_CUBE_MAP, s_PointShadowCubemap);
+                for (unsigned int f = 0; f < 6; ++f)
+                    glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + f, 0, GL_DEPTH_COMPONENT,
+                                 s_PointShadowSize, s_PointShadowSize, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+                glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
+            }
             glViewport(0, 0, CUBE_SZ, CUBE_SZ);
             glBindFramebuffer(GL_FRAMEBUFFER, s_PointShadowFBO);
             glClear(GL_DEPTH_BUFFER_BIT);

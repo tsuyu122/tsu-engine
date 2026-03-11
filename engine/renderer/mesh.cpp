@@ -516,7 +516,7 @@ Mesh Mesh::CreateGizmoArrow(float length, float rCol, float gCol, float bCol)
 }
 
 // ----------------------------------------------------------------
-// PLANE (1x1 quad in XZ, visible from both sides)
+// PLANE (1x1 quad in XZ, single-sided — visible from top only)
 // ----------------------------------------------------------------
 
 Mesh Mesh::CreatePlane(const std::string& hexColor)
@@ -530,12 +530,9 @@ Mesh Mesh::CreatePlane(const std::string& hexColor)
     glm::vec3 p2 = { 0.5f, 0.0f,  0.5f};
     glm::vec3 p3 = {-0.5f, 0.0f,  0.5f};
 
-    // Top face
+    // Top face only (normal up)
     addTri(verts, p0, p1, p2, r, g, b);
     addTri(verts, p0, p2, p3, r, g, b);
-    // Bottom face (visible from below)
-    addTri(verts, p2, p1, p0, r, g, b);
-    addTri(verts, p3, p2, p0, r, g, b);
 
     return BuildFromVertices(verts);
 }
@@ -637,6 +634,13 @@ Mesh Mesh::LoadOBJ(const std::string& path)
     m.BoundsMin = lo;
     m.BoundsMax = hi;
     return m;
+}
+
+void Mesh::UpdateCpuVertices(const std::vector<CpuVertex>& verts)
+{
+    if (verts.empty()) return;
+    m_Vertices = verts;
+    UploadGpuBuffer();
 }
 
 } // namespace tsu

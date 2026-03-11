@@ -7,6 +7,7 @@
 #include "physics/physicsSystem.h"
 #include "procedural/mazeGenerator.h"
 #include "lua/luaSystem.h"
+#include "network/multiplayerSystem.h"
 #include "scene/entity.h"
 #include "serialization/sceneSerializer.h"
 #include <imgui.h>
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <filesystem>
@@ -60,6 +62,29 @@ static std::string MakeUniqueEntityName(const Scene& scene, const std::string& b
     return base;
 }
 
+#ifdef _WIN32
+static bool LaunchGameRuntimeProcess(const std::string& cmdLine)
+{
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    std::string mutableCmd = cmdLine;
+    BOOL ok = CreateProcessA(nullptr, mutableCmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi);
+    if (!ok) return false;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return true;
+}
+#endif
+
+static void FreeSceneMeshes(Scene& scene)
+{
+    for (auto& mr : scene.MeshRenderers)
+    {
+        if (mr.MeshPtr) { delete mr.MeshPtr; mr.MeshPtr = nullptr; }
+    }
+}
+
 Application::Application()
     : m_Window(1280, 720, "TSU Engine  |  ALPHA 1.2.0 - NOT RELEASE VERSION, EXPECT BUGS")
 {
@@ -96,6 +121,14 @@ void Application::StartSceneBakeAsync()
     }
     auto lights = LightBaker::ExtractLights(sceneCopy);
     auto params = m_UIManager.GetBakeParams();
+    params.resolution      = std::max(32, std::min(4096, params.resolution));
+    params.aoSamples       = std::max(4, params.aoSamples);
+    params.indirectSamples = std::max(8, params.indirectSamples);
+    params.bounceCount     = std::max(1, std::min(8, params.bounceCount));
+    params.aoRadius        = std::max(0.01f, params.aoRadius);
+    params.ambientLevel    = std::max(0.0f, std::min(1.0f, params.ambientLevel));
+    params.directScale     = std::max(0.0f, params.directScale);
+    params.denoiseRadius   = std::max(0, std::min(8, params.denoiseRadius));
 
     m_BakeRunning.store(true);
     if (m_BakeThread.joinable()) m_BakeThread.join();
@@ -202,13 +235,21 @@ void Application::PollSceneBakeAsync()
         return;
     }
 
+    if (!m_SceneLightmapPath.empty())
+        LightmapManager::Instance().Release(m_SceneLightmapPath);
     m_SceneLightmapPath = outPath;
     m_UIManager.SetSceneLightmapPath(outPath);
     Renderer::ClearGlobalLightmaps();
     Renderer::SetGlobalLightmap(0, lmID);
     // Use the HDR peak from the bake so the normalized 0-1 lightmap values
     // are scaled back to their original absolute irradiance at runtime.
-    m_Scene.LightmapIntensity = std::max(result.hdrMax, 0.01f);
+    float targetIntensity = std::max(result.hdrMax, 0.01f);
+    if (m_Scene.BakedLighting.AutoApplyLightmapIntensity)
+    {
+        targetIntensity *= std::max(0.0f, m_Scene.BakedLighting.AutoIntensityMultiplier);
+        targetIntensity = std::min(targetIntensity, std::max(0.01f, m_Scene.BakedLighting.MaxAutoIntensity));
+    }
+    m_Scene.LightmapIntensity = targetIntensity;
     m_UIManager.Log("[LightBaker] === BAKE v2-diag ===");
     m_UIManager.Log("[LightBaker] Atlas: " + std::to_string(result.width) + "x" + std::to_string(result.height)
                   + ", hdrMax=" + std::to_string(result.hdrMax)
@@ -301,6 +342,73 @@ void Application::SaveEditorState()
                                m_Scene.RigidBodies[i].AngularVelocity});
 }
 
+void Application::SpawnMultiplayerPlayers()
+{
+    m_SpawnedMpPlayerIds.clear();
+
+    for (int mmi = 0; mmi < (int)m_Scene.MultiplayerManagers.size(); ++mmi)
+    {
+        auto& mm = m_Scene.MultiplayerManagers[mmi];
+        if (!mm.Active || !mm.Enabled) continue;
+        if (mm.PlayerPrefabIdx < 0 || mm.PlayerPrefabIdx >= (int)m_Scene.Prefabs.size()) continue;
+
+        const std::string& prefabName = m_Scene.Prefabs[mm.PlayerPrefabIdx].Name;
+        bool isHost = (mm.Mode == MultiplayerMode::Host);
+
+        // Spawn two player slots from the prefab so both sides have the same entity indices.
+        // Slot 0 = Player1 (owned by host), Slot 1 = Player2 (owned by client).
+        glm::vec3 spawnPos0 = mm.SpawnPoint + glm::vec3(-1.5f, 0.0f, 0.0f);
+        glm::vec3 spawnPos1 = mm.SpawnPoint + glm::vec3( 1.5f, 0.0f, 0.0f);
+
+        int id0 = m_Scene.SpawnFromPrefab(mm.PlayerPrefabIdx, spawnPos0);
+        int id1 = m_Scene.SpawnFromPrefab(mm.PlayerPrefabIdx, spawnPos1);
+
+        auto setupSlot = [&](int id, bool isLocal, const std::string& nick)
+        {
+            if (id < 0) return;
+            m_SpawnedMpPlayerIds.push_back(id);
+
+            // MultiplayerController
+            auto& mc = m_Scene.MultiplayerControllers[id];
+            mc.Active        = true;
+            mc.IsLocalPlayer = isLocal;
+            mc.SyncTransform = true;
+            mc.Nickname      = nick;
+            if (mc.NetworkId == 0)
+                mc.NetworkId = MultiplayerSystem::MakeNetworkId(nick);
+
+            // PlayerController — only the local player responds to keyboard input
+            if (isLocal)
+            {
+                auto& pc = m_Scene.PlayerControllers[id];
+                pc.Active      = true;
+                pc.Enabled     = true;
+                pc.MovementMode = PlayerMovementMode::LocalWithCollision;
+            }
+        };
+
+        setupSlot(id0, isHost,  "Player1");
+        setupSlot(id1, !isHost, "Player2");
+
+        m_UIManager.Log(std::string("[MP] Player prefab '") + prefabName +
+                        "' spawned — local slot=" + (isHost ? "0" : "1"));
+        break; // only process first active MM
+    }
+}
+
+void Application::DespawnMultiplayerPlayers()
+{
+    // Ask the network to shut down, then tick it once to process the stop.
+    for (auto& mm : m_Scene.MultiplayerManagers)
+    {
+        if (mm.Active && mm.Running)
+            mm.RequestStop = true;
+    }
+    MultiplayerSystem::Update(m_Scene, 0.0f);
+    m_SpawnedMpPlayerIds.clear();
+    // Spawned entities are removed by RestoreEditorState() (it trims to pre-play count).
+}
+
 void Application::RestoreEditorState()
 {
     // Delete entities that were spawned during play (beyond the snapshot count)
@@ -364,9 +472,11 @@ void Application::NewProject(const std::string& name, const std::string& parentF
         m_SelectedEntity = -1;
         SceneSerializer::Save(m_Scene, dir + "/assets/scenes/main.tscene");
 
-        m_ProjectName   = name;
-        m_ProjectFolder = fs::absolute(dir).string();
+        m_ProjectName        = name;
+        m_ProjectFolder      = fs::absolute(dir).string();
+        m_CurrentScenePath   = fs::absolute(dir + "/assets/scenes/main.tscene").string();
         m_UIManager.SetProjectDisplayName(m_ProjectName);
+        RefreshSceneFiles();
         m_UIManager.Log("[Project] New project '" + name + "' created at: " + m_ProjectFolder);
     } catch (const std::exception& ex) {
         m_UIManager.Log(std::string("[Project] Error creating project: ") + ex.what());
@@ -380,6 +490,7 @@ void Application::OpenProject(const std::string& inputPath)
     std::string projFolder;
     std::string projName;
     std::string scenePath;
+    std::string currentScenePath;
 
     try {
         if (p.extension() == ".tsproj") {
@@ -394,8 +505,9 @@ void Application::OpenProject(const std::string& inputPath)
                 if (e == std::string::npos) continue;
                 std::string k = TrimStr(line.substr(0, e));
                 std::string v = TrimStr(line.substr(e + 1));
-                if (k == "name")  projName  = v;
-                if (k == "scene") scenePath = projFolder + "/" + v;
+                if (k == "name")          projName         = v;
+                if (k == "scene")         scenePath        = projFolder + "/" + v;
+                if (k == "current_scene") currentScenePath = projFolder + "/" + v;
             }
         } else {
             // Treat as project folder
@@ -410,6 +522,10 @@ void Application::OpenProject(const std::string& inputPath)
             scenePath = projFolder + "/assets/scenes/main.tscene";
         }
 
+        // If the editor remembered which scene was open, use that; otherwise use startup scene
+        std::string loadPath = (!currentScenePath.empty() && fs::exists(currentScenePath))
+                               ? currentScenePath : scenePath;
+
         m_ProjectName    = projName;
         m_ProjectFolder  = fs::absolute(projFolder).string();
 
@@ -420,12 +536,19 @@ void Application::OpenProject(const std::string& inputPath)
         m_Scene          = Scene{};
         m_SelectedEntity = -1;
 
-        if (fs::exists(scenePath))
-            SceneSerializer::Load(m_Scene, scenePath);
-        else
-            m_UIManager.Log("[Project] Warning: scene not found: " + scenePath);
+        if (fs::exists(loadPath)) {
+            SceneSerializer::Load(m_Scene, loadPath);
+            m_EditorCamera.SetPosition(m_Scene.EditorCamPos);
+            m_EditorCamera.SetYaw(m_Scene.EditorCamYaw);
+            m_EditorCamera.SetPitch(m_Scene.EditorCamPitch);
+            m_CurrentScenePath = fs::absolute(loadPath).string();
+        } else {
+            m_UIManager.Log("[Project] Warning: scene not found: " + loadPath);
+            m_CurrentScenePath = fs::absolute(scenePath).string();
+        }
 
         m_UIManager.SetProjectDisplayName(m_ProjectName);
+        RefreshSceneFiles();
         m_UIManager.Log("[Project] Opened: " + m_ProjectFolder);
     } catch (const std::exception& ex) {
         m_UIManager.Log(std::string("[Project] Error opening project: ") + ex.what());
@@ -439,6 +562,9 @@ void Application::SaveProject()
         if (m_ProjectFolder.empty()) {
             // No project set — save current scene to the default location
             fs::create_directories("assets/scenes");
+            m_Scene.EditorCamPos   = m_EditorCamera.GetPosition();
+            m_Scene.EditorCamYaw   = m_EditorCamera.GetYaw();
+            m_Scene.EditorCamPitch = m_EditorCamera.GetPitch();
             SceneSerializer::Save(m_Scene, "assets/scenes/default.tscene");
             m_UIManager.Log("[Project] Saved scene to assets/scenes/default.tscene");
             return;
@@ -447,8 +573,14 @@ void Application::SaveProject()
         fs::create_directories(m_ProjectFolder + "/assets/scenes");
         fs::create_directories(m_ProjectFolder + "/assets/scripts");
 
-        // Save the main scene
-        SceneSerializer::Save(m_Scene, m_ProjectFolder + "/assets/scenes/main.tscene");
+        // Save current scene (to whichever scene is open, default to main.tscene)
+        std::string savePath = m_CurrentScenePath.empty()
+                               ? m_ProjectFolder + "/assets/scenes/main.tscene"
+                               : m_CurrentScenePath;
+        m_Scene.EditorCamPos   = m_EditorCamera.GetPosition();
+        m_Scene.EditorCamYaw   = m_EditorCamera.GetYaw();
+        m_Scene.EditorCamPitch = m_EditorCamera.GetPitch();
+        SceneSerializer::Save(m_Scene, savePath);
 
         // Copy assets directory (scripts, textures, meshes, prefabs…) if it exists
         if (fs::exists("assets")) {
@@ -456,17 +588,195 @@ void Application::SaveProject()
                      fs::copy_options::recursive | fs::copy_options::update_existing);
         }
 
+        // Compute relative paths for .tsproj
+        auto toRelative = [&](const std::string& absPath) -> std::string {
+            try {
+                return fs::relative(fs::path(absPath), fs::path(m_ProjectFolder)).string();
+            } catch (...) { return "assets/scenes/main.tscene"; }
+        };
+
+        // The startup scene (scene =) stays as main.tscene unless changed explicitly in future
+        // current_scene = remembers which scene the editor had open
+        std::string relCurrent = m_CurrentScenePath.empty()
+                                 ? "assets/scenes/main.tscene"
+                                 : toRelative(m_CurrentScenePath);
+
         // Write/refresh .tsproj
         {
             std::ofstream f(m_ProjectFolder + "/" + m_ProjectName + ".tsproj");
             f << "# tsuEngine Project File\n"
-              << "name  = " << m_ProjectName << "\n"
-              << "scene = assets/scenes/main.tscene\n";
+              << "name          = " << m_ProjectName << "\n"
+              << "scene         = assets/scenes/main.tscene\n"
+              << "current_scene = " << relCurrent << "\n";
         }
 
+        RefreshSceneFiles();
         m_UIManager.Log("[Project] Project saved: " + m_ProjectFolder);
     } catch (const std::exception& ex) {
         m_UIManager.Log(std::string("[Project] Error saving: ") + ex.what());
+    }
+}
+
+void Application::NewScene(const std::string& name)
+{
+    namespace fs = std::filesystem;
+
+    // Resolve the base scenes directory
+    std::string scenesDir = !m_ProjectFolder.empty()
+                            ? m_ProjectFolder + "/assets/scenes"
+                            : "assets/scenes";
+    fs::create_directories(scenesDir);
+
+    // Auto-save current scene before switching
+    if (!m_CurrentScenePath.empty()) {
+        m_Scene.EditorCamPos   = m_EditorCamera.GetPosition();
+        m_Scene.EditorCamYaw   = m_EditorCamera.GetYaw();
+        m_Scene.EditorCamPitch = m_EditorCamera.GetPitch();
+        SceneSerializer::Save(m_Scene, m_CurrentScenePath);
+    }
+
+    std::string newPath = scenesDir + "/" + name + ".tscene";
+    for (auto& mr : m_Scene.MeshRenderers)
+        if (mr.MeshPtr) { delete mr.MeshPtr; mr.MeshPtr = nullptr; }
+    m_Scene          = Scene{};
+    m_SelectedEntity = -1;
+    SceneSerializer::Save(m_Scene, newPath);
+    m_CurrentScenePath = fs::absolute(newPath).string();
+    RefreshSceneFiles();
+    m_UIManager.Log("[Scene] Created: " + newPath);
+}
+
+void Application::OpenScene(const std::string& path)
+{
+    namespace fs = std::filesystem;
+    if (path.empty() || !fs::exists(path)) {
+        m_UIManager.Log("[Scene] File not found: " + path);
+        return;
+    }
+    if (m_Mode != EngineMode::Editor) {
+        m_UIManager.Log("[Scene] Stop Play mode before switching scenes.");
+        return;
+    }
+    // Auto-save current scene before switching
+    if (!m_CurrentScenePath.empty()) {
+        m_Scene.EditorCamPos   = m_EditorCamera.GetPosition();
+        m_Scene.EditorCamYaw   = m_EditorCamera.GetYaw();
+        m_Scene.EditorCamPitch = m_EditorCamera.GetPitch();
+        SceneSerializer::Save(m_Scene, m_CurrentScenePath);
+    }
+
+    // Preserve project-level assets across scene switch
+    auto savedFolders       = std::move(m_Scene.Folders);
+    auto savedMaterials     = std::move(m_Scene.Materials);
+    auto savedTextures      = std::move(m_Scene.Textures);
+    auto savedTextureIDs    = std::move(m_Scene.TextureIDs);
+    auto savedTextureFolders= std::move(m_Scene.TextureFolders);
+    auto savedPrefabs       = std::move(m_Scene.Prefabs);
+    auto savedMeshAssets    = std::move(m_Scene.MeshAssets);
+    auto savedMeshFolders   = std::move(m_Scene.MeshAssetFolders);
+    auto savedScriptAssets  = std::move(m_Scene.ScriptAssets);
+    auto savedScriptFolders = std::move(m_Scene.ScriptAssetFolders);
+
+    for (auto& mr : m_Scene.MeshRenderers)
+        if (mr.MeshPtr) { delete mr.MeshPtr; mr.MeshPtr = nullptr; }
+    m_Scene          = Scene{};
+    m_SelectedEntity = -1;
+    SceneSerializer::Load(m_Scene, path);
+
+    // Restore project-level assets (scene file doesn't define them)
+    if (m_Scene.Folders.empty())        m_Scene.Folders        = std::move(savedFolders);
+    if (m_Scene.Materials.empty())      m_Scene.Materials      = std::move(savedMaterials);
+    if (m_Scene.Textures.empty())       m_Scene.Textures       = std::move(savedTextures);
+    if (m_Scene.TextureIDs.empty())     m_Scene.TextureIDs     = std::move(savedTextureIDs);
+    if (m_Scene.TextureFolders.empty()) m_Scene.TextureFolders = std::move(savedTextureFolders);
+    if (m_Scene.Prefabs.empty())        m_Scene.Prefabs        = std::move(savedPrefabs);
+    if (m_Scene.MeshAssets.empty())     m_Scene.MeshAssets     = std::move(savedMeshAssets);
+    if (m_Scene.MeshAssetFolders.empty()) m_Scene.MeshAssetFolders = std::move(savedMeshFolders);
+    if (m_Scene.ScriptAssets.empty())   m_Scene.ScriptAssets   = std::move(savedScriptAssets);
+    if (m_Scene.ScriptAssetFolders.empty()) m_Scene.ScriptAssetFolders = std::move(savedScriptFolders);
+
+    m_EditorCamera.SetPosition(m_Scene.EditorCamPos);
+    m_EditorCamera.SetYaw(m_Scene.EditorCamYaw);
+    m_EditorCamera.SetPitch(m_Scene.EditorCamPitch);
+    m_CurrentScenePath = fs::absolute(path).string();
+    RefreshSceneFiles();
+    m_UIManager.Log("[Scene] Opened: " + path);
+}
+
+void Application::DeleteScene(const std::string& path)
+{
+    namespace fs = std::filesystem;
+    try {
+        if (fs::absolute(path) == fs::path(m_CurrentScenePath)) {
+            m_UIManager.Log("[Scene] Cannot delete the currently open scene.");
+            return;
+        }
+        fs::remove(path);
+        RefreshSceneFiles();
+        m_UIManager.Log("[Scene] Deleted: " + path);
+    } catch (const std::exception& ex) {
+        m_UIManager.Log(std::string("[Scene] Delete error: ") + ex.what());
+    }
+}
+
+void Application::RefreshSceneFiles()
+{
+    namespace fs = std::filesystem;
+    std::vector<std::string> files;
+
+    // If a project is open, scan its scenes dir; otherwise fall back to local assets/scenes/
+    std::string scenesDir = !m_ProjectFolder.empty()
+                            ? m_ProjectFolder + "/assets/scenes"
+                            : "assets/scenes";
+
+    if (fs::exists(scenesDir)) {
+        for (auto& entry : fs::directory_iterator(scenesDir))
+            if (entry.path().extension() == ".tscene")
+                files.push_back(fs::absolute(entry.path()).string());
+        std::sort(files.begin(), files.end());
+    }
+    m_UIManager.SetSceneFiles(files, m_CurrentScenePath);
+
+    // Refresh script assets index (recursive)
+    m_Scene.ScriptAssets.clear();
+    m_Scene.ScriptAssetFolders.clear();
+    std::string scriptsDir = !m_ProjectFolder.empty()
+                            ? m_ProjectFolder + "/assets/scripts"
+                            : "assets/scripts";
+    if (fs::exists(scriptsDir)) {
+        for (auto& entry : fs::recursive_directory_iterator(scriptsDir))
+            if (entry.is_regular_file() && entry.path().extension() == ".lua")
+                m_Scene.ScriptAssets.push_back(fs::absolute(entry.path()).string());
+    }
+
+    // Refresh shader assets index (recursive)
+    m_Scene.ShaderAssets.clear();
+    std::string shaderDir = !m_ProjectFolder.empty()
+                            ? m_ProjectFolder + "/assets/shaders"
+                            : "assets/shaders";
+    if (fs::exists(shaderDir)) {
+        for (auto& entry : fs::recursive_directory_iterator(shaderDir))
+            if (entry.is_regular_file()) {
+                auto ext = entry.path().extension().string();
+                for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+                if (ext == ".glsl" || ext == ".frag" || ext == ".vert")
+                    m_Scene.ShaderAssets.push_back(fs::absolute(entry.path()).string());
+            }
+    }
+
+    // Refresh audio assets index (recursive)
+    m_Scene.AudioAssets.clear();
+    std::string audioDir = !m_ProjectFolder.empty()
+                            ? m_ProjectFolder + "/assets/audio"
+                            : "assets/audio";
+    if (fs::exists(audioDir)) {
+        for (auto& entry : fs::recursive_directory_iterator(audioDir))
+            if (entry.is_regular_file()) {
+                auto ext = entry.path().extension().string();
+                for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+                if (ext == ".wav" || ext == ".ogg" || ext == ".mp3")
+                    m_Scene.AudioAssets.push_back(fs::absolute(entry.path()).string());
+            }
     }
 }
 
@@ -511,9 +821,17 @@ void Application::ExportGame(const std::string& outputFolder, const std::string&
 
         // 5. Write game.mode marker so the exe launches without editor UI
         {
+            std::string ver, auth, cover;
+            m_UIManager.GetExportMetadata(ver, auth, cover);
+            if (ver.empty()) ver = "1.0.0";
+            if (auth.empty()) auth = m_ProjectName.empty() ? "Unknown" : m_ProjectName;
+            if (cover.empty()) cover = "assets/cover.png";
             std::ofstream marker(outputFolder + "/game.mode");
             marker << "# tsuEngine standalone game marker\n";
             marker << "title=" << gameName << "\n";
+            marker << "version=" << ver << "\n";
+            marker << "author=" << auth << "\n";
+            marker << "cover=" << cover << "\n";
         }
 
         m_UIManager.Log("[Export] Game exported to: " + outputFolder);
@@ -646,6 +964,7 @@ void Application::RebuildPrefabPreview()
     const PrefabAsset& prefab = m_Scene.Prefabs[idx];
 
     // Clear old preview scene completely
+    FreeSceneMeshes(m_PrefabPreviewScene);
     m_PrefabPreviewScene = Scene();
 
     // Copy materials from main scene so mesh materials resolve
@@ -729,6 +1048,7 @@ void Application::RebuildRoomPreview()
     const RoomTemplate& room = m_Scene.RoomSets[rsi].Rooms[rri];
 
     // Clear preview scene
+    FreeSceneMeshes(m_RoomPreviewScene);
     m_RoomPreviewScene = Scene();
     m_RoomPreviewScene.Materials = m_Scene.Materials;
 
@@ -840,6 +1160,8 @@ void Application::RebuildRoomPreview()
 
     m_RoomPreviewSetIdx  = rsi;
     m_RoomPreviewRoomIdx = rri;
+    m_RoomPreviewBlockCount = (int)room.Blocks.size();
+    m_RoomPreviewInteriorCount = (int)room.Interior.size();
 }
 
 // ----------------------------------------------------------------
@@ -1598,6 +1920,7 @@ void Application::UpdatePlayerControllers(float dt)
             if (!pc._HeadbobBaseSet)
             {
                 pc._HeadbobBaseY  = m_Scene.Transforms[camEnt].Position.y;
+                pc._HeadbobBaseX  = m_Scene.Transforms[camEnt].Position.x;
                 pc._HeadbobBaseSet = true;
             }
 
@@ -1619,7 +1942,7 @@ void Application::UpdatePlayerControllers(float dt)
                 float swayX = sinf(pc._HeadbobPhase * 0.5f) * pc.HeadbobAmplitudeX * pc._HeadbobBlend;
 
                 m_Scene.Transforms[camEnt].Position.y = pc._HeadbobBaseY + bobY;
-                m_Scene.Transforms[camEnt].Position.x += swayX * 0.25f; // subtle lateral
+                m_Scene.Transforms[camEnt].Position.x = pc._HeadbobBaseX + swayX * 0.25f;
             }
             else
             {
@@ -1627,6 +1950,9 @@ void Application::UpdatePlayerControllers(float dt)
                 float restY = pc._HeadbobBaseY;
                 float curY  = m_Scene.Transforms[camEnt].Position.y;
                 m_Scene.Transforms[camEnt].Position.y = curY + (restY - curY) * std::min(dt / 0.08f, 1.0f);
+                float restX = pc._HeadbobBaseX;
+                float curX  = m_Scene.Transforms[camEnt].Position.x;
+                m_Scene.Transforms[camEnt].Position.x = curX + (restX - curX) * std::min(dt / 0.08f, 1.0f);
             }
         }
     }
@@ -1732,6 +2058,7 @@ void Application::UpdateTriggers(float dt)
                 if (tr.Channel >= 0)
                     m_Scene.SetChannelBool(tr.Channel, tr.InsideValue);
                 tr._HasFired = true;
+                LuaSystem::FireTriggerEnter(i);
             }
         }
         else if (wasInside && !anyPlayerInside)
@@ -1739,6 +2066,7 @@ void Application::UpdateTriggers(float dt)
             // Exit event
             if (tr.Channel >= 0)
                 m_Scene.SetChannelBool(tr.Channel, tr.OutsideValue);
+            LuaSystem::FireTriggerExit(i);
         }
     }
 }
@@ -1771,14 +2099,14 @@ void Application::UpdateAnimators(float dt)
         // Delay
         if (!an._DelayDone)
         {
-            an._Timer += dt;
+            an._Timer += dt * std::max(0.0f, an.PlaybackSpeed);
             if (an._Timer < an.Delay) continue;
             an._Timer = 0.0f;
             an._DelayDone = true;
         }
 
         float dur = std::max(an.Duration, 0.001f);
-        an._Timer += dt;
+        an._Timer += dt * std::max(0.0f, an.PlaybackSpeed);
         float rawT = std::min(an._Timer / dur, 1.0f);
 
         // Handle oscillation direction
@@ -1796,15 +2124,19 @@ void Application::UpdateAnimators(float dt)
         }
 
         float easedT = applyEasing(phaseT, an.Easing);
-        glm::vec3 value = glm::mix(an.From, an.To, easedT);
+        glm::vec3 target = glm::mix(an.From, an.To, easedT);
 
         // Apply to entity transform
         if (i < (int)m_Scene.Transforms.size())
         {
             auto& tr = m_Scene.Transforms[i];
-            if      (an.Property == AnimatorProperty::Position) tr.Position = value;
-            else if (an.Property == AnimatorProperty::Rotation) tr.Rotation = value;
-            else if (an.Property == AnimatorProperty::Scale)    tr.Scale    = value;
+            float w = glm::clamp(an.BlendWeight, 0.0f, 1.0f);
+            if (an.Property == AnimatorProperty::Position)
+                tr.Position = glm::mix(tr.Position, target, w);
+            else if (an.Property == AnimatorProperty::Rotation)
+                tr.Rotation = glm::mix(tr.Rotation, target, w);
+            else if (an.Property == AnimatorProperty::Scale)
+                tr.Scale    = glm::mix(tr.Scale,    target, w);
         }
 
         // Advance and handle end-of-cycle
@@ -1824,6 +2156,144 @@ void Application::UpdateAnimators(float dt)
     }
 }
 
+// ----------------------------------------------------------------
+// UpdateAudio — simple 3D attenuation + barrier occlusion
+// ----------------------------------------------------------------
+void Application::UpdateAudio(float dt)
+{
+    (void)dt;
+    // Camera position for listener
+    int camIdx = m_Scene.GetActiveGameCamera();
+    glm::vec3 listenerPos = (camIdx >= 0) ? m_Scene.GetEntityWorldPos(camIdx) : m_EditorCamera.GetPosition();
+    for (int i = 0; i < (int)m_Scene.AudioSources.size(); ++i)
+    {
+        auto& src = m_Scene.AudioSources[i];
+        if (!src.Active || !src.Enabled) continue;
+        if (src.TriggerOneShot)
+        {
+            bool gateOk = true;
+            if (src.GateChannel >= 0)
+            {
+                bool gv = m_Scene.GetChannelBool(src.GateChannel, src.GateValue);
+                gateOk = (gv == src.GateValue);
+            }
+            if (gateOk && !src._GatePrev)
+            {
+                src._Playing = true;
+                src._GatePrev = true;
+            }
+            else if (!gateOk)
+            {
+                src._GatePrev = false;
+            }
+        }
+        glm::vec3 pos = m_Scene.GetEntityWorldPos(i);
+        float d = glm::length(pos - listenerPos);
+        float gain = 0.0f;
+        if (src.Spatial)
+        {
+            if (d <= src.MinDistance) gain = 1.0f;
+            else if (d >= src.MaxDistance) gain = 0.0f;
+            else gain = 1.0f - (d - src.MinDistance) / std::max(0.001f, (src.MaxDistance - src.MinDistance));
+        }
+        else gain = 1.0f;
+        // Occlusion by barriers (simple AABB ray test accumulating occlusion)
+        float occAccum = 0.0f;
+        if (d > 0.001f) // skip occlusion when source == listener
+        {
+            glm::vec3 dir = (listenerPos - pos) / d; // already know length = d
+            for (int bi = 0; bi < (int)m_Scene.AudioBarriers.size(); ++bi)
+            {
+                const auto& b = m_Scene.AudioBarriers[bi];
+                if (!b.Active || !b.Enabled) continue;
+                glm::vec3 bc = m_Scene.GetEntityWorldPos(bi) + b.Offset;
+                glm::vec3 half = b.Size;
+                // Slab intersection test (signed invD for correct interval sorting)
+                glm::vec3 invD;
+                invD.x = (std::abs(dir.x) > 1e-6f) ? (1.0f / dir.x) : (dir.x >= 0 ? 1e6f : -1e6f);
+                invD.y = (std::abs(dir.y) > 1e-6f) ? (1.0f / dir.y) : (dir.y >= 0 ? 1e6f : -1e6f);
+                invD.z = (std::abs(dir.z) > 1e-6f) ? (1.0f / dir.z) : (dir.z >= 0 ? 1e6f : -1e6f);
+                glm::vec3 t0 = (bc - half - pos) * invD;
+                glm::vec3 t1 = (bc + half - pos) * invD;
+                float tmin = std::max(std::max(std::min(t0.x, t1.x), std::min(t0.y, t1.y)), std::min(t0.z, t1.z));
+                float tmax = std::min(std::min(std::max(t0.x, t1.x), std::max(t0.y, t1.y)), std::max(t0.z, t1.z));
+                if (tmax >= std::max(0.0f, tmin) && tmin < d)
+                    occAccum += b.Occlusion;
+            }
+        }
+        gain *= std::max(0.0f, 1.0f - glm::clamp(occAccum, 0.0f, 1.0f) * src.OcclusionFactor);
+        src._CurrentGain = gain * src.Volume;
+        if (src.OutputChannel >= 0)
+            m_Scene.SetChannelFloat(src.OutputChannel, src._CurrentGain);
+    }
+}
+// ----------------------------------------------------------------
+// UpdateAnimationControllers — apply state machines to Animators
+// ----------------------------------------------------------------
+void Application::UpdateAnimationControllers(float dt)
+{
+    for (int i = 0; i < (int)m_Scene.AnimationControllers.size(); ++i)
+    {
+        auto& ac = m_Scene.AnimationControllers[i];
+        if (!ac.Active || !ac.Enabled) continue;
+        if (ac._CurrentState < 0)
+        {
+            if (ac.AutoStart && ac.DefaultState >= 0 && ac.DefaultState < (int)ac.States.size())
+            {
+                ac._CurrentState = ac.DefaultState;
+                ac._StateTime = 0.0f;
+            }
+            else continue;
+        }
+        ac._StateTime += dt;
+        // Evaluate transitions
+        int nextState = ac._CurrentState;
+        for (const auto& tr : ac.Transitions)
+        {
+            if (tr.FromState != ac._CurrentState) continue;
+            if (tr.ExitTime > 0.0f && ac._StateTime < tr.ExitTime) continue;
+            bool cond = false;
+            if (tr.Channel >= 0)
+            {
+                switch (tr.Condition)
+                {
+                    case AnimationConditionOp::BoolTrue:   cond = m_Scene.GetChannelBool(tr.Channel, false); break;
+                    case AnimationConditionOp::BoolFalse:  cond = !m_Scene.GetChannelBool(tr.Channel, false); break;
+                    case AnimationConditionOp::FloatGreater: cond = (m_Scene.GetChannelFloat(tr.Channel, 0.0f) > tr.Threshold); break;
+                    case AnimationConditionOp::FloatLess:    cond = (m_Scene.GetChannelFloat(tr.Channel, 0.0f) < tr.Threshold); break;
+                }
+            }
+            if (cond) { nextState = tr.ToState; break; }
+        }
+        if (nextState != ac._CurrentState && nextState >= 0 && nextState < (int)ac.States.size())
+        {
+            ac._CurrentState = nextState;
+            ac._StateTime = 0.0f;
+            const auto& st = ac.States[nextState];
+            // Apply to Animator component on same entity
+            if (i < (int)m_Scene.Animators.size())
+            {
+                auto& an = m_Scene.Animators[i];
+                an.Active    = true;
+                an.Enabled   = true;
+                an.Playing   = st.AutoPlay;
+                an.AutoPlay  = st.AutoPlay;
+                an.Property  = st.Property;
+                an.Mode      = st.Mode;
+                an.Easing    = st.Easing;
+                an.From      = st.From;
+                an.To        = st.To;
+                an.Duration  = st.Duration;
+                an.Delay     = st.Delay;
+                an.PlaybackSpeed = st.PlaybackSpeed;
+                an.BlendWeight   = st.BlendWeight;
+                an._Timer    = 0.0f;
+                an._DelayDone = false;
+                an._Phase   = 0.0f;
+            }
+        }
+    }
+}
 int Application::RaycastScene(float mx, float my, int winW, int winH)
 {
     float aspect  = (float)winW / (float)winH;
@@ -1900,6 +2370,93 @@ int Application::RaycastScene(float mx, float my, int winW, int winH)
     return best;
 }
 
+// ----------------------------------------------------------------
+// UpdateSkinnedMeshes — CPU skinning using loaded skeleton weights
+// ----------------------------------------------------------------
+void Application::UpdateSkinnedMeshes(float dt)
+{
+    (void)dt;
+    for (int i = 0; i < (int)m_Scene.SkinnedMeshes.size(); ++i)
+    {
+        auto& sk = m_Scene.SkinnedMeshes[i];
+        if (!sk.Active || !sk.Enabled) continue;
+        if (i >= (int)m_Scene.MeshRenderers.size()) continue;
+        Mesh* mesh = m_Scene.MeshRenderers[i].MeshPtr;
+        if (!mesh) continue;
+        if (!sk.Loaded || sk.BoneCount <= 0) continue;
+        if (sk.BaseVertices.size() != mesh->GetCpuVertices().size())
+            sk.BaseVertices = mesh->GetCpuVertices();
+        std::vector<Mesh::CpuVertex> deformed = sk.BaseVertices;
+        // Compute skinning: for each vertex apply weighted bone matrices
+        for (size_t vi = 0; vi < deformed.size(); ++vi)
+        {
+            glm::vec4 pos = glm::vec4(sk.BaseVertices[vi].pos, 1.0f);
+            glm::vec3 nor = sk.BaseVertices[vi].normal;
+            glm::ivec4 bi = (vi < sk.BoneIndices.size()) ? sk.BoneIndices[vi] : glm::ivec4(0);
+            glm::vec4  bw = (vi < sk.BoneWeights.size()) ? sk.BoneWeights[vi] : glm::vec4(1,0,0,0);
+            glm::mat4 m0 = (bi.x >= 0 && bi.x < sk.BoneCount) ? sk.Pose[bi.x] : glm::mat4(1.0f);
+            glm::mat4 m1 = (bi.y >= 0 && bi.y < sk.BoneCount) ? sk.Pose[bi.y] : glm::mat4(1.0f);
+            glm::mat4 m2 = (bi.z >= 0 && bi.z < sk.BoneCount) ? sk.Pose[bi.z] : glm::mat4(1.0f);
+            glm::mat4 m3 = (bi.w >= 0 && bi.w < sk.BoneCount) ? sk.Pose[bi.w] : glm::mat4(1.0f);
+            glm::vec4 p2 = m0 * pos * bw.x + m1 * pos * bw.y + m2 * pos * bw.z + m3 * pos * bw.w;
+            glm::vec3 n2 = glm::mat3(m0) * nor * bw.x + glm::mat3(m1) * nor * bw.y + glm::mat3(m2) * nor * bw.z + glm::mat3(m3) * nor * bw.w;
+            deformed[vi].pos    = glm::vec3(p2);
+            deformed[vi].normal = glm::normalize(n2);
+        }
+        mesh->UpdateCpuVertices(deformed);
+    }
+}
+
+bool Application::LoadSkeletonForEntity(int idx, const std::string& path)
+{
+    if (idx < 0 || idx >= (int)m_Scene.SkinnedMeshes.size()) return false;
+    auto& sk = m_Scene.SkinnedMeshes[idx];
+    sk.SkeletonPath = path;
+    sk.Active = true;
+    sk.Enabled = true;
+    std::ifstream f(path);
+    if (!f.is_open()) return false;
+    std::string line;
+    int stage = 0;
+    while (std::getline(f, line))
+    {
+        if (line.empty() || line[0] == '#') continue;
+        if (line == "[bones]") { stage = 1; continue; }
+        if (line == "[bindpose]") { stage = 2; continue; }
+        if (line == "[weights]") { stage = 3; continue; }
+        std::istringstream ss(line);
+        if (stage == 1)
+        {
+            std::string name; int parent;
+            ss >> name >> parent;
+            sk.Parent.push_back(parent);
+            sk.BoneCount++;
+        }
+        else if (stage == 2)
+        {
+            glm::mat4 m(1.0f);
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c)
+                    ss >> m[c][r];
+            sk.BindPose.push_back(m);
+            sk.Pose.push_back(m);
+        }
+        else if (stage == 3)
+        {
+            int vi; int i0,i1,i2,i3; float w0,w1,w2,w3;
+            ss >> vi >> i0 >> w0 >> i1 >> w1 >> i2 >> w2 >> i3 >> w3;
+            if ((size_t)vi >= sk.BoneIndices.size())
+            {
+                sk.BoneIndices.resize(vi + 1, glm::ivec4(0));
+                sk.BoneWeights.resize(vi + 1, glm::vec4(1,0,0,0));
+            }
+            sk.BoneIndices[vi] = glm::ivec4(i0,i1,i2,i3);
+            sk.BoneWeights[vi] = glm::vec4(w0,w1,w2,w3);
+        }
+    }
+    sk.Loaded = (sk.BoneCount > 0 && !sk.BindPose.empty());
+    return sk.Loaded;
+}
 void Application::HandleToolbarInput()
 {
     // ImGui play/pause buttons (polled from UIManager)
@@ -1910,12 +2467,15 @@ void Application::HandleToolbarInput()
         {
             SaveEditorState();
             m_Mode = EngineMode::Game;
+            SpawnMultiplayerPlayers();
+            LuaSystem::SetWindow(m_Window.GetNativeWindow());
             LuaSystem::Init(m_Scene);
             LuaSystem::StartScripts();
         }
         else
         {
             LuaSystem::Shutdown();
+            DespawnMultiplayerPlayers();
             RestoreEditorState();
             m_Mode = EngineMode::Editor;
         }
@@ -1935,12 +2495,15 @@ void Application::HandleToolbarInput()
         {
             SaveEditorState();
             m_Mode = EngineMode::Game;
+            SpawnMultiplayerPlayers();
+            LuaSystem::SetWindow(m_Window.GetNativeWindow());
             LuaSystem::Init(m_Scene);
             LuaSystem::StartScripts();
         }
         else
         {
             LuaSystem::Shutdown();
+            DespawnMultiplayerPlayers();
             RestoreEditorState();
             m_Mode = EngineMode::Editor;
         }
@@ -1995,6 +2558,7 @@ void Application::Run()
         glfwSetInputMode(m_Window.GetNativeWindow(), GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
         // Start Lua scripts
+        LuaSystem::SetWindow(m_Window.GetNativeWindow());
         LuaSystem::Init(m_Scene);
         LuaSystem::StartScripts();
         m_Mode = EngineMode::Game;
@@ -2016,9 +2580,31 @@ void Application::Run()
             // Game logic
             UpdatePlayerControllers(deltaTime);
             UpdateMouseLook(deltaTime);
+            MultiplayerSystem::Update(m_Scene, deltaTime);
             UpdateTriggers(deltaTime);
             UpdateAnimators(deltaTime);
             LuaSystem::UpdateScripts(m_Scene, deltaTime);
+
+            // Handle Lua scene.loadScene() request (standalone game mode)
+            {
+                std::string pendingScene = LuaSystem::GetPendingLoadScene();
+                if (!pendingScene.empty()) {
+                    namespace fs = std::filesystem;
+                    LuaSystem::Shutdown();
+                    for (auto& mr : m_Scene.MeshRenderers)
+                        if (mr.MeshPtr) { delete mr.MeshPtr; mr.MeshPtr = nullptr; }
+                    m_Scene = Scene{};
+                    std::string fullPath = pendingScene;
+                    if (!fs::path(pendingScene).is_absolute())
+                        fullPath = (std::string("assets/scenes/") + pendingScene);
+                    if (fs::exists(fullPath))
+                        SceneSerializer::Load(m_Scene, fullPath);
+                    LuaSystem::SetWindow(m_Window.GetNativeWindow());
+                    LuaSystem::Init(m_Scene);
+                    LuaSystem::StartScripts();
+                }
+            }
+
             m_Scene.OnUpdate(deltaTime);
             PhysicsSystem::Update(m_Scene, deltaTime);
             MazeGenerator::Update(m_Scene, deltaTime);
@@ -2051,6 +2637,20 @@ void Application::Run()
 
     // ---- Editor mode ----
     m_UIManager.Init(m_Window.GetNativeWindow());
+
+    // Load default scene if present (no project open yet)
+    {
+        namespace fs = std::filesystem;
+        const std::string defScene = "assets/scenes/default.tscene";
+        if (m_CurrentScenePath.empty() && fs::exists(defScene)) {
+            SceneSerializer::Load(m_Scene, defScene);
+            m_EditorCamera.SetPosition(m_Scene.EditorCamPos);
+            m_EditorCamera.SetYaw(m_Scene.EditorCamYaw);
+            m_EditorCamera.SetPitch(m_Scene.EditorCamPitch);
+            m_CurrentScenePath = fs::absolute(defScene).string();
+        }
+        RefreshSceneFiles();
+    }
 
     // Wire up the Win32 timer render callback so the splash animation
     // keeps playing while the user drags the title bar.
@@ -2098,6 +2698,68 @@ void Application::Run()
             m_UIManager.ConsumeExportGame(outPath, gameName);
             if (!outPath.empty()) ExportGame(outPath, gameName);
         }
+#ifdef _WIN32
+        if (m_UIManager.HasPendingLaunchMpHost()) {
+            std::string nick; int port = 27015;
+            m_UIManager.ConsumePendingLaunchMpHost(nick, port);
+            char exeBuf[4096] = {};
+            GetModuleFileNameA(nullptr, exeBuf, sizeof(exeBuf));
+            std::filesystem::path exeDir = std::filesystem::path(exeBuf).parent_path();
+            std::filesystem::path gameExe = exeDir / "_engine" / "GameRuntime.exe";
+            if (!std::filesystem::exists(gameExe)) gameExe = exeDir / "GameRuntime.exe";
+            std::string cmd = "\"" + gameExe.string() + "\" --mp-mode=host --mp-port=" + std::to_string(port) + " --mp-nick=\"" + nick + "\"";
+            LaunchGameRuntimeProcess(cmd);
+        }
+        if (m_UIManager.HasPendingLaunchMpClient()) {
+            std::string server, nick; int port = 27015;
+            m_UIManager.ConsumePendingLaunchMpClient(server, nick, port);
+            char exeBuf[4096] = {};
+            GetModuleFileNameA(nullptr, exeBuf, sizeof(exeBuf));
+            std::filesystem::path exeDir = std::filesystem::path(exeBuf).parent_path();
+            std::filesystem::path gameExe = exeDir / "_engine" / "GameRuntime.exe";
+            if (!std::filesystem::exists(gameExe)) gameExe = exeDir / "GameRuntime.exe";
+            std::string cmd = "\"" + gameExe.string() + "\" --mp-mode=client --mp-server=" + server + " --mp-port=" + std::to_string(port) + " --mp-nick=\"" + nick + "\"";
+            LaunchGameRuntimeProcess(cmd);
+        }
+        if (m_UIManager.HasPendingLaunchMpPair()) {
+            std::string hostNick, clientNick; int port = 27015;
+            m_UIManager.ConsumePendingLaunchMpPair(hostNick, clientNick, port);
+            // Auto-save current scene so both GameRuntime windows load the latest version
+            if (!m_CurrentScenePath.empty()) {
+                m_Scene.EditorCamPos   = m_EditorCamera.GetPosition();
+                m_Scene.EditorCamYaw   = m_EditorCamera.GetYaw();
+                m_Scene.EditorCamPitch = m_EditorCamera.GetPitch();
+                SceneSerializer::Save(m_Scene, m_CurrentScenePath);
+            }
+            char exeBuf[4096] = {};
+            GetModuleFileNameA(nullptr, exeBuf, sizeof(exeBuf));
+            std::filesystem::path exeDir = std::filesystem::path(exeBuf).parent_path();
+            std::filesystem::path gameExe = exeDir / "_engine" / "GameRuntime.exe";
+            if (!std::filesystem::exists(gameExe)) gameExe = exeDir / "GameRuntime.exe";
+            std::string sceneFlag = m_CurrentScenePath.empty() ? "" : " --scene=\"" + m_CurrentScenePath + "\"";
+            std::string hostCmd = "\"" + gameExe.string() + "\" --windowed --mp-mode=host --mp-port=" + std::to_string(port) + " --mp-nick=\"" + hostNick + "\"" + sceneFlag;
+            std::string clientCmd = "\"" + gameExe.string() + "\" --windowed --mp-mode=client --mp-server=127.0.0.1 --mp-port=" + std::to_string(port) + " --mp-nick=\"" + clientNick + "\"" + sceneFlag;
+            LaunchGameRuntimeProcess(hostCmd);
+            LaunchGameRuntimeProcess(clientCmd);
+        }
+#endif
+
+        // ---- Poll scene operation requests from UIManager ----
+        if (m_UIManager.HasPendingNewScene()) {
+            std::string sname;
+            m_UIManager.ConsumeNewScene(sname);
+            if (!sname.empty()) NewScene(sname);
+        }
+        if (m_UIManager.HasPendingOpenScene()) {
+            std::string spath;
+            m_UIManager.ConsumeOpenScene(spath);
+            if (!spath.empty()) OpenScene(spath);
+        }
+        if (m_UIManager.HasPendingDeleteScene()) {
+            std::string spath;
+            m_UIManager.ConsumeDeleteScene(spath);
+            if (!spath.empty()) DeleteScene(spath);
+        }
 
         // s_DroppedFiles is processed in UIManager::Render (which knows the current folder)
         Renderer::BeginFrame();
@@ -2110,9 +2772,41 @@ void Application::Run()
         {
             UpdatePlayerControllers(deltaTime);
             UpdateMouseLook(deltaTime);
+            MultiplayerSystem::Update(m_Scene, deltaTime);
             UpdateTriggers(deltaTime);
+            UpdateAnimationControllers(deltaTime);
             UpdateAnimators(deltaTime);
+            UpdateSkinnedMeshes(deltaTime);
+            UpdateAudio(deltaTime);
             LuaSystem::UpdateScripts(m_Scene, deltaTime);
+
+            // Handle Lua scene.loadScene() request (editor game mode)
+            {
+                std::string pendingScene = LuaSystem::GetPendingLoadScene();
+                if (!pendingScene.empty()) {
+                    namespace fs = std::filesystem;
+                    LuaSystem::Shutdown();
+                    RestoreEditorState();
+                    for (auto& mr : m_Scene.MeshRenderers)
+                        if (mr.MeshPtr) { delete mr.MeshPtr; mr.MeshPtr = nullptr; }
+                    m_Scene = Scene{};
+                    std::string fullPath = pendingScene;
+                    if (!fs::path(pendingScene).is_absolute() && !m_ProjectFolder.empty())
+                        fullPath = m_ProjectFolder + "/assets/scenes/" + pendingScene;
+                    if (fs::exists(fullPath)) {
+                        SceneSerializer::Load(m_Scene, fullPath);
+                        m_EditorCamera.SetPosition(m_Scene.EditorCamPos);
+                        m_EditorCamera.SetYaw(m_Scene.EditorCamYaw);
+                        m_EditorCamera.SetPitch(m_Scene.EditorCamPitch);
+                        m_CurrentScenePath = fs::absolute(fullPath).string();
+                    }
+                    RefreshSceneFiles();
+                    LuaSystem::SetWindow(m_Window.GetNativeWindow());
+                    LuaSystem::Init(m_Scene);
+                    LuaSystem::StartScripts();
+                }
+            }
+
             m_Scene.OnUpdate(deltaTime);
             PhysicsSystem::Update(m_Scene, deltaTime);
             MazeGenerator::Update(m_Scene, deltaTime);
@@ -2221,6 +2915,7 @@ void Application::Run()
             // If we just left the prefab editor, drop the preview scene
             if (m_PrefabPreviewIdx >= 0)
             {
+                FreeSceneMeshes(m_PrefabPreviewScene);
                 m_PrefabPreviewScene = Scene();
                 m_PrefabPreviewIdx = -1;
             }
@@ -2233,9 +2928,17 @@ void Application::Run()
             int rri = m_UIManager.GetEditingRoomIdx();
             if (rsi != m_RoomPreviewSetIdx || rri != m_RoomPreviewRoomIdx)
                 RebuildRoomPreview();
-            // Block cubes may have changed — rebuild each frame (cheap for small rooms)
             else
-                RebuildRoomPreview();
+            {
+                if (rsi >= 0 && rsi < (int)m_Scene.RoomSets.size() &&
+                    rri >= 0 && rri < (int)m_Scene.RoomSets[rsi].Rooms.size())
+                {
+                    const auto& room = m_Scene.RoomSets[rsi].Rooms[rri];
+                    if ((int)room.Blocks.size() != m_RoomPreviewBlockCount ||
+                        (int)room.Interior.size() != m_RoomPreviewInteriorCount)
+                        RebuildRoomPreview();
+                }
+            }
         }
         else
         {
@@ -2246,9 +2949,12 @@ void Application::Run()
                     LightmapManager::Instance().Release(m_RoomPreviewLightmap);
                     m_RoomPreviewLightmap.clear();
                 }
+                FreeSceneMeshes(m_RoomPreviewScene);
                 m_RoomPreviewScene = Scene();
                 m_RoomPreviewSetIdx = -1;
                 m_RoomPreviewRoomIdx = -1;
+                m_RoomPreviewBlockCount = -1;
+                m_RoomPreviewInteriorCount = -1;
             }
         }
 
@@ -2626,6 +3332,49 @@ void Application::Run()
         // UI panels — always visible in all modes
         m_UIManager.Render(m_Scene, m_SelectedEntity, winW, winH, s_DroppedFiles, m_GizmoMode);
 
+        // Entity Network HUD overlay
+        if (m_UIManager.IsEntityNetHUDEnabled())
+        {
+            auto projectToScreen = [&](const glm::vec3& wp) -> ImVec2 {
+                int gcIdx = m_Scene.GetActiveGameCamera();
+                bool useGame = showGameView && gcIdx >= 0;
+                glm::mat4 view;
+                glm::mat4 proj;
+                float aspect = (float)winW / (float)winH;
+                if (useGame) {
+                    auto& cam = m_Scene.GameCameras[gcIdx];
+                    auto& tr  = m_Scene.Transforms[gcIdx];
+                    view = glm::lookAt(tr.Position, tr.Position + cam.Front, cam.Up);
+                    proj = cam.GetProjection(aspect);
+                } else {
+                    view = m_EditorCamera.GetViewMatrix();
+                    proj = m_EditorCamera.GetProjection(aspect);
+                }
+                glm::vec4 clip = proj * view * glm::vec4(wp, 1.0f);
+                if (clip.w <= 0.0001f) return ImVec2(-10000.0f, -10000.0f);
+                glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                float sx = (ndc.x * 0.5f + 0.5f) * (float)winW;
+                float sy = (-ndc.y * 0.5f + 0.5f) * (float)winH;
+                return ImVec2(sx, sy);
+            };
+            ImDrawList* dl = ImGui::GetForegroundDrawList();
+            for (int i = 0; i < (int)m_Scene.MultiplayerControllers.size(); ++i)
+            {
+                const auto& mc = m_Scene.MultiplayerControllers[i];
+                if (!mc.Active || !mc.Enabled) continue;
+                glm::vec3 wp = m_Scene.GetEntityWorldPos(i);
+                ImVec2 sp = projectToScreen(wp + glm::vec3(0, 1.2f, 0));
+                if (sp.x < -1000.0f) continue;
+                char buf[128];
+                snprintf(buf, sizeof(buf), "%s  id:%llu  local:%s  repl:%s",
+                         mc.Nickname.c_str(), (unsigned long long)mc.NetworkId,
+                         mc.OwnedLocally ? "Y" : "N",
+                         mc.Replicated ? "Y" : "N");
+                ImU32 col = mc.OwnedLocally ? IM_COL32(240,220,70,255) : IM_COL32(150,200,255,255);
+                dl->AddText(ImVec2(sp.x, sp.y), col, buf);
+            }
+        }
+
         // Viewport right-click context menu (editor mode only)
         if (m_Mode == EngineMode::Editor && !showGameView && !showProjectView && m_OpenViewportMenu)
         {
@@ -2676,6 +3425,27 @@ void Application::Run()
                     int parent = hasHitEntity ? m_RmbHitEntity : -1;
                     if (ImGui::MenuItem("Camera")) CreateViewportEntity("Camera", parent, m_RmbWorldPos);
                     ImGui::EndMenu();
+                }
+
+                if (ImGui::MenuItem("Empty Object"))
+                {
+                    int parent = hasHitEntity ? m_RmbHitEntity : -1;
+                    CreateViewportEntity("Empty", parent, m_RmbWorldPos);
+                }
+
+                if (ImGui::MenuItem("Multiplayer Manager"))
+                {
+                    Entity e = m_Scene.CreateEntity("Multiplayer Manager");
+                    int id = (int)e.GetID();
+                    m_Scene.Transforms[id].Position = m_RmbWorldPos;
+                    if (hasHitEntity)
+                        m_Scene.SetEntityParent(id, m_RmbHitEntity);
+                    m_SelectedEntity = id;
+                    if (id < (int)m_Scene.MultiplayerManagers.size())
+                    {
+                        m_Scene.MultiplayerManagers[id].Active = true;
+                        m_Scene.MultiplayerManagers[id].Enabled = true;
+                    }
                 }
                 ImGui::EndPopup();
             }

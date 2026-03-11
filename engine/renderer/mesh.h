@@ -45,6 +45,8 @@ public:
     glm::vec3 BoundsMin = glm::vec3(-0.5f);
     glm::vec3 BoundsMax = glm::vec3( 0.5f);
 
+    void UpdateCpuVertices(const std::vector<CpuVertex>& verts);
+
 private:
     unsigned int VAO, VBO;
     int m_VertexCount = 0;

@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <deque>
+#include <unordered_map>
 
 struct GLFWwindow;
 struct ImDrawList;
@@ -114,7 +115,22 @@ public:
         gameName   = m_DlgGameName;
         m_PendingExportGame = false;
     }
+    void GetExportMetadata(std::string& version, std::string& author, std::string& cover) const {
+        version = m_DlgGameVersion;
+        author  = m_DlgGameAuthor;
+        cover   = m_DlgGameCover;
+    }
+    bool IsEntityNetHUDEnabled() const { return m_ShowEntityNetHUD; }
     void SetProjectDisplayName(const std::string& n) { m_ProjectDisplayName = n; }
+
+    // Scene management (raised by Scenes panel, polled by Application)
+    void SetSceneFiles(const std::vector<std::string>& files, const std::string& currentPath);
+    bool HasPendingNewScene()  const { return m_PendingNewScene; }
+    void ConsumeNewScene(std::string& name)  { name = m_DlgNewSceneName;  m_PendingNewScene  = false; }
+    bool HasPendingOpenScene() const { return m_PendingOpenScene; }
+    void ConsumeOpenScene(std::string& path) { path = m_DlgOpenScenePath; m_PendingOpenScene = false; }
+    bool HasPendingDeleteScene() const { return m_PendingDeleteScene; }
+    void ConsumeDeleteScene(std::string& path) { path = m_DlgDeleteScenePath; m_PendingDeleteScene = false; }
 
     // Play / Pause toolbar (rendered as ImGui buttons, polled by Application)
     bool HasPendingPlayToggle()  const { return m_PendingPlayToggle; }
@@ -122,6 +138,12 @@ public:
     bool HasPendingPauseToggle() const { return m_PendingPauseToggle; }
     void ConsumePauseToggle()          { m_PendingPauseToggle = false; }
     void SetPlayState(bool playing, bool paused) { m_IsPlaying = playing; m_IsPaused = paused; }
+    bool HasPendingLaunchMpHost() const { return m_PendingLaunchMpHost; }
+    bool HasPendingLaunchMpClient() const { return m_PendingLaunchMpClient; }
+    bool HasPendingLaunchMpPair() const { return m_PendingLaunchMpPair; }
+    void ConsumePendingLaunchMpHost(std::string& nick, int& port);
+    void ConsumePendingLaunchMpClient(std::string& server, std::string& nick, int& port);
+    void ConsumePendingLaunchMpPair(std::string& hostNick, std::string& clientNick, int& port);
 
     // Width reserved on each side (pixels) for renderers to know the viewport
     static constexpr int k_PanelWidth = 280;
@@ -168,7 +190,10 @@ private:
     bool              m_PendingClearSceneLightmap = false;
     std::string       m_BakeStatus;          // "" = no status, else e.g. "Baked!" or "Error"
     std::string       m_SceneLightmapPath;   // path of the scene lightmap (set by Application)
-    bool              m_LightmapSettingsOpen = false;
+    bool              m_RealtimeWindowOpen = false;
+    bool              m_BakedLightingWindowOpen = false;
+    bool              m_MultiplayerTestWindowOpen = false;
+    bool              m_AnimControllerWindowOpen = false;
     LightBaker::BakeParams m_BakeParams;
     bool              m_BakeInProgress = false;
     float             m_BakeProgress = 0.0f;
@@ -212,12 +237,36 @@ private:
     char        m_DlgOpenPath[512]     = {};
     char        m_DlgExportPath[512]   = {};
     char        m_DlgGameName[256]     = {};
+    char        m_DlgGameVersion[64]   = {"1.0.0"};
+    char        m_DlgGameAuthor[128]   = {};
+    char        m_DlgGameCover[260]    = {"assets/cover.png"};
+    bool        m_ShowEntityNetHUD     = false;
     std::string m_ProjectDisplayName   = "Untitled";
     // Play / Pause toolbar state
     bool        m_PendingPlayToggle    = false;
     bool        m_PendingPauseToggle   = false;
     bool        m_IsPlaying            = false;
     bool        m_IsPaused             = false;
+    bool        m_PendingLaunchMpHost  = false;
+    bool        m_PendingLaunchMpClient= false;
+    bool        m_PendingLaunchMpPair  = false;
+    char        m_MpServerBuf[128]     = "127.0.0.1";
+    char        m_MpHostNickBuf[64]    = "Host";
+    char        m_MpClientNickBuf[64]  = "Client";
+    int         m_MpPort               = 27015;
+
+    // Scenes panel state
+    std::vector<std::string>            m_SceneFiles;
+    std::unordered_map<std::string,int> m_SceneFileFolders; // virtual folder per scene path (-1 = root)
+    std::string              m_CurrentScenePath;
+    bool                     m_PendingNewScene    = false;
+    bool                     m_PendingOpenScene   = false;
+    bool                     m_PendingDeleteScene = false;
+    std::string              m_DlgNewSceneName;
+    std::string              m_DlgOpenScenePath;
+    std::string              m_DlgDeleteScenePath;
+    bool                     m_ShowNewSceneDlg    = false;
+    char                     m_NewSceneNameBuf[128] = {};
 };
 
 } // namespace tsu

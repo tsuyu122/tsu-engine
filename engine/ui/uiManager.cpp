@@ -1,9 +1,10 @@
-﻿#include "ui/uiManager.h"
+#include "ui/uiManager.h"
 #include "core/application.h"
 #include "renderer/renderer.h"
 #include "renderer/textureLoader.h"
 #include "renderer/lightmapManager.h"
 #include "renderer/mesh.h"
+#include "network/multiplayerSystem.h"
 #include "serialization/prefabSerializer.h"
 #include "scene/entity.h"
 #include <glad/glad.h>
@@ -281,17 +282,32 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             }
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Run"))
+        {
+            if (ImGui::MenuItem("Multiplayer Local Test..."))
+                m_MultiplayerTestWindowOpen = true;
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Windows"))
         {
+            if (ImGui::MenuItem("Realtime Graphics"))
+            {
+                m_RealtimeWindowOpen = true;
+                m_RequestViewportTab = 6;
+            }
+            if (ImGui::MenuItem("Baked Lighting"))
+            {
+                m_BakedLightingWindowOpen = true;
+                m_RequestViewportTab = 7;
+            }
             if (ImGui::MenuItem("Procedural Maze"))
             {
                 m_MazeWindowOpen = true;
                 m_RequestViewportTab = 4;
             }
-            if (ImGui::MenuItem("Lighting Settings"))
+            if (ImGui::MenuItem("Entity Network HUD", nullptr, m_ShowEntityNetHUD))
             {
-                m_LightmapSettingsOpen = true;
-                m_RequestViewportTab = 6;
+                m_ShowEntityNetHUD = !m_ShowEntityNetHUD;
             }
             ImGui::EndMenu();
         }
@@ -385,6 +401,14 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         ImGui::SetNextItemWidth(-1.f);
         ImGui::InputText("##gname", m_DlgGameName, sizeof(m_DlgGameName));
         ImGui::Spacing();
+        ImGui::TextUnformatted("Version:");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputText("##gver", m_DlgGameVersion, sizeof(m_DlgGameVersion));
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Author:");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputText("##gauth", m_DlgGameAuthor, sizeof(m_DlgGameAuthor));
+        ImGui::Spacing();
         ImGui::TextUnformatted("Output folder:");
         {
             float bw = ImGui::GetContentRegionAvail().x;
@@ -401,6 +425,10 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             }
 #endif
         }
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Cover image path (.png)");
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputText("##gcover", m_DlgGameCover, sizeof(m_DlgGameCover));
         ImGui::TextDisabled("The game .exe and assets/ will be placed in this folder.");
         ImGui::Spacing(); ImGui::Separator(); ImGui::Spacing();
         if (ImGui::Button("Export", ImVec2(120, 0))) {
@@ -1014,20 +1042,54 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 }
             }
 
-            // Lighting Settings tab (closeable, tab index 6)
-            if (m_LightmapSettingsOpen)
+            // Realtime Graphics tab (closeable, tab index 6)
+            if (m_RealtimeWindowOpen)
             {
-                bool keepLight = true;
-                if (ImGui::BeginTabItem("Lighting##lightingtab", &keepLight,
+                bool keepRt = true;
+                if (ImGui::BeginTabItem("Realtime Graphics##rttab", &keepRt,
                     (reqTab == 6) ? ImGuiTabItemFlags_SetSelected : 0))
                 {
                     m_ViewportTab = 6;
                     ImGui::EndTabItem();
                 }
-                if (!keepLight)
+                if (!keepRt)
                 {
-                    m_LightmapSettingsOpen = false;
+                    m_RealtimeWindowOpen = false;
                     if (m_ViewportTab == 6) m_ViewportTab = 0;
+                }
+            }
+
+            // Baked Lighting tab (closeable, tab index 7)
+            if (m_BakedLightingWindowOpen)
+            {
+                bool keepBk = true;
+                if (ImGui::BeginTabItem("Baked Lighting##bakedtab", &keepBk,
+                    (reqTab == 7) ? ImGuiTabItemFlags_SetSelected : 0))
+                {
+                    m_ViewportTab = 7;
+                    ImGui::EndTabItem();
+                }
+                if (!keepBk)
+                {
+                    m_BakedLightingWindowOpen = false;
+                    if (m_ViewportTab == 7) m_ViewportTab = 0;
+                }
+            }
+
+            // Animation Controller tab (closeable, tab index 8)
+            if (m_AnimControllerWindowOpen)
+            {
+                bool keepAc = true;
+                if (ImGui::BeginTabItem("Animation Controller##actab", &keepAc,
+                    (reqTab == 8) ? ImGuiTabItemFlags_SetSelected : 0))
+                {
+                    m_ViewportTab = 8;
+                    ImGui::EndTabItem();
+                }
+                if (!keepAc)
+                {
+                    m_AnimControllerWindowOpen = false;
+                    if (m_ViewportTab == 8) m_ViewportTab = 0;
                 }
             }
 
@@ -1487,9 +1549,9 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
     }
 
     // ---------------------------------------------------------------
-    // Lighting Settings viewport panel (tab 6)
+    // Realtime Graphics viewport panel (tab 6)
     // ---------------------------------------------------------------
-    if (m_ViewportTab == 6 && m_LightmapSettingsOpen)
+    if (m_ViewportTab == 6 && m_RealtimeWindowOpen)
     {
         const float vx = (float)m_LeftPanelWidth;
         const float vy = (float)topStackH;
@@ -1498,11 +1560,138 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
 
         ImGui::SetNextWindowPos(ImVec2(vx, vy), ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(vw, vh), ImGuiCond_Always);
-        ImGui::Begin("##lighting_view", nullptr,
+        ImGui::Begin("##realtime_view", nullptr,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
 
-        ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), "Lighting Settings");
+        ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), "Realtime Graphics");
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        auto& rt = scene.Realtime;
+        ImGui::Checkbox("Enable Shadows", &rt.EnableShadows);
+        ImGui::Checkbox("Frustum Culling", &rt.FrustumCulling);
+        ImGui::Checkbox("Distance Culling", &rt.DistanceCulling);
+        if (rt.DistanceCulling)
+            ImGui::SliderFloat("Max Draw Distance", &rt.MaxDrawDistance, 10.0f, 2000.0f, "%.0f");
+        ImGui::Checkbox("Use Fog", &rt.UseFog);
+        ImGui::Checkbox("Use Sky Ambient", &rt.UseSkyAmbient);
+        ImGui::SliderInt("Max Realtime Lights", &rt.MaxRealtimeLights, 1, 8);
+        ImGui::SliderInt("Shadow 2D Size", &rt.ShadowMapSize2D, 256, 4096);
+        ImGui::SliderInt("Shadow Cube Size", &rt.ShadowMapSizeCube, 128, 2048);
+        ImGui::SliderFloat("Dir Shadow Distance", &rt.DirectionalShadowDistance, 5.0f, 300.0f, "%.1f");
+        ImGui::SliderFloat("Dir Shadow Ortho", &rt.DirectionalShadowOrtho, 5.0f, 200.0f, "%.1f");
+
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), "Post-process");
+        ImGui::Spacing();
+        ImGui::Checkbox("SSAO Lite", &scene.PostProcess.SSAOEnabled);
+        ImGui::SliderFloat("SSAO Intensity", &scene.PostProcess.SSAOIntensity, 0.0f, 2.0f, "%.2f");
+        ImGui::SliderFloat("SSAO Radius", &scene.PostProcess.SSAORadius, 0.5f, 8.0f, "%.1f");
+        // --- External LUT ---
+        ImGui::Checkbox("Use External LUT", &scene.PostProcess.LUTEnabled);
+        if (scene.PostProcess.LUTEnabled)
+        {
+            static char s_LutPathBuf[512] = {};
+            static Scene* s_PrevLutScene = nullptr;
+            if (&scene != s_PrevLutScene)
+            {
+                s_PrevLutScene = &scene;
+                strncpy(s_LutPathBuf, scene.PostProcess.LUTPath.c_str(), sizeof(s_LutPathBuf)-1);
+                s_LutPathBuf[sizeof(s_LutPathBuf)-1] = '\0';
+            }
+            ImGui::TextDisabled("LUT Texture (drag from Assets or type path)");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputTextWithHint("##lut_path", "assets/lut.png", s_LutPathBuf, sizeof(s_LutPathBuf)))
+                scene.PostProcess.LUTPath = s_LutPathBuf;
+            if (ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH"))
+                {
+                    std::string path((const char*)p->Data, p->DataSize);
+                    strncpy(s_LutPathBuf, path.c_str(), sizeof(s_LutPathBuf)-1);
+                    scene.PostProcess.LUTPath = s_LutPathBuf;
+                }
+                ImGui::EndDragDropTarget();
+            }
+            ImGui::SliderFloat("LUT Strength", &scene.PostProcess.LUTStrength, 0.0f, 1.0f, "%.2f");
+        }
+
+        // --- External Post Shader ---
+        ImGui::Checkbox("Use External Post Shader", &scene.PostProcess.UseExternalPostShader);
+        if (scene.PostProcess.UseExternalPostShader)
+        {
+            static char s_PostPathBuf[512] = {};
+            static Scene* s_PrevPostScene = nullptr;
+            if (&scene != s_PrevPostScene)
+            {
+                s_PrevPostScene = &scene;
+                strncpy(s_PostPathBuf, scene.PostProcess.ExternalPostPath.c_str(), sizeof(s_PostPathBuf)-1);
+                s_PostPathBuf[sizeof(s_PostPathBuf)-1] = '\0';
+            }
+            ImGui::TextDisabled("Fragment shader file (drag from Assets or type path)");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputTextWithHint("##post_path", "assets/shaders/post.frag", s_PostPathBuf, sizeof(s_PostPathBuf)))
+                scene.PostProcess.ExternalPostPath = s_PostPathBuf;
+            if (ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH"))
+                {
+                    std::string path((const char*)p->Data, p->DataSize);
+                    strncpy(s_PostPathBuf, path.c_str(), sizeof(s_PostPathBuf)-1);
+                    scene.PostProcess.ExternalPostPath = s_PostPathBuf;
+                }
+                ImGui::EndDragDropTarget();
+            }
+        }
+
+        // --- External Color Config ---
+        ImGui::Checkbox("Use External Color Config", &scene.PostProcess.UseExternalColorCfg);
+        if (scene.PostProcess.UseExternalColorCfg)
+        {
+            static char s_ColorPathBuf[512] = {};
+            static Scene* s_PrevColorScene = nullptr;
+            if (&scene != s_PrevColorScene)
+            {
+                s_PrevColorScene = &scene;
+                strncpy(s_ColorPathBuf, scene.PostProcess.ExternalColorCfgPath.c_str(), sizeof(s_ColorPathBuf)-1);
+                s_ColorPathBuf[sizeof(s_ColorPathBuf)-1] = '\0';
+            }
+            ImGui::TextDisabled("Color config .ini file (drag from Assets or type path)");
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputTextWithHint("##color_path", "assets/color.ini", s_ColorPathBuf, sizeof(s_ColorPathBuf)))
+                scene.PostProcess.ExternalColorCfgPath = s_ColorPathBuf;
+            if (ImGui::BeginDragDropTarget())
+            {
+                if (const ImGuiPayload* p = ImGui::AcceptDragDropPayload("ASSET_PATH"))
+                {
+                    std::string path((const char*)p->Data, p->DataSize);
+                    strncpy(s_ColorPathBuf, path.c_str(), sizeof(s_ColorPathBuf)-1);
+                    scene.PostProcess.ExternalColorCfgPath = s_ColorPathBuf;
+                }
+                ImGui::EndDragDropTarget();
+            }
+        }
+        ImGui::End();
+    }
+
+    // ---------------------------------------------------------------
+    // Baked Lighting viewport panel (tab 7)
+    // ---------------------------------------------------------------
+    if (m_ViewportTab == 7 && m_BakedLightingWindowOpen)
+    {
+        const float vx = (float)m_LeftPanelWidth;
+        const float vy = (float)topStackH;
+        const float vw = (float)(winW - m_LeftPanelWidth - m_RightPanelWidth);
+        const float vh = (float)(winH - k_AssetH - topStackH);
+
+        ImGui::SetNextWindowPos(ImVec2(vx, vy), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(vw, vh), ImGuiCond_Always);
+        ImGui::Begin("##bakedlighting_view", nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+
+        ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), "Baked Lighting");
         ImGui::Separator();
         ImGui::Spacing();
 
@@ -1517,6 +1706,17 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         ImGui::SliderFloat("Lightmap Intensity##lm", &scene.LightmapIntensity, 0.0f, 4.0f, "%.2f");
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Runtime multiplier for baked GI.\n0 = disable baked contribution, 1 = default, >1 = stronger bake.\nAdjust without re-baking.");
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::TextColored(ImVec4(0.55f, 0.75f, 1.0f, 1.0f), "Auto Intensity Behavior");
+        ImGui::Checkbox("Auto Apply From Bake Peak", &scene.BakedLighting.AutoApplyLightmapIntensity);
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderFloat("Auto Multiplier", &scene.BakedLighting.AutoIntensityMultiplier, 0.1f, 4.0f, "%.2f");
+        ImGui::SetNextItemWidth(sliderW);
+        ImGui::SliderFloat("Max Auto Intensity", &scene.BakedLighting.MaxAutoIntensity, 0.1f, 8.0f, "%.2f");
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -1567,6 +1767,34 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Post-bake blur radius in texels. 1-2 reduces noise and banding.");
 
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Bake Presets");
+        if (ImGui::Button("Draft##bake_preset", ImVec2(110, 0)))
+        {
+            m_BakeParams.resolution = 256;
+            m_BakeParams.aoSamples = 16;
+            m_BakeParams.indirectSamples = 24;
+            m_BakeParams.bounceCount = 1;
+            m_BakeParams.denoiseRadius = 1;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Balanced##bake_preset", ImVec2(110, 0)))
+        {
+            m_BakeParams.resolution = 512;
+            m_BakeParams.aoSamples = 64;
+            m_BakeParams.indirectSamples = 96;
+            m_BakeParams.bounceCount = 2;
+            m_BakeParams.denoiseRadius = 1;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Production##bake_preset", ImVec2(110, 0)))
+        {
+            m_BakeParams.resolution = 1024;
+            m_BakeParams.aoSamples = 128;
+            m_BakeParams.indirectSamples = 192;
+            m_BakeParams.bounceCount = 3;
+            m_BakeParams.denoiseRadius = 2;
+        }
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
@@ -1640,6 +1868,182 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         }
 
         ImGui::End();
+    }
+
+    // Animation Controller viewport panel (tab 8)
+    if (m_ViewportTab == 8 && m_AnimControllerWindowOpen)
+    {
+        const float vx = (float)m_LeftPanelWidth;
+        const float vy = (float)topStackH;
+        const float vw = (float)(winW - m_LeftPanelWidth - m_RightPanelWidth);
+        const float vh = (float)(winH - k_AssetH - topStackH);
+        ImGui::SetNextWindowPos(ImVec2(vx, vy), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(vw, vh), ImGuiCond_Always);
+        ImGui::Begin("##anim_controller_view", nullptr,
+            ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoTitleBar);
+        ImGui::TextColored(ImVec4(0.85f, 0.80f, 1.0f, 1.0f), "Animation Controller");
+        ImGui::Separator();
+        ImGui::Spacing();
+        int currentIdx = selectedEntity;
+        if (currentIdx < 0 || currentIdx >= (int)scene.AnimationControllers.size())
+            ImGui::TextDisabled("Select an entity to edit its controller.");
+        else
+        {
+            auto& ac = scene.AnimationControllers[currentIdx];
+            ImGui::Checkbox("Enabled", &ac.Enabled);
+            ImGui::Checkbox("Auto Start", &ac.AutoStart);
+            ImGui::InputInt("Default State", &ac.DefaultState);
+            ImGui::Separator();
+            ImGui::TextUnformatted("States");
+            if (ImGui::BeginTable("##ac_states", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg))
+            {
+                ImGui::TableSetupColumn("Idx", ImGuiTableColumnFlags_WidthFixed, 40.0f);
+                ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Duration", ImGuiTableColumnFlags_WidthFixed, 90.0f);
+                ImGui::TableSetupColumn("AutoPlay", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                for (int si = 0; si < (int)ac.States.size(); ++si)
+                {
+                    auto& st = ac.States[si];
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::Text("%d", si);
+                    ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-1);
+                    char nb[128]; strncpy(nb, st.Name.c_str(), 127); nb[127]='\0';
+                    if (ImGui::InputText(("##stn"+std::to_string(si)).c_str(), nb, sizeof(nb)))
+                        st.Name = nb;
+                    ImGui::TableSetColumnIndex(2); ImGui::SetNextItemWidth(-1);
+                    ImGui::InputFloat(("##std"+std::to_string(si)).c_str(), &st.Duration, 0.1f, 1.0f, "%.2f");
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Checkbox(("##sta"+std::to_string(si)).c_str(), &st.AutoPlay);
+                }
+                ImGui::EndTable();
+            }
+            if (ImGui::Button("+ Add State", ImVec2(120,0)))
+            {
+                AnimationStateData ns;
+                ns.Name = "State";
+                ac.States.push_back(ns);
+            }
+            ImGui::Separator();
+            ImGui::TextUnformatted("Transitions");
+            if (ImGui::BeginTable("##ac_trans", 6, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg))
+            {
+                ImGui::TableSetupColumn("From", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                ImGui::TableSetupColumn("To", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                ImGui::TableSetupColumn("Channel", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Cond", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn("Thres", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn("Exit", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                for (int ti = 0; ti < (int)ac.Transitions.size(); ++ti)
+                {
+                    auto& tr = ac.Transitions[ti];
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0); ImGui::SetNextItemWidth(-1);
+                    ImGui::InputInt(("##trf"+std::to_string(ti)).c_str(), &tr.FromState);
+                    ImGui::TableSetColumnIndex(1); ImGui::SetNextItemWidth(-1);
+                    ImGui::InputInt(("##trt"+std::to_string(ti)).c_str(), &tr.ToState);
+                    ImGui::TableSetColumnIndex(2); ImGui::SetNextItemWidth(-1);
+                    ImGui::InputInt(("##trc"+std::to_string(ti)).c_str(), &tr.Channel);
+                    ImGui::TableSetColumnIndex(3); ImGui::SetNextItemWidth(-1);
+                    int cond = (int)tr.Condition; ImGui::InputInt(("##trco"+std::to_string(ti)).c_str(), &cond); tr.Condition = (AnimationConditionOp)cond;
+                    ImGui::TableSetColumnIndex(4); ImGui::SetNextItemWidth(-1);
+                    ImGui::InputFloat(("##trth"+std::to_string(ti)).c_str(), &tr.Threshold, 0.1f, 1.0f, "%.2f");
+                    ImGui::TableSetColumnIndex(5); ImGui::SetNextItemWidth(-1);
+                    ImGui::InputFloat(("##trex"+std::to_string(ti)).c_str(), &tr.ExitTime, 0.1f, 1.0f, "%.2f");
+                }
+                ImGui::EndTable();
+            }
+            if (ImGui::Button("+ Add Transition", ImVec2(140,0)))
+            {
+                AnimationTransitionData nt;
+                nt.FromState = 0; nt.ToState=0; nt.Channel=-1; nt.Condition=AnimationConditionOp::BoolTrue;
+                ac.Transitions.push_back(nt);
+            }
+        }
+        ImGui::End();
+    }
+    if (m_MultiplayerTestWindowOpen)
+    {
+        ImGui::SetNextWindowSize(ImVec2(380, 0), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Multiplayer Local Test", &m_MultiplayerTestWindowOpen);
+
+        ImGui::TextColored(ImVec4(0.55f, 0.85f, 1.0f, 1.0f), "Quick Launch");
+        ImGui::Separator();
+        ImGui::TextWrapped("Opens two game windows side-by-side (Host + Client) connected on localhost.");
+        ImGui::Spacing();
+
+        ImGui::InputText("Host Nick", m_MpHostNickBuf, sizeof(m_MpHostNickBuf));
+        ImGui::InputText("Client Nick", m_MpClientNickBuf, sizeof(m_MpClientNickBuf));
+        ImGui::InputInt("Port", &m_MpPort);
+        if (m_MpPort < 1) m_MpPort = 1;
+        if (m_MpPort > 65535) m_MpPort = 65535;
+        ImGui::Spacing();
+
+        float bw = ImGui::GetContentRegionAvail().x;
+        if (ImGui::Button("Launch Host + Client", ImVec2(bw, 36)))
+            m_PendingLaunchMpPair = true;
+        ImGui::Spacing();
+
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Advanced");
+        ImGui::Separator();
+        ImGui::InputText("Server", m_MpServerBuf, sizeof(m_MpServerBuf));
+        ImGui::Spacing();
+
+        MultiplayerManagerComponent* mm = nullptr;
+        for (auto& it : scene.MultiplayerManagers)
+            if (it.Active) { mm = &it; break; }
+
+        if (ImGui::Button("Launch Host Only"))
+        {
+            if (mm)
+            {
+                mm->Mode = MultiplayerMode::Host;
+                mm->Port = m_MpPort;
+                mm->BindAddress = "0.0.0.0";
+                mm->RequestStartHost = true;
+                mm->Running = true;
+            }
+            else m_PendingLaunchMpHost = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Launch Client Only"))
+        {
+            if (mm)
+            {
+                mm->Mode = MultiplayerMode::Client;
+                mm->Port = m_MpPort;
+                mm->ServerAddress = m_MpServerBuf;
+                mm->RequestStartClient = true;
+                mm->Running = true;
+            }
+            else m_PendingLaunchMpClient = true;
+        }
+        if (mm)
+        {
+            ImGui::SameLine();
+            if (ImGui::Button("Stop")) mm->RequestStop = true;
+        }
+        ImGui::End();
+    }
+
+    if (m_IsPlaying)
+    {
+        MultiplayerManagerComponent* mm = nullptr;
+        for (auto& it : scene.MultiplayerManagers)
+            if (it.Active) { mm = &it; break; }
+        if (mm)
+        {
+            ImGui::SetNextWindowBgAlpha(0.55f);
+            ImGui::SetNextWindowPos(ImVec2((float)m_LeftPanelWidth + 10.0f, (float)topStackH + 10.0f), ImGuiCond_Always);
+            ImGui::Begin("##mp_hud_overlay", nullptr,
+                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
+            ImGui::Text("MP: %s", mm->Mode == MultiplayerMode::Host ? "Host" : "Client");
+            ImGui::Text("State: %s", mm->RuntimeState.c_str());
+            ImGui::Text("Players: %d", mm->ConnectedPlayers);
+            ImGui::Text("Ping: %.1f ms", mm->EstimatedPingMs);
+            ImGui::End();
+        }
     }
 
     // ---------------------------------------------------------------
@@ -1822,6 +2226,42 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
 
     const bool inFolder = (m_CurrentFolder >= 0 && m_CurrentFolder < (int)scene.Folders.size());
 
+    // Universal drop handler: accepts any draggable asset type and assigns it to targetFolder
+    auto acceptAssetFolderDrop = [&](int targetFolder) {
+        if (auto* pl = ImGui::AcceptDragDropPayload("MATERIAL_IDX"))
+        { int i=*(const int*)pl->Data; if(i<(int)scene.Materials.size()) scene.Materials[i].Folder=targetFolder; }
+        if (auto* pl = ImGui::AcceptDragDropPayload("TEX_MOVE"))
+        { int i=*(const int*)pl->Data; if(i<(int)scene.TextureFolders.size()) scene.TextureFolders[i]=targetFolder; }
+        if (auto* pl = ImGui::AcceptDragDropPayload("TEXTURE_PATH")) {
+            std::string tp((const char*)pl->Data, pl->DataSize-1);
+            auto it = std::find(scene.Textures.begin(), scene.Textures.end(), tp);
+            if (it != scene.Textures.end()) {
+                int ti2=(int)(it-scene.Textures.begin());
+                while ((int)scene.TextureFolders.size() <= ti2) scene.TextureFolders.push_back(-1);
+                scene.TextureFolders[ti2] = targetFolder;
+            }
+        }
+        if (auto* pl = ImGui::AcceptDragDropPayload("PREFAB_IDX"))
+        { int i=*(const int*)pl->Data; if(i<(int)scene.Prefabs.size()) scene.Prefabs[i].Folder=targetFolder; }
+        if (auto* pl = ImGui::AcceptDragDropPayload("MESH_ASSET")) {
+            int i=*(const int*)pl->Data;
+            while ((int)scene.MeshAssetFolders.size() < (int)scene.MeshAssets.size()) scene.MeshAssetFolders.push_back(-1);
+            if (i < (int)scene.MeshAssets.size()) scene.MeshAssetFolders[i] = targetFolder;
+        }
+        if (auto* pl = ImGui::AcceptDragDropPayload("SCRIPT_ASSET")) {
+            std::string sp((const char*)pl->Data, pl->DataSize-1);
+            for (int i=0; i<(int)scene.ScriptAssets.size(); ++i)
+                if (scene.ScriptAssets[i] == sp) {
+                    while ((int)scene.ScriptAssetFolders.size() <= i) scene.ScriptAssetFolders.push_back(-1);
+                    scene.ScriptAssetFolders[i] = targetFolder; break;
+                }
+        }
+        if (auto* pl = ImGui::AcceptDragDropPayload("SCENE_PATH")) {
+            std::string sp((const char*)pl->Data, pl->DataSize-1);
+            m_SceneFileFolders[sp] = targetFolder;
+        }
+    };
+
     // Build chain: [grandparent, parent, current] (root â†’ current)
     {
         std::vector<int> chain;
@@ -1838,13 +2278,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         if (ImGui::SmallButton("Assets")) m_CurrentFolder = -1;
         ImGui::PopStyleColor(2);
         // Drop on "Assets" = move to root
-        if (ImGui::BeginDragDropTarget()) {
-            if (auto* pl = ImGui::AcceptDragDropPayload("MATERIAL_IDX"))
-            { int mi = *(const int*)pl->Data; if (mi < (int)scene.Materials.size()) scene.Materials[mi].Folder = -1; }
-            if (auto* pl = ImGui::AcceptDragDropPayload("TEX_MOVE"))
-            { int ti = *(const int*)pl->Data; if (ti < (int)scene.TextureFolders.size()) scene.TextureFolders[ti] = -1; }
-            ImGui::EndDragDropTarget();
-        }
+        if (ImGui::BeginDragDropTarget()) { acceptAssetFolderDrop(-1); ImGui::EndDragDropTarget(); }
 
         // Intermediate/final breadcrumb segments
         for (int seg : chain) {
@@ -1858,13 +2292,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 if (ImGui::SmallButton(scene.Folders[seg].c_str())) m_CurrentFolder = seg;
                 ImGui::PopStyleColor(2);
                 // Drop on this segment = move item to this folder
-                if (ImGui::BeginDragDropTarget()) {
-                    if (auto* pl = ImGui::AcceptDragDropPayload("MATERIAL_IDX"))
-                    { int mi=(*(const int*)pl->Data); if(mi<(int)scene.Materials.size()) scene.Materials[mi].Folder=seg; }
-                    if (auto* pl = ImGui::AcceptDragDropPayload("TEX_MOVE"))
-                    { int ti=(*(const int*)pl->Data); if(ti<(int)scene.TextureFolders.size()) scene.TextureFolders[ti]=seg; }
-                    ImGui::EndDragDropTarget();
-                }
+                if (ImGui::BeginDragDropTarget()) { acceptAssetFolderDrop(seg); ImGui::EndDragDropTarget(); }
             }
         }
     }
@@ -1936,7 +2364,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
 
         // Context menu on folder button
         if (ImGui::BeginPopupContextItem("##fctx")) {
-            if (ImGui::MenuItem("Rename")) { renameFolderIdx = fi; renameBuf[0]='\0'; strncpy(renameBuf,scene.Folders[fi].c_str(),127); }
+            if (ImGui::MenuItem("Rename")) { renameFolderIdx = fi; strncpy(renameBuf,scene.Folders[fi].c_str(),127); renameBuf[127] = '\0'; }
             if (ImGui::MenuItem("Delete")) {
                 // Move filhos para o pai desta pasta
                 for (auto& m2 : scene.Materials)   if (m2.Folder==fi) m2.Folder=fp; else if(m2.Folder>fi) m2.Folder--;
@@ -1962,27 +2390,12 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
             drawFolderIconDL({4,4}); ImGui::Text("%s", scene.Folders[fi].c_str());
             ImGui::EndDragDropSource();
         }
-        // Drop target: mover textura/material para esta pasta
-        if (ImGui::BeginDragDropTarget()) {
-            if (auto* pl = ImGui::AcceptDragDropPayload("TEXTURE_PATH")) {
-                std::string tp((const char*)pl->Data, pl->DataSize-1);
-                auto it = std::find(scene.Textures.begin(), scene.Textures.end(), tp);
-                if (it != scene.Textures.end()) {
-                    int ti2=(int)(it-scene.Textures.begin());
-                    while((int)scene.TextureFolders.size()<=ti2) scene.TextureFolders.push_back(-1);
-                    scene.TextureFolders[ti2]=fi;
-                }
-            }
-            if (auto* pl = ImGui::AcceptDragDropPayload("TEX_MOVE"))
-            { int ti2=*(const int*)pl->Data; if(ti2<(int)scene.TextureFolders.size()) scene.TextureFolders[ti2]=fi; }
-            if (auto* pl = ImGui::AcceptDragDropPayload("MATERIAL_IDX"))
-            { int mi2=*(const int*)pl->Data; if(mi2<(int)scene.Materials.size()) scene.Materials[mi2].Folder=fi; }
-            ImGui::EndDragDropTarget();
-        }
+        // Drop target: move any asset type into this folder
+        if (ImGui::BeginDragDropTarget()) { acceptAssetFolderDrop(fi); ImGui::EndDragDropTarget(); }
 
         // Label / rename
         if (renameFolderIdx==fi) {
-            if (!renameBuf[0]) strncpy(renameBuf, scene.Folders[fi].c_str(), 127);
+            if (!renameBuf[0]) { strncpy(renameBuf, scene.Folders[fi].c_str(), 127); renameBuf[127] = '\0'; }
             ImGui::SetNextItemWidth(iconSz);
             if (ImGui::InputText("##fren", renameBuf, 128,
                 ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_AutoSelectAll))
@@ -2014,7 +2427,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
 
         // Context menu on material button
         if (ImGui::BeginPopupContextItem("##mctx")) {
-            if (ImGui::MenuItem("Rename")) { renameMatIdx=mi; renameBuf[0]='\0'; strncpy(renameBuf,scene.Materials[mi].Name.c_str(),127); }
+            if (ImGui::MenuItem("Rename")) { renameMatIdx=mi; strncpy(renameBuf,scene.Materials[mi].Name.c_str(),127); renameBuf[127] = '\0'; }
             if (inFolder && ImGui::MenuItem("Move to Root")) scene.Materials[mi].Folder=-1;
             if (!scene.Folders.empty() && ImGui::BeginMenu("Move to Folder")) {
                 for (int fi2=0; fi2<(int)scene.Folders.size(); ++fi2)
@@ -2050,7 +2463,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
 
         // Label / rename
         if (renameMatIdx==mi) {
-            if (!renameBuf[0]) strncpy(renameBuf, scene.Materials[mi].Name.c_str(), 127);
+            if (!renameBuf[0]) { strncpy(renameBuf, scene.Materials[mi].Name.c_str(), 127); renameBuf[127] = '\0'; }
             ImGui::SetNextItemWidth(iconSz);
             if (ImGui::InputText("##mren", renameBuf, 128,
                 ImGuiInputTextFlags_EnterReturnsTrue|ImGuiInputTextFlags_AutoSelectAll))
@@ -2187,6 +2600,7 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
                 if (ImGui::MenuItem("Rename")) {
                     renamePrefabIdx = pi;
                     strncpy(renamePrefabBuf, scene.Prefabs[pi].Name.c_str(), 127);
+                    renamePrefabBuf[127] = '\0';
                 }
                 if (ImGui::MenuItem("Instantiate")) {
                     // Spawn all nodes in the prefab into the scene
@@ -2433,6 +2847,113 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         ImGui::Columns(1);
     }
 
+    // ---- SCENE FILES (.tscene) ----
+    if (!m_SceneFiles.empty())
+    {
+        auto drawSceneIconDL = [&](ImVec2 p, bool isCurrent) {
+            auto* dl  = ImGui::GetWindowDrawList();
+            ImVec2 mn = {p.x + 4, p.y + 4};
+            ImVec2 mx = {p.x + iconSz - 4, p.y + iconSz - 4};
+            // Dark blue gradient
+            dl->AddRectFilledMultiColor(mn, mx,
+                IM_COL32(18, 45, 80, 255), IM_COL32(18, 45, 80, 255),
+                IM_COL32(10, 25, 55, 255), IM_COL32(10, 25, 55, 255));
+            // Subtle "sky" gradient in upper half
+            dl->AddRectFilledMultiColor(mn, {mx.x, mn.y + (mx.y - mn.y) * 0.45f},
+                IM_COL32(30, 80, 140, 180), IM_COL32(30, 80, 140, 180),
+                IM_COL32(18, 45, 80, 0),   IM_COL32(18, 45, 80, 0));
+            // "Ground" line
+            float gy = mn.y + (mx.y - mn.y) * 0.60f;
+            dl->AddLine({mn.x + 4, gy}, {mx.x - 4, gy}, IM_COL32(60, 160, 80, 180), 1.5f);
+            // Small cube icon (3 strokes suggestion of a 3D box)
+            float ex = p.x + iconSz * 0.38f, ey = p.y + iconSz * 0.30f, es = iconSz * 0.25f;
+            dl->AddRect({ex, ey}, {ex + es, ey + es}, IM_COL32(140, 200, 255, 180), 2.f);
+            dl->AddLine({ex, ey}, {ex - es * 0.3f, ey - es * 0.3f}, IM_COL32(140, 200, 255, 120));
+            dl->AddLine({ex + es, ey}, {ex + es * 0.7f, ey - es * 0.3f}, IM_COL32(140, 200, 255, 120));
+            dl->AddLine({ex + es, ey + es}, {ex + es * 1.7f, ey + es * 0.7f}, IM_COL32(140, 200, 255, 80));
+            // Border
+            dl->AddRect(mn, mx,
+                isCurrent ? IM_COL32(80, 190, 255, 255) : IM_COL32(40, 100, 170, 120),
+                6.f, 0, isCurrent ? 2.f : 1.f);
+            // Active dot (top-right)
+            if (isCurrent)
+                dl->AddCircleFilled({mx.x - 6, mn.y + 6}, 4.f, IM_COL32(80, 230, 120, 230));
+        };
+
+        // New scene name modal (triggered from context menu below)
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, {0.5f, 0.5f});
+        if (ImGui::BeginPopupModal("##newscenedlg", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            ImGui::Text("Scene name:");
+            ImGui::SetNextItemWidth(220.0f);
+            if (m_ShowNewSceneDlg) { ImGui::SetKeyboardFocusHere(); m_ShowNewSceneDlg = false; }
+            bool enter = ImGui::InputText("##nsname", m_NewSceneNameBuf, 128,
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+            bool ok = ImGui::Button("Create", {100, 0}) || enter;
+            if (ok && m_NewSceneNameBuf[0] != '\0')
+            { m_DlgNewSceneName = m_NewSceneNameBuf; m_PendingNewScene = true; ImGui::CloseCurrentPopup(); }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel", {80, 0})) ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+
+        int scnCols = std::max(1, (int)(ImGui::GetContentRegionAvail().x / cellW));
+        ImGui::Columns(scnCols, "##scenecols", false);
+
+        for (int si = 0; si < (int)m_SceneFiles.size(); ++si)
+        {
+            const std::string& spath = m_SceneFiles[si];
+            // Filter by virtual folder
+            {
+                auto it = m_SceneFileFolders.find(spath);
+                int sf = (it != m_SceneFileFolders.end()) ? it->second : -1;
+                if (sf != m_CurrentFolder) continue;
+            }
+            size_t sls = spath.find_last_of("/\\");
+            std::string sname = (sls != std::string::npos) ? spath.substr(sls + 1) : spath;
+            if (sname.size() > 7 && sname.substr(sname.size() - 7) == ".tscene")
+                sname = sname.substr(0, sname.size() - 7);
+            bool isCurrent = (spath == m_CurrentScenePath);
+
+            ImGui::PushID(80000 + si);
+            ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1, 1, 1, 0.1f));
+            if (isCurrent) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.4f, 0.7f, 0.3f));
+            ImGui::Button("##scnasset", {iconSz, iconSz});
+            if (isCurrent) ImGui::PopStyleColor();
+            ImGui::PopStyleColor(2);
+            ImVec2 iconMin = ImGui::GetItemRectMin();
+            drawSceneIconDL(iconMin, isCurrent);
+
+            // Drag source — drag the scene file path
+            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+            {
+                ImGui::SetDragDropPayload("SCENE_PATH", spath.c_str(), spath.size() + 1);
+                drawSceneIconDL(ImGui::GetCursorScreenPos(), isCurrent);
+                ImGui::Dummy({iconSz * 0.6f, iconSz * 0.6f});
+                ImGui::Text("%s", sname.c_str());
+                ImGui::EndDragDropSource();
+            }
+
+            // Context menu
+            if (ImGui::BeginPopupContextItem("##scnassetctx"))
+            {
+                if (ImGui::MenuItem("Open"))   { m_DlgOpenScenePath = spath; m_PendingOpenScene = true; }
+                if (ImGui::MenuItem("Delete")) { m_DlgDeleteScenePath = spath; m_PendingDeleteScene = true; }
+                ImGui::EndPopup();
+            }
+            if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0))
+            { m_DlgOpenScenePath = spath; m_PendingOpenScene = true; }
+
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + iconSz);
+            ImGui::TextUnformatted(sname.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::NextColumn();
+            ImGui::PopID();
+        }
+        ImGui::Columns(1);
+    }
+
     // Full-area ENTITY drop target â€” covers the ENTIRE scroll child window
     {
         ImGuiWindow* childWin = ImGui::GetCurrentWindow();
@@ -2498,6 +3019,12 @@ bool UIManager::Render(Scene& scene, int& selectedEntity, int winW, int winH,
         }
         if (ImGui::MenuItem("New Material"))
         { tsu::MaterialAsset m; m.Name="Material"; m.Folder=m_CurrentFolder; scene.Materials.push_back(m); }
+        if (ImGui::MenuItem("New Scene..."))
+        {
+            m_NewSceneNameBuf[0] = '\0';
+            m_ShowNewSceneDlg    = true;
+            ImGui::OpenPopup("##newscenedlg");
+        }
         if (ImGui::MenuItem("New Script"))
         {
             // Generate a unique name
@@ -2616,6 +3143,12 @@ void UIManager::Log(const std::string& msg)
         m_ConsoleLogs.pop_front();
 }
 
+void UIManager::SetSceneFiles(const std::vector<std::string>& files, const std::string& currentPath)
+{
+    m_SceneFiles       = files;
+    m_CurrentScenePath = currentPath;
+}
+
 void UIManager::OpenRoomEditor(int setIdx, int roomIdx)
 {
     m_MazeRoomEditorOpen = true;
@@ -2632,6 +3165,29 @@ void UIManager::CloseRoomEditor()
     m_EditingRoomSetIdx  = -1;
     m_EditingRoomIdx     = -1;
     if (m_ViewportTab == 5) m_ViewportTab = 0;
+}
+
+void UIManager::ConsumePendingLaunchMpHost(std::string& nick, int& port)
+{
+    nick = m_MpHostNickBuf;
+    port = m_MpPort;
+    m_PendingLaunchMpHost = false;
+}
+
+void UIManager::ConsumePendingLaunchMpClient(std::string& server, std::string& nick, int& port)
+{
+    server = m_MpServerBuf;
+    nick = m_MpClientNickBuf;
+    port = m_MpPort;
+    m_PendingLaunchMpClient = false;
+}
+
+void UIManager::ConsumePendingLaunchMpPair(std::string& hostNick, std::string& clientNick, int& port)
+{
+    hostNick = m_MpHostNickBuf;
+    clientNick = m_MpClientNickBuf;
+    port = m_MpPort;
+    m_PendingLaunchMpPair = false;
 }
 
 } // namespace tsu

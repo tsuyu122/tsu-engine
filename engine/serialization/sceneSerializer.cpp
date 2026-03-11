@@ -133,6 +133,37 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         bool        hasLuaScript    = false;
         std::string luaScriptPath;
         std::map<std::string, std::string> luaExposedVars;
+
+        // Multiplayer Manager
+        bool        hasMpManager      = false;
+        bool        mmEnabled         = true;
+        int         mmMode            = 0;
+        std::string mmBindAddress     = "0.0.0.0";
+        std::string mmServerAddress   = "127.0.0.1";
+        int         mmPort            = 27015;
+        int         mmMaxClients      = 16;
+        float       mmSnapshotRate    = 20.0f;
+        bool        mmReplicateCh     = true;
+        bool        mmAutoStart       = true;
+        bool        mmAutoReconnect   = true;
+        float       mmReconnectDelay  = 2.0f;
+        std::string mmPlayerPrefab;             // prefab name (resolved at load)
+        glm::vec3   mmSpawnPoint      = {0,1,0};
+
+        // Multiplayer Controller
+        bool        hasMpController   = false;
+        bool        mcEnabled         = true;
+        std::string mcNickname        = "Player";
+        uint64_t    mcNetworkId       = 0;
+        bool        mcLocal           = false;
+        bool        mcSyncTransform   = true;
+        // Animation Controller
+        bool        hasAnimController = false;
+        bool        acEnabled         = true;
+        bool        acAutoStart       = true;
+        int         acDefaultState    = 0;
+        std::vector<AnimationStateData>     acStates;
+        std::vector<AnimationTransitionData> acTransitions;
     };
 
     struct MaterialData {
@@ -196,6 +227,10 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         d = MaterialData{};
     };
 
+    // MM entities reference prefab names but prefabs are usually defined AFTER entities
+    // in the file. Collect unresolved (entity-id, name) pairs and re-resolve at the end.
+    std::vector<std::pair<int, std::string>> pendingMmPrefab;
+
     auto flushEntity = [&](EntityData& d)
     {
         if (!d.valid) return;
@@ -215,6 +250,14 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             gc.Yaw    = d.camYaw;
             gc.Pitch  = d.camPitch;
             gc.UpdateVectors();
+            // The renderer derives camera direction from the Transform world matrix,
+            // so mirror yaw/pitch into Transform.Rotation if no explicit rotation was saved.
+            if (d.rotation == glm::vec3(0,0,0))
+            {
+                // Rotation.x = pitch (tilt up/down), Rotation.y = yaw (turn left/right)
+                scene.Transforms[id].Rotation.x = d.camPitch;
+                scene.Transforms[id].Rotation.y = d.camYaw + 90.0f; // +90 aligns -90 yaw → facing -Z
+            }
         }
         else
         {
@@ -365,6 +408,65 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             ls.ExposedVars = d.luaExposedVars;
         }
 
+        if (d.hasMpManager && id < (int)scene.MultiplayerManagers.size())
+        {
+            auto& mm = scene.MultiplayerManagers[id];
+            mm.Active            = true;
+            mm.Enabled           = d.mmEnabled;
+            mm.Mode              = (d.mmMode == 1) ? MultiplayerMode::Client : MultiplayerMode::Host;
+            mm.BindAddress       = d.mmBindAddress;
+            mm.ServerAddress     = d.mmServerAddress;
+            mm.Port              = d.mmPort;
+            mm.MaxClients        = d.mmMaxClients;
+            mm.SnapshotRate      = d.mmSnapshotRate;
+            mm.ReplicateChannels = d.mmReplicateCh;
+            mm.AutoStart         = d.mmAutoStart;
+            mm.AutoReconnect     = d.mmAutoReconnect;
+            mm.ReconnectDelay    = d.mmReconnectDelay;
+            mm.SpawnPoint        = d.mmSpawnPoint;
+            // Resolve prefab name → index
+            mm.PlayerPrefabIdx   = -1;
+            if (!d.mmPlayerPrefab.empty()) {
+                for (int pi = 0; pi < (int)scene.Prefabs.size(); ++pi)
+                    if (scene.Prefabs[pi].Name == d.mmPlayerPrefab) { mm.PlayerPrefabIdx = pi; break; }
+                // Prefab not yet loaded (defined later in file) — defer resolution
+                if (mm.PlayerPrefabIdx < 0)
+                    pendingMmPrefab.emplace_back(id, d.mmPlayerPrefab);
+            }
+            mm.RequestStartHost  = false;
+            mm.RequestStartClient= false;
+            mm.RequestStop       = false;
+            mm.Running           = false;
+        }
+
+        if (d.hasMpController && id < (int)scene.MultiplayerControllers.size())
+        {
+            auto& mc = scene.MultiplayerControllers[id];
+            mc.Active         = true;
+            mc.Enabled        = d.mcEnabled;
+            mc.Nickname       = d.mcNickname;
+            mc.NetworkId      = d.mcNetworkId;
+            mc.IsLocalPlayer  = d.mcLocal;
+            mc.SyncTransform  = d.mcSyncTransform;
+            mc.Replicated     = false;
+            mc.OwnedLocally   = false;
+            mc.LastNetUpdateAge  = -1.0f;
+            mc.LastNetReceiveTime = -1.0f;
+        }
+
+        if (d.hasAnimController && id < (int)scene.AnimationControllers.size())
+        {
+            auto& ac = scene.AnimationControllers[id];
+            ac.Active      = true;
+            ac.Enabled     = d.acEnabled;
+            ac.AutoStart   = d.acAutoStart;
+            ac.DefaultState= d.acDefaultState;
+            ac.States      = d.acStates;
+            ac.Transitions = d.acTransitions;
+            ac._CurrentState = -1;
+            ac._StateTime    = 0.0f;
+        }
+
         if (id < (uint32_t)scene.EntityStatic.size()) scene.EntityStatic[id] = d.isStatic;
         if (id < (uint32_t)scene.EntityReceiveLightmap.size()) scene.EntityReceiveLightmap[id] = d.receiveLightmap;
 
@@ -457,7 +559,62 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
         rm = RoomData{};
     };
 
-    enum class Section { None, Entity, Channel, Material, RoomSet, Room, Fog, Sky, PostProcess, ScriptAssets };
+    // ---- Prefab data ----
+    struct PrefabNodeData {
+        int          idx      = -1;
+        std::string  name     = "Node";
+        int          parent   = -1;
+        std::string  mesh;
+        std::string  material;
+        glm::vec3    pos{0,0,0}, rot{0,0,0}, scl{1,1,1};
+        bool         valid    = false;
+    };
+    struct PrefabData {
+        std::string name;
+        bool valid = false;
+        std::vector<PrefabEntityData> nodes;
+    };
+    PrefabData curPref;
+    PrefabNodeData curPN;
+
+    auto flushPrefabNode = [&](PrefabNodeData& pn) {
+        if (!pn.valid) return;
+        PrefabEntityData ned;
+        ned.Name       = pn.name;
+        ned.ParentIdx  = pn.parent;
+        ned.NodeGuid   = pn.idx;
+        ned.MeshType   = pn.mesh;
+        ned.MaterialName = pn.material;
+        ned.Transform.Position = pn.pos;
+        ned.Transform.Rotation = pn.rot;
+        ned.Transform.Scale    = pn.scl;
+        // expand nodes vector if index is given
+        if (pn.idx >= 0) {
+            while ((int)curPref.nodes.size() <= pn.idx) curPref.nodes.emplace_back();
+            curPref.nodes[pn.idx] = ned;
+        } else {
+            curPref.nodes.push_back(ned);
+        }
+        pn = PrefabNodeData{};
+    };
+
+    auto flushPrefab = [&](PrefabData& pd) {
+        if (!pd.valid) return;
+        // replace existing prefab with same name, or push new
+        bool found = false;
+        for (auto& p : scene.Prefabs) {
+            if (p.Name == pd.name) { p.Nodes = pd.nodes; found = true; break; }
+        }
+        if (!found) {
+            PrefabAsset pa;
+            pa.Name  = pd.name;
+            pa.Nodes = pd.nodes;
+            scene.Prefabs.push_back(std::move(pa));
+        }
+        pd = PrefabData{};
+    };
+
+    enum class Section { None, Entity, Channel, Material, RoomSet, Room, Fog, Sky, PostProcess, Realtime, BakedLighting, ScriptAssets, EditorCamera, Prefab, PrefabNode };
     Section section = Section::None;
     std::string line;
 
@@ -550,11 +707,54 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             continue;
         }
 
+        if (line == "[realtime]")
+        {
+            flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
+            flushRoom(curRm); flushRoomSet(curRs);
+            section = Section::Realtime;
+            continue;
+        }
+
+        if (line == "[baked_lighting]")
+        {
+            flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
+            flushRoom(curRm); flushRoomSet(curRs);
+            section = Section::BakedLighting;
+            continue;
+        }
+
         if (line == "[script_assets]")
         {
             flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
             flushRoom(curRm); flushRoomSet(curRs);
             section = Section::ScriptAssets;
+            continue;
+        }
+
+        if (line == "[editor_camera]")
+        {
+            flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
+            flushRoom(curRm); flushRoomSet(curRs);
+            flushPrefabNode(curPN); flushPrefab(curPref);
+            section = Section::EditorCamera;
+            continue;
+        }
+
+        if (line == "[prefab]")
+        {
+            flushEntity(cur); flushChannel(curCh); flushMaterial(curMat);
+            flushRoom(curRm); flushRoomSet(curRs);
+            flushPrefabNode(curPN); flushPrefab(curPref);
+            curPref.valid = true;
+            section = Section::Prefab;
+            continue;
+        }
+
+        if (line == "[prefab_node]")
+        {
+            flushPrefabNode(curPN);
+            curPN.valid = true;
+            section = Section::PrefabNode;
             continue;
         }
 
@@ -658,6 +858,66 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
                 if (pipe != std::string::npos)
                     cur.luaExposedVars[val.substr(0, pipe)] = val.substr(pipe + 1);
             }
+            else if (k == "multiplayer_manager") cur.hasMpManager = (val == "true");
+            else if (k == "mm_enabled")          cur.mmEnabled = (val == "true");
+            else if (k == "mm_mode")             cur.mmMode = std::stoi(val);
+            else if (k == "mm_bind")             cur.mmBindAddress = val;
+            else if (k == "mm_server")           cur.mmServerAddress = val;
+            else if (k == "mm_port")             cur.mmPort = std::stoi(val);
+            else if (k == "mm_max_clients")      cur.mmMaxClients = std::stoi(val);
+            else if (k == "mm_snapshot_rate")    cur.mmSnapshotRate = std::stof(val);
+            else if (k == "mm_replicate_channels") cur.mmReplicateCh = (val == "true");
+            else if (k == "mm_auto_start")       cur.mmAutoStart = (val == "true");
+            else if (k == "mm_auto_reconnect")   cur.mmAutoReconnect = (val == "true");
+            else if (k == "mm_reconnect_delay")  cur.mmReconnectDelay = std::stof(val);
+            else if (k == "mm_player_prefab")    cur.mmPlayerPrefab = val;
+            else if (k == "mm_spawn_point")      cur.mmSpawnPoint = parseVec3(val);
+            else if (k == "multiplayer_controller") cur.hasMpController = (val == "true");
+            else if (k == "mc_enabled")          cur.mcEnabled = (val == "true");
+            else if (k == "mc_nickname")         cur.mcNickname = val;
+            else if (k == "mc_network_id")       cur.mcNetworkId = (uint64_t)std::stoull(val);
+            else if (k == "mc_is_local")         cur.mcLocal = (val == "true");
+            else if (k == "mc_sync_transform")   cur.mcSyncTransform = (val == "true");
+            // Animation Controller
+            else if (k == "anim_controller")     cur.hasAnimController = (val == "true");
+            else if (k == "ac_enabled")          cur.acEnabled = (val == "true");
+            else if (k == "ac_auto_start")       cur.acAutoStart = (val == "true");
+            else if (k == "ac_default")          cur.acDefaultState = std::stoi(val);
+            else if (k == "ac_state")
+            {
+                // name|prop|mode|easing|fx fy fz|tx ty tz|dur|delay|speed|blend|autoplay
+                AnimationStateData st;
+                std::istringstream ss(val);
+                std::string token;
+                auto next = [&](std::string& out){ if (!std::getline(ss, out, '|')) out=""; };
+                next(st.Name);
+                next(token); st.Property = (AnimatorProperty)std::stoi(token);
+                next(token); st.Mode     = (AnimatorMode)std::stoi(token);
+                next(token); st.Easing   = (AnimatorEasing)std::stoi(token);
+                next(token); { std::istringstream vs(token); vs >> st.From.x >> st.From.y >> st.From.z; }
+                next(token); { std::istringstream vs(token); vs >> st.To.x   >> st.To.y   >> st.To.z;   }
+                next(token); st.Duration = std::stof(token);
+                next(token); st.Delay    = std::stof(token);
+                next(token); st.PlaybackSpeed = std::stof(token);
+                next(token); st.BlendWeight   = std::stof(token);
+                next(token); st.AutoPlay = (token == "true");
+                cur.acStates.push_back(st);
+            }
+            else if (k == "ac_transition")
+            {
+                // from|to|channel|cond|threshold|exit
+                AnimationTransitionData tr;
+                std::istringstream ss(val);
+                std::string token;
+                auto next = [&](std::string& out){ if (!std::getline(ss, out, '|')) out=""; };
+                next(token); tr.FromState = std::stoi(token);
+                next(token); tr.ToState   = std::stoi(token);
+                next(token); tr.Channel   = std::stoi(token);
+                next(token); tr.Condition = (AnimationConditionOp)std::stoi(token);
+                next(token); tr.Threshold = std::stof(token);
+                next(token); tr.ExitTime  = std::stof(token);
+                cur.acTransitions.push_back(tr);
+            }
         }
         else if (section == Section::Fog)
         {
@@ -711,6 +971,36 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
             else if (k == "scanlines_freq")    scene.PostProcess.ScanlinesFrequency  = std::stof(val);
             else if (k == "pixelate")          scene.PostProcess.PixelateEnabled     = (val == "true");
             else if (k == "pixelate_size")     scene.PostProcess.PixelateSize        = std::stof(val);
+            else if (k == "ssao")              scene.PostProcess.SSAOEnabled         = (val == "true");
+            else if (k == "ssao_intensity")    scene.PostProcess.SSAOIntensity       = std::stof(val);
+            else if (k == "ssao_radius")       scene.PostProcess.SSAORadius          = std::stof(val);
+            else if (k == "post_external")     scene.PostProcess.UseExternalPostShader = (val == "true");
+            else if (k == "post_external_path") scene.PostProcess.ExternalPostPath    = val;
+            else if (k == "color_cfg_external") scene.PostProcess.UseExternalColorCfg = (val == "true");
+            else if (k == "color_cfg_path")     scene.PostProcess.ExternalColorCfgPath = val;
+            else if (k == "lut_enabled")        scene.PostProcess.LUTEnabled          = (val == "true");
+            else if (k == "lut_path")           scene.PostProcess.LUTPath             = val;
+            else if (k == "lut_strength")       scene.PostProcess.LUTStrength         = std::stof(val);
+        }
+        else if (section == Section::Realtime)
+        {
+            if      (k == "enable_shadows")   scene.Realtime.EnableShadows = (val == "true");
+            else if (k == "shadow_2d_size")   scene.Realtime.ShadowMapSize2D = std::stoi(val);
+            else if (k == "shadow_cube_size") scene.Realtime.ShadowMapSizeCube = std::stoi(val);
+            else if (k == "dir_shadow_distance") scene.Realtime.DirectionalShadowDistance = std::stof(val);
+            else if (k == "dir_shadow_ortho") scene.Realtime.DirectionalShadowOrtho = std::stof(val);
+            else if (k == "max_realtime_lights") scene.Realtime.MaxRealtimeLights = std::stoi(val);
+            else if (k == "frustum_culling")  scene.Realtime.FrustumCulling = (val == "true");
+            else if (k == "distance_culling") scene.Realtime.DistanceCulling = (val == "true");
+            else if (k == "max_draw_distance") scene.Realtime.MaxDrawDistance = std::stof(val);
+            else if (k == "use_fog")          scene.Realtime.UseFog = (val == "true");
+            else if (k == "use_sky_ambient")  scene.Realtime.UseSkyAmbient = (val == "true");
+        }
+        else if (section == Section::BakedLighting)
+        {
+            if      (k == "auto_apply_intensity") scene.BakedLighting.AutoApplyLightmapIntensity = (val == "true");
+            else if (k == "auto_intensity_multiplier") scene.BakedLighting.AutoIntensityMultiplier = std::stof(val);
+            else if (k == "max_auto_intensity") scene.BakedLighting.MaxAutoIntensity = std::stof(val);
         }
         else if (section == Section::Material)
         {
@@ -837,6 +1127,12 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
                    >> curRm.lightmapST.z >> curRm.lightmapST.w;
             }
         }
+        else if (section == Section::EditorCamera)
+        {
+            if      (k == "pos")   scene.EditorCamPos   = parseVec3(val);
+            else if (k == "yaw")   scene.EditorCamYaw   = std::stof(val);
+            else if (k == "pitch") scene.EditorCamPitch = std::stof(val);
+        }
         else if (section == Section::ScriptAssets)
         {
             if (k == "path")
@@ -850,6 +1146,21 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
                 }
             }
         }
+        else if (section == Section::Prefab)
+        {
+            if (k == "prefab_name") curPref.name = val;
+        }
+        else if (section == Section::PrefabNode)
+        {
+            if      (k == "node_idx")    { try { curPN.idx    = std::stoi(val); } catch(...){} }
+            else if (k == "node_name")   curPN.name    = val;
+            else if (k == "node_parent") { try { curPN.parent = std::stoi(val); } catch(...){} }
+            else if (k == "node_mesh")   curPN.mesh    = val;
+            else if (k == "node_mat")    curPN.material = val;
+            else if (k == "position")    curPN.pos     = parseVec3(val);
+            else if (k == "rotation")    curPN.rot     = parseVec3(val);
+            else if (k == "scale")       curPN.scl     = parseVec3(val);
+        }
     }
 
     flushEntity(cur);
@@ -857,6 +1168,15 @@ void SceneSerializer::Load(Scene& scene, const std::string& filepath)
     flushMaterial(curMat);
     flushRoom(curRm);
     flushRoomSet(curRs);
+    flushPrefabNode(curPN);
+    flushPrefab(curPref);
+
+    // Second pass: resolve MM player-prefab names that were forward-references
+    for (auto& [mmId, pname] : pendingMmPrefab) {
+        if (mmId < 0 || mmId >= (int)scene.MultiplayerManagers.size()) continue;
+        for (int pi = 0; pi < (int)scene.Prefabs.size(); ++pi)
+            if (scene.Prefabs[pi].Name == pname) { scene.MultiplayerManagers[mmId].PlayerPrefabIdx = pi; break; }
+    }
 }
 
 void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
@@ -914,6 +1234,15 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
             file << "type  = bool\n";
             file << "value = " << (ch.BoolValue ? "true" : "false") << "\n\n";
         }
+    }
+
+    // ---- Editor camera ----
+    {
+        const auto& ec = scene;
+        file << "[editor_camera]\n";
+        file << "pos   = " << ec.EditorCamPos.x << " " << ec.EditorCamPos.y << " " << ec.EditorCamPos.z << "\n";
+        file << "yaw   = " << ec.EditorCamYaw   << "\n";
+        file << "pitch = " << ec.EditorCamPitch  << "\n\n";
     }
 
     // ---- Fog ----
@@ -976,10 +1305,49 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
         file << "scanlines_freq  = " << pp.ScanlinesFrequency       << "\n";
         file << "pixelate        = " << (pp.PixelateEnabled ? "true" : "false")     << "\n";
         file << "pixelate_size   = " << pp.PixelateSize             << "\n\n";
+        file << "ssao            = " << (pp.SSAOEnabled ? "true" : "false") << "\n";
+        file << "ssao_intensity  = " << pp.SSAOIntensity << "\n";
+        file << "ssao_radius     = " << pp.SSAORadius    << "\n";
+        file << "post_external   = " << (pp.UseExternalPostShader ? "true" : "false") << "\n";
+        file << "post_external_path = " << pp.ExternalPostPath << "\n";
+        file << "color_cfg_external = " << (pp.UseExternalColorCfg ? "true" : "false") << "\n";
+        file << "color_cfg_path  = " << pp.ExternalColorCfgPath << "\n";
+        file << "lut_enabled     = " << (pp.LUTEnabled ? "true" : "false") << "\n";
+        file << "lut_path        = " << pp.LUTPath << "\n";
+        file << "lut_strength    = " << pp.LUTStrength << "\n\n";
+    }
+
+    {
+        const auto& rt = scene.Realtime;
+        file << "[realtime]\n";
+        file << "enable_shadows = " << (rt.EnableShadows ? "true" : "false") << "\n";
+        file << "shadow_2d_size = " << rt.ShadowMapSize2D << "\n";
+        file << "shadow_cube_size = " << rt.ShadowMapSizeCube << "\n";
+        file << "dir_shadow_distance = " << rt.DirectionalShadowDistance << "\n";
+        file << "dir_shadow_ortho = " << rt.DirectionalShadowOrtho << "\n";
+        file << "max_realtime_lights = " << rt.MaxRealtimeLights << "\n";
+        file << "frustum_culling = " << (rt.FrustumCulling ? "true" : "false") << "\n";
+        file << "distance_culling = " << (rt.DistanceCulling ? "true" : "false") << "\n";
+        file << "max_draw_distance = " << rt.MaxDrawDistance << "\n";
+        file << "use_fog = " << (rt.UseFog ? "true" : "false") << "\n";
+        file << "use_sky_ambient = " << (rt.UseSkyAmbient ? "true" : "false") << "\n\n";
+    }
+
+    {
+        const auto& bl = scene.BakedLighting;
+        file << "[baked_lighting]\n";
+        file << "auto_apply_intensity = " << (bl.AutoApplyLightmapIntensity ? "true" : "false") << "\n";
+        file << "auto_intensity_multiplier = " << bl.AutoIntensityMultiplier << "\n";
+        file << "max_auto_intensity = " << bl.MaxAutoIntensity << "\n\n";
     }
 
     for (size_t i = 0; i < scene.Transforms.size(); i++)
     {
+        // Skip entities that were spawned at runtime from a prefab — they are
+        // recreated by SpawnFromPrefab() on every load and must not be baked in.
+        if (i < scene.EntityIsPrefabInstance.size() && scene.EntityIsPrefabInstance[i])
+            continue;
+
         const TransformComponent&    t  = scene.Transforms[i];
         const MeshRendererComponent& mr = scene.MeshRenderers[i];
         const RigidBodyComponent&    rb = scene.RigidBodies[i];
@@ -1129,6 +1497,70 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
                 file << "lua_var = " << vk << "|" << vv << "\n";
         }
 
+        if (i < scene.AnimationControllers.size() && scene.AnimationControllers[i].Active)
+        {
+            const auto& ac = scene.AnimationControllers[i];
+            file << "anim_controller = true\n";
+            file << "ac_enabled = " << (ac.Enabled ? "true" : "false") << "\n";
+            file << "ac_auto_start = " << (ac.AutoStart ? "true" : "false") << "\n";
+            file << "ac_default = " << ac.DefaultState << "\n";
+            for (const auto& st : ac.States)
+            {
+                file << "ac_state = " << st.Name << "|"
+                     << (int)st.Property << "|"
+                     << (int)st.Mode << "|"
+                     << (int)st.Easing << "|"
+                     << st.From.x << " " << st.From.y << " " << st.From.z << "|"
+                     << st.To.x   << " " << st.To.y   << " " << st.To.z   << "|"
+                     << st.Duration << "|"
+                     << st.Delay    << "|"
+                     << st.PlaybackSpeed << "|"
+                     << st.BlendWeight   << "|"
+                     << (st.AutoPlay ? "true" : "false") << "\n";
+            }
+            for (const auto& tr : ac.Transitions)
+            {
+                file << "ac_transition = "
+                     << tr.FromState << "|"
+                     << tr.ToState   << "|"
+                     << tr.Channel   << "|"
+                     << (int)tr.Condition << "|"
+                     << tr.Threshold << "|"
+                     << tr.ExitTime  << "\n";
+            }
+        }
+
+        if (i < scene.MultiplayerManagers.size() && scene.MultiplayerManagers[i].Active)
+        {
+            const auto& mm = scene.MultiplayerManagers[i];
+            file << "multiplayer_manager = true\n";
+            file << "mm_enabled = " << (mm.Enabled ? "true" : "false") << "\n";
+            file << "mm_mode = " << (mm.Mode == MultiplayerMode::Client ? 1 : 0) << "\n";
+            file << "mm_bind = " << mm.BindAddress << "\n";
+            file << "mm_server = " << mm.ServerAddress << "\n";
+            file << "mm_port = " << mm.Port << "\n";
+            file << "mm_max_clients = " << mm.MaxClients << "\n";
+            file << "mm_snapshot_rate = " << mm.SnapshotRate << "\n";
+            file << "mm_replicate_channels = " << (mm.ReplicateChannels ? "true" : "false") << "\n";
+            file << "mm_auto_start = " << (mm.AutoStart ? "true" : "false") << "\n";
+            file << "mm_auto_reconnect = " << (mm.AutoReconnect ? "true" : "false") << "\n";
+            file << "mm_reconnect_delay = " << mm.ReconnectDelay << "\n";
+            if (mm.PlayerPrefabIdx >= 0 && mm.PlayerPrefabIdx < (int)scene.Prefabs.size())
+                file << "mm_player_prefab = " << scene.Prefabs[mm.PlayerPrefabIdx].Name << "\n";
+            file << "mm_spawn_point = " << mm.SpawnPoint.x << " " << mm.SpawnPoint.y << " " << mm.SpawnPoint.z << "\n";
+        }
+
+        if (i < scene.MultiplayerControllers.size() && scene.MultiplayerControllers[i].Active)
+        {
+            const auto& mc = scene.MultiplayerControllers[i];
+            file << "multiplayer_controller = true\n";
+            file << "mc_enabled = " << (mc.Enabled ? "true" : "false") << "\n";
+            file << "mc_nickname = " << mc.Nickname << "\n";
+            file << "mc_network_id = " << mc.NetworkId << "\n";
+            file << "mc_is_local = " << (mc.IsLocalPlayer ? "true" : "false") << "\n";
+            file << "mc_sync_transform = " << (mc.SyncTransform ? "true" : "false") << "\n";
+        }
+
         file << "position = " << t.Position.x << " " << t.Position.y << " " << t.Position.z << "\n"
              << "rotation = " << t.Rotation.x << " " << t.Rotation.y << " " << t.Rotation.z << "\n"
              << "scale    = " << t.Scale.x    << " " << t.Scale.y    << " " << t.Scale.z    << "\n\n";
@@ -1191,6 +1623,29 @@ void SceneSerializer::Save(const Scene& scene, const std::string& filepath)
         for (const auto& p : scene.ScriptAssets)
             file << "path = " << p << "\n";
         file << "\n";
+    }
+
+    // ---- Prefabs (inline) ----
+    for (const auto& pref : scene.Prefabs)
+    {
+        if (pref.Name.empty()) continue;
+        file << "[prefab]\n";
+        file << "prefab_name = " << pref.Name << "\n\n";
+        for (int ni = 0; ni < (int)pref.Nodes.size(); ++ni)
+        {
+            const auto& n = pref.Nodes[ni];
+            file << "[prefab_node]\n";
+            file << "node_idx    = " << ni           << "\n";
+            file << "node_name   = " << n.Name       << "\n";
+            file << "node_parent = " << n.ParentIdx  << "\n";
+            if (!n.MeshType.empty())     file << "node_mesh   = " << n.MeshType     << "\n";
+            if (!n.MaterialName.empty()) file << "node_mat    = " << n.MaterialName << "\n";
+            const auto& t = n.Transform;
+            file << "position    = " << t.Position.x << " " << t.Position.y << " " << t.Position.z << "\n";
+            file << "rotation    = " << t.Rotation.x << " " << t.Rotation.y << " " << t.Rotation.z << "\n";
+            file << "scale       = " << t.Scale.x    << " " << t.Scale.y    << " " << t.Scale.z    << "\n";
+            file << "\n";
+        }
     }
 }
 

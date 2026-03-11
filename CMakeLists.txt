@@ -99,6 +99,7 @@ add_executable(TsuEngine WIN32
     Engine/scene/scene.cpp
     Engine/serialization/sceneSerializer.cpp
     Engine/serialization/prefabSerializer.cpp
+    Engine/network/multiplayerSystem.cpp
     Engine/ui/hierarchyPanel.cpp
     Engine/ui/inspectorPanel.cpp
     Engine/ui/uiManager.cpp
@@ -106,7 +107,7 @@ add_executable(TsuEngine WIN32
     Sandbox/main.cpp
 )
 
-target_link_libraries(TsuEngine glfw glad opengl32 imgui lua54)
+target_link_libraries(TsuEngine glfw glad opengl32 imgui lua54 ws2_32)
 target_compile_definitions(TsuEngine PRIVATE TSU_EDITOR=1)
 
 add_custom_command(TARGET TsuEngine POST_BUILD
@@ -132,6 +133,7 @@ add_executable(GameRuntime WIN32
     Engine/scene/scene.cpp
     Engine/serialization/sceneSerializer.cpp
     Engine/serialization/prefabSerializer.cpp
+    Engine/network/multiplayerSystem.cpp
     Engine/lua/luaSystem.cpp
     Sandbox/game_main.cpp
 )
@@ -148,7 +150,7 @@ target_include_directories(GameRuntime PRIVATE
 )
 
 # No imgui — runtime is lean
-target_link_libraries(GameRuntime glfw glad opengl32 lua54)
+target_link_libraries(GameRuntime glfw glad opengl32 lua54 ws2_32)
 
 # Place GameRuntime in a hidden _engine/ subdirectory so it does not appear
 # alongside TsuEngine.exe in the Release folder.

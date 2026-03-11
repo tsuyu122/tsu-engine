@@ -5,7 +5,7 @@
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
   [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
   [![OpenGL 4.6](https://img.shields.io/badge/OpenGL-4.6-red.svg)](https://www.opengl.org/)
-  [![Status: Alpha](https://img.shields.io/badge/Status-Alpha%201.2.0-orange.svg)]()
+  [![Status: Alpha](https://img.shields.io/badge/Status-Alpha%201.3.0-orange.svg)]()
   [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)]()
 </div>
 
@@ -74,6 +74,15 @@ The codebase is organized to be readable, extensible, and contributor-friendly.
 - OBJ import — drag-and-drop with automatic AABB computation and mesh normalization
 - Scene serialization — complete round-trip save/load in human-readable plain-text `.tscene` format
 - Prefab serialization — `.tprefab` files with full node hierarchy
+
+### Multiplayer
+- Raw UDP networking — host/client architecture over Winsock sockets
+- `MultiplayerManager` component — configurable mode (host/client), port, max clients, snapshot rate, auto-start
+- `MultiplayerController` component — per-entity network ID, nickname, local/remote flag, transform sync
+- Prefab-based player spawning — `mm_player_prefab` field spawns player slots at runtime from an inline prefab
+- Snapshot replication — authoritative transform snapshots broadcast to all clients every tick
+- Launch args — `--mp-mode=host|client`, `--mp-server=IP`, `--mp-port=PORT`, `--mp-nick=NAME`
+- Lua multiplayer API — `scene.isConnected()`, `scene.isHost()`, `scene.playerCount()`, `scene.getNetworkId(idx)`, `scene.setNickname(idx, name)`
 
 ### Export
 - Standalone game export — copies `GameRuntime.exe` (editor-free lean binary) + assets to an output folder
@@ -249,16 +258,16 @@ Components are toggled by their `Active` flag, not removed from the array. All s
 
 ## Roadmap
 
-- [ ] **Full Linux support**  run the editor on Linux, export games for Linux targets
+- [ ] **Full Linux support** — run the editor on Linux, export games for Linux targets
 - [ ] Complete Maze Generator system
 - [ ] Vulkan render backend
 - [ ] Audio system (3D positional audio)
 - [ ] Skeletal animation and blend trees
-- [ ] Expanded Lua API  input queries, collision callbacks, entity spawning from scripts
+- [ ] HUD / in-game UI system (screen-space panels, health bars, crosshairs)
 - [ ] Plugin / native module system
-- [ ] Asset bundling  packed binary archives for distribution
+- [ ] Asset bundling — packed binary archives for distribution
 - [ ] Improved lightmap baking pipeline
-- [ ] Network replication (basic authoritative multiplayer)
+- [x] Network replication — basic authoritative multiplayer (host/client, UDP, prefab player spawning) ✓ v1.3.0
 - [ ] Cross-platform export (Windows, Linux, macOS)
 
 ---

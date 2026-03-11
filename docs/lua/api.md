@@ -60,6 +60,10 @@ For more complete examples see [`docs/lua/examples.md`](examples.md).
 | `scene.getEntityCount()` | `number` | Total entity count in scene |
 | `scene.getChannel(idx)` | `boolean` | Boolean value of input channel |
 | `scene.setChannel(idx, value)` | — | Set boolean value of input channel |
+| `scene.getChannelFloat(idx)` | `number` | Float value of input channel |
+| `scene.setChannelFloat(idx, value)` | — | Set float value of input channel |
+| `scene.getChannelString(idx)` | `string` | String value of input channel |
+| `scene.setChannelString(idx, value)` | — | Set string value of input channel |
 | `scene.spawnEntity(name)` | `number` | Spawn a new entity; returns its index |
 | `scene.destroyEntity(idx)` | — | Destroy (tombstone) entity at runtime |
 | `scene.isKeyDown(key)` | `boolean` | Keyboard state by key code or name |
@@ -72,6 +76,36 @@ For more complete examples see [`docs/lua/examples.md`](examples.md).
 | `scene.setContrast(value)` | — | Midtone contrast |
 | `scene.setBrightness(value)` | — | Additive brightness offset |
 | `scene.elapsed()` | `number` | Seconds since Play began |
+| `scene.getVelocity(idx)` | `vx, vy, vz` | Velocity of a rigid body |
+| `scene.setVelocity(idx, vx, vy, vz)` | — | Override velocity of a rigid body |
+| `scene.isGrounded(idx)` | `boolean` | Whether rigid body is on the ground |
+| `scene.applyImpulse(idx, ix, iy, iz)` | — | Add an instant velocity change (impulse / mass) |
+| `scene.setCursorLocked(locked)` | — | Lock or show the OS cursor |
+| `scene.isCursorLocked()` | `boolean` | Whether the cursor is currently locked |
+| `scene.loadScene(path)` | — | Load a new scene by filename (e.g. `"level2"`) |
+| `scene.getDistance(a, b)` | `number` | World-space distance between two entities |
+| `scene.getTag(idx)` | `string` | Tag string of entity |
+| `scene.setTag(idx, tag)` | — | Set tag string of entity |
+| `scene.findEntityByTag(tag)` | `number` | First entity with matching tag, or `-1` |
+| `scene.isConnected()` | `boolean` | Whether the multiplayer session is active |
+| `scene.isHost()` | `boolean` | Whether this instance is the host |
+| `scene.playerCount()` | `number` | Number of connected players |
+| `scene.getNetworkId(idx)` | `number` | Network ID of a multiplayer controller entity |
+| `scene.setNickname(idx, name)` | — | Set nickname on a multiplayer controller entity |
+| `scene.setAnimatorPlaying(idx, play)` | — | Start or stop a keyframe Animator |
+| `scene.setAnimatorSpeed(idx, speed)` | — | Set playback speed multiplier of an Animator |
+| `scene.setAnimatorBlend(idx, weight)` | — | Set blend weight (0..1) of an Animator |
+| `scene.setAnimControllerState(idx, state)` | — | Force an Animation Controller into a specific state index |
+| `scene.getAnimControllerState(idx)` | `number` | Current state index of an Animation Controller |
+| `scene.setAnimControllerEnabled(idx, enable)` | — | Enable or disable an Animation Controller |
+| `scene.setSSAO(enable, intensity, radius)` | — | Configure SSAO post-process |
+| `scene.setDistanceCulling(enable, dist)` | — | Enable distance culling and set max draw distance |
+| `scene.getLightmapIntensity()` | `number` | Current global lightmap intensity multiplier |
+| `scene.setLightmapIntensity(value)` | — | Set global lightmap intensity multiplier |
+| `scene.playAudio(idx)` | — | Trigger a one-shot play on an Audio Source entity |
+| `scene.getAudioGain(idx)` | `number` | Current computed gain of an Audio Source entity |
+| `scene.loadSkeleton(idx, path)` | `boolean` | Load a skeleton file onto a Skinned Mesh entity |
+| `scene.setBonePose(idx, bone, tx,ty,tz, rx,ry,rz)` | — | Override a bone's local transform in a Skinned Mesh |
 
 ---
 
@@ -244,6 +278,42 @@ scene.setChannel(0, true)
 
 ---
 
+### `scene.getChannelFloat(idx)`
+Returns the **float value** of channel `idx`.
+
+```lua
+local speed = scene.getChannelFloat(1)
+```
+
+---
+
+### `scene.setChannelFloat(idx, value)`
+Sets the **float value** of channel `idx`.
+
+```lua
+scene.setChannelFloat(1, 5.5)
+```
+
+---
+
+### `scene.getChannelString(idx)`
+Returns the **string value** of channel `idx`.
+
+```lua
+local label = scene.getChannelString(2)
+```
+
+---
+
+### `scene.setChannelString(idx, value)`
+Sets the **string value** of channel `idx`.
+
+```lua
+scene.setChannelString(2, "ready")
+```
+
+---
+
 ## scene — Post-Processing
 
 These functions control the scene-wide post-processing effects at runtime.
@@ -314,6 +384,102 @@ local ping = math.sin(t * 2.0)   -- oscillates over time
 
 ---
 
+## scene — Physics
+
+All physics functions operate on entities that have a **RigidBody** component. Calling them on entities without one has no effect.
+
+### `scene.getVelocity(idx)`
+Returns the current velocity of entity `idx` as three separate numbers `(vx, vy, vz)`.
+
+```lua
+local vx, vy, vz = scene.getVelocity(entity_idx)
+```
+
+---
+
+### `scene.setVelocity(idx, vx, vy, vz)`
+Directly overrides the velocity of entity `idx`.
+
+```lua
+scene.setVelocity(entity_idx, 0, 0, 0)   -- stop the body
+```
+
+---
+
+### `scene.isGrounded(idx)`
+Returns `true` if entity `idx` is currently flagged as grounded by the physics system.
+
+```lua
+if scene.isGrounded(entity_idx) then
+    -- allow jumping
+end
+```
+
+---
+
+### `scene.applyImpulse(idx, ix, iy, iz)`
+Applies an instant velocity change to entity `idx`. The impulse vector is divided by the body's mass internally, so the effect scales correctly regardless of weight.
+
+```lua
+-- jump
+if scene.isGrounded(entity_idx) and scene.isKeyDown("Space") then
+    scene.applyImpulse(entity_idx, 0, 8, 0)
+end
+```
+
+---
+
+## scene — Cursor
+
+### `scene.setCursorLocked(locked)`
+Locks or releases the OS cursor. When locked, the cursor is hidden and confined to the window — ideal for first-person camera control. Pass `false` to restore the cursor for menus.
+
+```lua
+function OnStart()
+    scene.setCursorLocked(true)   -- hide cursor on game start
+end
+
+function OnStop()
+    scene.setCursorLocked(false)  -- restore cursor when Play ends
+end
+```
+
+---
+
+### `scene.isCursorLocked()`
+Returns `true` if the cursor is currently locked.
+
+```lua
+if not scene.isCursorLocked() then
+    scene.setCursorLocked(true)
+end
+```
+
+---
+
+## scene — Scene Loading
+
+### `scene.loadScene(path)`
+Requests the engine to load a different scene on the next frame. `path` is the scene filename (with or without `.tscene`) relative to `assets/scenes/`.
+
+The current script finishes its current `OnUpdate` call, then the engine stops all scripts, clears the scene, loads the new one, and starts scripts again.
+
+```lua
+-- Switch to level 2 when the player enters the trigger
+function OnTriggerEnter(triggerIdx)
+    scene.loadScene("level2")
+end
+```
+
+```lua
+-- You can also pass the full filename
+scene.loadScene("level2.tscene")
+```
+
+> **Note:** `scene.loadScene` in the editor (Play mode) switches the current editing scene in addition to restarting scripts. In an exported game it only loads the new scene — the previous scene is not saved.
+
+---
+
 ## Lifecycle Functions
 
 These are **not** called by the script — they are **defined** by the script and called by the engine.
@@ -323,8 +489,236 @@ These are **not** called by the script — they are **defined** by the script an
 | `OnStart()` | Once, when Play begins | none |
 | `OnUpdate(dt)` | Every frame | `dt` — delta time in seconds |
 | `OnStop()` | When Play ends | none |
+| `OnTriggerEnter(triggerIdx)` | When a player enters a trigger volume | `triggerIdx` — entity index of the trigger |
+| `OnTriggerExit(triggerIdx)` | When the player leaves a trigger volume | `triggerIdx` — entity index of the trigger |
 
-All three are optional. Define only the ones your script needs.
+All five are optional. Define only the ones your script needs.
+
+### Trigger Callbacks
+
+`OnTriggerEnter` and `OnTriggerExit` are broadcast to **every** script in the scene when any trigger volume fires. Use `triggerIdx` to filter the event to only the trigger you care about:
+
+```lua
+local myTrigger = -1
+
+function OnStart()
+    myTrigger = scene.findEntity("Door_Trigger")
+end
+
+function OnTriggerEnter(triggerIdx)
+    if triggerIdx == myTrigger then
+        print("Player entered the door trigger!")
+    end
+end
+
+function OnTriggerExit(triggerIdx)
+    if triggerIdx == myTrigger then
+        print("Player left the door trigger.")
+    end
+end
+```
+
+---
+
+---
+
+## scene — Entity Tags
+
+### `scene.getTag(idx)`
+Returns the tag string of entity `idx`, or `""` if none set.
+
+```lua
+local tag = scene.getTag(entity_idx)
+```
+
+---
+
+### `scene.setTag(idx, tag)`
+Sets the tag string of entity `idx`. Tags are arbitrary strings used for grouping or filtering entities.
+
+```lua
+scene.setTag(entity_idx, "enemy")
+```
+
+---
+
+### `scene.findEntityByTag(tag)`
+Returns the index of the **first** entity whose tag matches `tag`, or `-1` if not found.
+
+```lua
+local boss = scene.findEntityByTag("boss")
+if boss >= 0 then
+    local x, y, z = scene.getPos(boss)
+end
+```
+
+---
+
+### `scene.getDistance(a, b)`
+Returns the world-space distance between entity `a` and entity `b`.
+
+```lua
+local d = scene.getDistance(entity_idx, target)
+if d < 3.0 then
+    print("Close enough!")
+end
+```
+
+---
+
+## scene — Multiplayer
+
+These functions query the active multiplayer session. They are safe to call even when no session is running (they return safe defaults).
+
+### `scene.isConnected()`
+Returns `true` if a multiplayer session is currently active (host is running or client is connected).
+
+---
+
+### `scene.isHost()`
+Returns `true` if this instance is running as the host.
+
+```lua
+if scene.isHost() then
+    -- Only the host runs authoritative logic
+end
+```
+
+---
+
+### `scene.playerCount()`
+Returns the number of currently connected players (including the host).
+
+```lua
+print("Players online: " .. scene.playerCount())
+```
+
+---
+
+### `scene.getNetworkId(idx)`
+Returns the `uint64` Network ID of a multiplayer controller at entity `idx`. Returns `0` if the entity has no active controller.
+
+---
+
+### `scene.setNickname(idx, name)`
+Sets the display nickname of the multiplayer controller at entity `idx`. Also computes a new Network ID from the name if the current one is `0`.
+
+```lua
+scene.setNickname(entity_idx, "Speedrunner42")
+```
+
+---
+
+## scene — Animators
+
+### `scene.setAnimatorPlaying(idx, play)`
+Starts (`play = 1`) or stops (`play = 0`) the keyframe Animator on entity `idx`.
+
+```lua
+scene.setAnimatorPlaying(door_idx, 1)   -- play the open animation
+```
+
+---
+
+### `scene.setAnimatorSpeed(idx, speed)`
+Sets the playback speed multiplier of the Animator on entity `idx`. `1.0` = normal, `2.0` = double speed, `-1.0` = reverse.
+
+---
+
+### `scene.setAnimatorBlend(idx, weight)`
+Sets the blend weight (`0.0`–`1.0`) of the Animator on entity `idx`.
+
+---
+
+### `scene.setAnimControllerState(idx, state)`
+Forces the Animation Controller on entity `idx` into state index `state` immediately, resetting state time to `0`.
+
+```lua
+scene.setAnimControllerState(player_idx, 2)   -- jump to state 2
+```
+
+---
+
+### `scene.getAnimControllerState(idx)`
+Returns the current state index of the Animation Controller on entity `idx`, or `-1` if no controller.
+
+---
+
+### `scene.setAnimControllerEnabled(idx, enable)`
+Enables (`enable = 1`) or disables (`enable = 0`) the Animation Controller on entity `idx`.
+
+---
+
+## scene — Post-Processing (extended)
+
+### `scene.setSSAO(enable, intensity, radius)`
+Configures the SSAO post-processing effect. `intensity` and `radius` are optional (defaults: `0.35`, `2.0`).
+
+```lua
+scene.setSSAO(1, 0.5, 1.5)   -- enable with custom settings
+scene.setSSAO(0)              -- disable
+```
+
+---
+
+### `scene.setDistanceCulling(enable, dist)`
+Enables or disables distance-based draw call culling. `dist` is the max draw distance in world units (default: `150.0`). Useful for performance in large scenes.
+
+```lua
+scene.setDistanceCulling(1, 80.0)
+```
+
+---
+
+### `scene.getLightmapIntensity()`
+Returns the current global lightmap intensity multiplier.
+
+---
+
+### `scene.setLightmapIntensity(value)`
+Sets the global lightmap intensity multiplier. Useful for day/night transitions driven from Lua.
+
+```lua
+scene.setLightmapIntensity(0.3)   -- dim the baked GI
+```
+
+---
+
+## scene — Audio
+
+### `scene.playAudio(idx)`
+Triggers a one-shot playback on the Audio Source component of entity `idx`.
+
+```lua
+local sfx = scene.findEntity("Explosion_SFX")
+scene.playAudio(sfx)
+```
+
+---
+
+### `scene.getAudioGain(idx)`
+Returns the current computed gain (volume, `0.0`–`1.0`) of the Audio Source at entity `idx`, factoring in distance attenuation and occlusion.
+
+---
+
+## scene — Skeletal Mesh
+
+### `scene.loadSkeleton(idx, path)`
+Loads a skeleton file from `path` onto the Skinned Mesh component of entity `idx`. Returns `true` on success.
+
+```lua
+scene.loadSkeleton(char_idx, "assets/meshes/hero.skeleton")
+```
+
+---
+
+### `scene.setBonePose(idx, bone, tx, ty, tz, rx, ry, rz)`
+Overrides the local transform of bone index `bone` on the Skinned Mesh at entity `idx`. Position in world units; rotation in degrees (Yaw/Pitch/Roll order).
+
+```lua
+-- Tilt bone 3 forward by 20 degrees
+scene.setBonePose(char_idx, 3,  0,0,0,  20,0,0)
+```
 
 ---
 

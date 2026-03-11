@@ -1,14 +1,16 @@
-﻿#include "ui/hierarchyPanel.h"
+#include "ui/hierarchyPanel.h"
 #include "scene/entity.h"
 #include "renderer/mesh.h"
 #include "serialization/prefabSerializer.h"
 #include "input/inputmanager.h"
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <chrono>
 #include <cstring>
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <cstdlib>
 
 namespace tsu {
 
@@ -60,6 +62,26 @@ void HierarchyPanel::CreateMeshEntity(Scene& scene, const std::string& type, int
     }
 
     selectedEntity   = id;
+    m_RenamingEntity = id;
+    strncpy(m_RenameBuffer, name.c_str(), sizeof(m_RenameBuffer) - 1);
+    m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
+}
+
+void HierarchyPanel::CreateEmptyEntity(Scene& scene, int& selectedEntity)
+{
+    std::string name = MakeUniqueName(scene, "Empty");
+    Entity e = scene.CreateEntity(name);
+    int id = (int)e.GetID();
+    if (selectedEntity >= 0 && selectedEntity < (int)scene.Transforms.size())
+    {
+        scene.Transforms[id].Position = scene.Transforms[selectedEntity].Position;
+        scene.SetEntityParent(id, selectedEntity);
+    }
+    else if (m_SelectedGroup >= 0 && m_SelectedGroup < (int)scene.Groups.size())
+    {
+        scene.SetEntityGroup(id, m_SelectedGroup);
+    }
+    selectedEntity = id;
     m_RenamingEntity = id;
     strncpy(m_RenameBuffer, name.c_str(), sizeof(m_RenameBuffer) - 1);
     m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
@@ -156,6 +178,7 @@ void HierarchyPanel::CreatePrefab(Scene& scene, int entityIdx)
         PrefabEntityData node;
         node.ParentIdx = parentNodeIdx;
         node.Name      = scene.EntityNames[eIdx];
+        node.NodeGuid  = (int)prefab.Nodes.size();
 
         // Transform; root node stored with zero position (placed at spawn pos)
         node.Transform = scene.Transforms[eIdx];
@@ -188,6 +211,62 @@ void HierarchyPanel::CreatePrefab(Scene& scene, int entityIdx)
             node.Camera    = scene.GameCameras[eIdx];
         }
 
+        if (eIdx < (int)scene.Triggers.size() && scene.Triggers[eIdx].Active)
+        {
+            const auto& tr = scene.Triggers[eIdx];
+            node.HasTrigger = true;
+            node.TriggerSize = tr.Size;
+            node.TriggerOffset = tr.Offset;
+            node.TriggerChannel = tr.Channel;
+            node.TriggerInsideValue = tr.InsideValue;
+            node.TriggerOutsideValue = tr.OutsideValue;
+            node.TriggerOneShot = tr.OneShot;
+        }
+        if (eIdx < (int)scene.Animators.size() && scene.Animators[eIdx].Active)
+        {
+            const auto& an = scene.Animators[eIdx];
+            node.HasAnimator = true;
+            node.AnimProp = (int)an.Property;
+            node.AnimMode = (int)an.Mode;
+            node.AnimEasing = (int)an.Easing;
+            node.AnimFrom = an.From;
+            node.AnimTo = an.To;
+            node.AnimDuration = an.Duration;
+            node.AnimDelay = an.Delay;
+            node.AnimSpeed = an.PlaybackSpeed;
+            node.AnimBlend = an.BlendWeight;
+            node.AnimAutoPlay = an.AutoPlay;
+        }
+        if (eIdx < (int)scene.LuaScripts.size() && scene.LuaScripts[eIdx].Active)
+        {
+            node.HasLuaScript = true;
+            node.LuaScriptPath = scene.LuaScripts[eIdx].ScriptPath;
+            node.LuaExposedVars = scene.LuaScripts[eIdx].ExposedVars;
+        }
+        if (eIdx < (int)scene.AudioSources.size() && scene.AudioSources[eIdx].Active)
+        {
+            const auto& as = scene.AudioSources[eIdx];
+            node.HasAudioSource = true;
+            node.AudioClipPath = as.ClipPath;
+            node.AudioLoop = as.Loop;
+            node.AudioPlayOnStart = as.PlayOnStart;
+            node.AudioSpatial = as.Spatial;
+            node.AudioVolume = as.Volume;
+            node.AudioPitch = as.Pitch;
+            node.AudioMinDistance = as.MinDistance;
+            node.AudioMaxDistance = as.MaxDistance;
+            node.AudioOcclusionFactor = as.OcclusionFactor;
+            node.AudioOutputChannel = as.OutputChannel;
+        }
+        if (eIdx < (int)scene.AudioBarriers.size() && scene.AudioBarriers[eIdx].Active)
+        {
+            const auto& ab = scene.AudioBarriers[eIdx];
+            node.HasAudioBarrier = true;
+            node.AudioBarrierSize = ab.Size;
+            node.AudioBarrierOffset = ab.Offset;
+            node.AudioBarrierOcclusion = ab.Occlusion;
+        }
+
         int myIdx = (int)prefab.Nodes.size();
         prefab.Nodes.push_back(node);
 
@@ -212,6 +291,12 @@ void HierarchyPanel::CreatePrefab(Scene& scene, int entityIdx)
     while ((int)scene.EntityIsPrefabInstance.size() <= entityIdx)
         scene.EntityIsPrefabInstance.push_back(false);
     scene.EntityIsPrefabInstance[entityIdx] = true;
+    while ((int)scene.EntityPrefabSource.size() <= entityIdx)
+        scene.EntityPrefabSource.push_back(-1);
+    scene.EntityPrefabSource[entityIdx] = (int)scene.Prefabs.size() - 1;
+    while ((int)scene.EntityPrefabNode.size() <= entityIdx)
+        scene.EntityPrefabNode.push_back(0);
+    scene.EntityPrefabNode[entityIdx] = 0;
 }
 
 // ----------------------------------------------------------------
@@ -1045,9 +1130,10 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
     {
         if (ImGui::BeginMenu("3D Objects"))
         {
+            if (ImGui::MenuItem("Empty Object")) CreateEmptyEntity(scene, selectedEntity);
             if (ImGui::MenuItem("Cube"))     CreateMeshEntity(scene, "Cube",     selectedEntity);
             if (ImGui::MenuItem("Sphere"))   CreateMeshEntity(scene, "Sphere",   selectedEntity);
-            if (ImGui::MenuItem("Plane"))    CreateMeshEntity(scene, "Plane",    selectedEntity);
+            if (ImGui::MenuItem("Plane"))        CreateMeshEntity(scene, "Plane",    selectedEntity);
             if (ImGui::MenuItem("Pyramid"))  CreateMeshEntity(scene, "Pyramid",  selectedEntity);
             if (ImGui::MenuItem("Cylinder")) CreateMeshEntity(scene, "Cylinder", selectedEntity);
             if (ImGui::MenuItem("Capsule"))  CreateMeshEntity(scene, "Capsule",  selectedEntity);
@@ -1082,6 +1168,28 @@ void HierarchyPanel::Render(Scene& scene, int& selectedEntity,
         {
             if (ImGui::MenuItem("Camera"))   CreateCameraEntity(scene, selectedEntity);
             ImGui::EndMenu();
+        }
+        if (ImGui::MenuItem("Multiplayer Manager"))
+        {
+            std::string name = MakeUniqueName(scene, "Multiplayer Manager");
+            Entity e = scene.CreateEntity(name);
+            int id = (int)e.GetID();
+            if (selectedEntity >= 0 && selectedEntity < (int)scene.Transforms.size())
+            {
+                scene.Transforms[id].Position = scene.Transforms[selectedEntity].Position;
+                scene.SetEntityParent(id, selectedEntity);
+            }
+            else if (m_SelectedGroup >= 0 && m_SelectedGroup < (int)scene.Groups.size())
+                scene.SetEntityGroup(id, m_SelectedGroup);
+            selectedEntity   = id;
+            m_RenamingEntity = id;
+            strncpy(m_RenameBuffer, name.c_str(), sizeof(m_RenameBuffer) - 1);
+            m_RenameBuffer[sizeof(m_RenameBuffer) - 1] = '\0';
+            if (id >= 0 && id < (int)scene.MultiplayerManagers.size())
+            {
+                scene.MultiplayerManagers[id].Active = true;
+                scene.MultiplayerManagers[id].Enabled = true;
+            }
         }
 
         ImGui::EndPopup();

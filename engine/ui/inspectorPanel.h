@@ -20,6 +20,9 @@ public:
     static constexpr int COMP_TRIGGER    = 8;
     static constexpr int COMP_ANIMATOR   = 9;
     static constexpr int COMP_LUA        = 10;
+    static constexpr int COMP_AUDIO      = 11;
+    static constexpr int COMP_MP_MANAGER = 12;
+    static constexpr int COMP_MP_CTRL    = 13;
 
     void Render(Scene& scene, int selectedEntity, int selectedGroup,
                 int winX, int winY, int panelW, int panelH,
@@ -68,6 +71,15 @@ private:
     bool DrawLuaScriptSection       (LuaScriptComponent& ls,
                                      int orderIdx,
                                      std::vector<int>& order);
+    bool DrawAudioSourceSection     (AudioSourceComponent& as,
+                                     int orderIdx,
+                                     std::vector<int>& order);
+    bool DrawMultiplayerManagerSection(MultiplayerManagerComponent& mm,
+                                       int orderIdx,
+                                       std::vector<int>& order);
+    bool DrawMultiplayerControllerSection(MultiplayerControllerComponent& mc,
+                                          int orderIdx,
+                                          std::vector<int>& order);
 
     // Scene-level settings (Fog, Sky, PostProcess) shown when no entity is selected
     void DrawEnvironmentSettings    (Scene& scene);

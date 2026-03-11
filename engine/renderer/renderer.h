@@ -90,7 +90,7 @@ private:
     static void DrawSky(const Scene& scene, const glm::mat4& view, const glm::mat4& proj);
 
     // Post-process composite pass (reads s_PostColorTex → default FBO)
-    static void RenderPostProcess(const Scene& scene, int winW, int winH);
+    static void RenderPostProcess(Scene& scene, int winW, int winH);
 
     // Ensure post-process FBO matches the (winW, winH) resolution
     static void ResizePostFBO(int winW, int winH);
@@ -170,6 +170,8 @@ private:
         int posterizeEnabled, posterizeLevels;
         int scanlinesEnabled, scanlinesStrength, scanlinesFrequency;
         int pixelateEnabled, pixelateSize;
+        int ssaoEnabled, ssaoIntensity, ssaoRadius;
+        int lutEnabled, lutTex, lutStrength, lutSlices;
     };
     static PostLocs s_PostLocs;
 };

@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
 
+struct GLFWwindow;
+
 namespace tsu {
 
 class Scene;
@@ -33,6 +35,16 @@ class Scene;
 //    scene.getEntityCount()        -> int
 //    scene.getChannel(idx)         -> bool
 //    scene.setChannel(idx, val)
+//    scene.getChannelFloat(idx)    -> number
+//    scene.setChannelFloat(idx, val)
+//    scene.getChannelString(idx)   -> string
+//    scene.setChannelString(idx, val)
+//    scene.getVelocity(idx)        -> x, y, z
+//    scene.setVelocity(idx, x, y, z)
+//    scene.isGrounded(idx)         -> bool
+//    scene.applyImpulse(idx, x, y, z)
+//    scene.setCursorLocked(bool)
+//    scene.isCursorLocked()        -> bool
 //    scene.getPostEnabled()        -> bool
 //    scene.setPostEnabled(bool)
 //    scene.setExposure(float)
@@ -40,6 +52,15 @@ class Scene;
 //    scene.setContrast(float)
 //    scene.setBrightness(float)
 //    scene.elapsed()               -> float (seconds since play start)
+//    scene.spawnEntity([name])     -> idx
+//    scene.destroyEntity(idx)
+//    scene.getMouseDelta()         -> dx, dy
+//    scene.isMouseDown([btn])      -> bool  (0=left 1=right 2=mid)
+//    scene.isKeyDown(key)          -> bool  (int code or string e.g. "W")
+//
+//  Trigger callbacks (optional — define in any script to receive events):
+//    function OnTriggerEnter(triggerIdx)  -- fired for ALL active scripts
+//    function OnTriggerExit(triggerIdx)
 // ================================================================
 
 class LuaSystem
@@ -49,11 +70,23 @@ public:
     // all active+enabled LuaScript files so their environments are ready.
     static void Init(Scene& scene);
 
+    // Associate a GLFW window so Lua scripts can control cursor lock.
+    // Call once after Init (or whenever the window handle is available).
+    static void SetWindow(GLFWwindow* window);
+
     // Fire OnStart() for every active+enabled script.  Must be called after Init.
     static void StartScripts();
 
     // Fire OnUpdate(dt) for every active+enabled script.
     static void UpdateScripts(Scene& scene, float dt);
+
+    // Broadcast OnTriggerEnter / OnTriggerExit to all active scripts.
+    static void FireTriggerEnter(int triggerEntityIdx);
+    static void FireTriggerExit (int triggerEntityIdx);
+
+    // Called by scene.loadScene(path) inside a script; consumed by the Application after UpdateScripts.
+    static void        RequestLoadScene(const std::string& path);
+    static std::string GetPendingLoadScene();   // returns "" if none pending
 
     // Fire OnStop() for every script, then tear down the Lua state.
     static void Shutdown();

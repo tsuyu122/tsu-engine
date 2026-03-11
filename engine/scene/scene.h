@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <cmath>
@@ -236,6 +237,7 @@ struct PlayerControllerComponent
     float _HeadbobPhase    = 0.0f;
     float _HeadbobBlend    = 0.0f;   // 0=still 1=fullbob (smoothed)
     float _HeadbobBaseY    = 0.0f;   // captures the camera's rest Y on first move
+    float _HeadbobBaseX    = 0.0f;
     bool  _HeadbobBaseSet  = false;
 };
 
@@ -290,6 +292,10 @@ struct LightComponent
     bool      BakedOnly   = false;    // excluded from real-time; contributes only to lightmap bakes
 };
 
+// Forward declarations for animation controller data (defined later)
+struct AnimationStateData;
+struct AnimationTransitionData;
+
 // ================================================================
 // PrefabAsset  --  serialisable entity template stored in assets
 //   Nodes[0]  = root entity
@@ -299,13 +305,77 @@ struct PrefabEntityData
 {
     std::string         Name;
     int                 ParentIdx    = -1;  // index in PrefabAsset::Nodes; -1 = root
+    int                 NodeGuid     = -1;
     std::string         MeshType;
     std::string         MaterialName;
     TransformComponent  Transform;
+    bool                EntityStatic = true;
+    bool                ReceiveLightmap = true;
+    std::string         Tag;
     bool                HasLight     = false;
     LightComponent      Light;
     bool                HasCamera    = false;
     GameCameraComponent Camera;
+    bool                HasTrigger   = false;
+    glm::vec3           TriggerSize  = {1.0f, 2.0f, 1.0f};
+    glm::vec3           TriggerOffset = {0.0f, 0.0f, 0.0f};
+    int                 TriggerChannel = -1;
+    bool                TriggerInsideValue = true;
+    bool                TriggerOutsideValue = false;
+    bool                TriggerOneShot = false;
+    bool                HasAnimator = false;
+    int                 AnimProp = 0;
+    int                 AnimMode = 0;
+    int                 AnimEasing = 0;
+    glm::vec3           AnimFrom = {0.0f, 0.0f, 0.0f};
+    glm::vec3           AnimTo = {0.0f, 1.0f, 0.0f};
+    float               AnimDuration = 1.0f;
+    float               AnimDelay = 0.0f;
+    float               AnimSpeed = 1.0f;
+    float               AnimBlend = 1.0f;
+    bool                AnimAutoPlay = true;
+    bool                HasLuaScript = false;
+    std::string         LuaScriptPath;
+    std::map<std::string, std::string> LuaExposedVars;
+    bool                HasAudioSource = false;
+    std::string         AudioClipPath;
+    bool                AudioLoop = true;
+    bool                AudioPlayOnStart = true;
+    bool                AudioSpatial = true;
+    float               AudioVolume = 1.0f;
+    float               AudioPitch = 1.0f;
+    float               AudioMinDistance = 1.0f;
+    float               AudioMaxDistance = 25.0f;
+    float               AudioOcclusionFactor = 0.65f;
+    int                 AudioOutputChannel = -1;
+    bool                HasAudioBarrier = false;
+    glm::vec3           AudioBarrierSize = {1.0f, 1.0f, 1.0f};
+    glm::vec3           AudioBarrierOffset = {0.0f, 0.0f, 0.0f};
+    float               AudioBarrierOcclusion = 0.55f;
+    bool                HasMpManager = false;
+    bool                MpMgrEnabled = true;
+    int                 MpMgrMode    = 0; // 0=Host 1=Client
+    std::string         MpMgrBind    = "0.0.0.0";
+    std::string         MpMgrServer  = "127.0.0.1";
+    int                 MpMgrPort    = 27015;
+    int                 MpMgrMaxClients = 16;
+    float               MpMgrSnapshotRate = 20.0f;
+    bool                MpMgrReplicateChannels = true;
+    bool                MpMgrAutoStart = true;
+    bool                MpMgrAutoReconnect = true;
+    float               MpMgrReconnectDelay = 2.0f;
+    bool                HasMpController = false;
+    bool                MpCtrlEnabled   = true;
+    std::string         MpCtrlNickname  = "Player";
+    uint64_t            MpCtrlNetworkId = 0;
+    bool                MpCtrlIsLocal   = false;
+    bool                MpCtrlSyncTransform = true;
+    bool                HasAnimController = false;
+    bool                AcEnabled       = true;
+    bool                AcAutoStart     = true;
+    int                 AcDefaultState  = 0;
+    std::vector<AnimationStateData>      AcStates;
+    std::vector<AnimationTransitionData> AcTransitions;
 };
 
 // ================================================================
@@ -481,6 +551,38 @@ struct PostProcessSettings
     // Pixelate
     bool  PixelateEnabled  = false;
     float PixelateSize     = 4.0f;   // pixel block size in screen pixels
+    bool  SSAOEnabled      = false;
+    float SSAOIntensity    = 0.35f;
+    float SSAORadius       = 2.0f;
+    bool  UseExternalPostShader = false;
+    std::string ExternalPostPath;
+    bool  UseExternalColorCfg    = false;
+    std::string ExternalColorCfgPath;
+    bool  LUTEnabled       = false;
+    std::string LUTPath;
+    float LUTStrength      = 1.0f;
+};
+
+struct RealtimeRenderSettings
+{
+    bool  EnableShadows = true;
+    int   ShadowMapSize2D = 1024;
+    int   ShadowMapSizeCube = 512;
+    float DirectionalShadowDistance = 40.0f;
+    float DirectionalShadowOrtho = 30.0f;
+    int   MaxRealtimeLights = 8;
+    bool  FrustumCulling = true;
+    bool  DistanceCulling = false;
+    float MaxDrawDistance = 150.0f;
+    bool  UseFog = true;
+    bool  UseSkyAmbient = true;
+};
+
+struct BakedLightingSettings
+{
+    bool  AutoApplyLightmapIntensity = true;
+    float AutoIntensityMultiplier = 1.0f;
+    float MaxAutoIntensity = 2.0f;
 };
 
 // ================================================================
@@ -506,6 +608,7 @@ struct TriggerComponent
 
     // A single channel is set while the player is inside / outside
     int       Channel         = -1;   // -1 = no action
+    bool      ActiveValue     = true;
     bool      InsideValue     = true;  // value to set when inside
     bool      OutsideValue    = false; // value to set when outside
 
@@ -542,12 +645,152 @@ struct AnimatorComponent
     glm::vec3         To        = { 0.0f, 1.0f, 0.0f };
     float             Duration  = 1.0f;   // seconds for one half-cycle
     float             Delay     = 0.0f;   // initial delay before starting
+    float             PlaybackSpeed = 1.0f;
+    float             BlendWeight   = 1.0f;
 
     // Runtime state (not serialised)
     float             _Phase    = 0.0f;  // [0,1] animated parameter
     float             _Dir      = 1.0f;  // +1 / -1 for oscillate
     float             _Timer    = 0.0f;  // accumulated time
     bool              _DelayDone = false;
+};
+
+enum class AnimationConditionOp { BoolTrue = 0, BoolFalse = 1, FloatGreater = 2, FloatLess = 3 };
+
+struct AnimationStateData
+{
+    std::string       Name       = "State";
+    AnimatorProperty  Property   = AnimatorProperty::Position;
+    AnimatorMode      Mode       = AnimatorMode::Loop;
+    AnimatorEasing    Easing     = AnimatorEasing::EaseInOut;
+    glm::vec3         From       = {0,0,0};
+    glm::vec3         To         = {0,1,0};
+    float             Duration   = 1.0f;
+    float             Delay      = 0.0f;
+    float             PlaybackSpeed = 1.0f;
+    float             BlendWeight   = 1.0f;
+    bool              AutoPlay      = true;
+};
+
+struct AnimationTransitionData
+{
+    int                  FromState = -1;
+    int                  ToState   = -1;
+    int                  Channel   = -1;
+    AnimationConditionOp Condition = AnimationConditionOp::BoolTrue;
+    float                Threshold = 0.5f;
+    float                ExitTime  = 0.0f;
+};
+
+struct AnimationControllerComponent
+{
+    bool                                Active = false;
+    bool                                Enabled = true;
+    bool                                AutoStart = true;
+    int                                 DefaultState = 0;
+    std::vector<AnimationStateData>     States;
+    std::vector<AnimationTransitionData> Transitions;
+    int                                 _CurrentState = -1;
+    float                               _StateTime = 0.0f;
+};
+
+// ================================================================
+// Skinned Mesh Component  -- simple CPU skinning pipeline
+// ================================================================
+struct SkinnedMeshComponent
+{
+    bool        Active     = false;
+    bool        Enabled    = true;
+    std::string SkeletonPath;
+    bool        Loaded     = false;
+    int         BoneCount  = 0;
+    std::vector<int>        Parent;
+    std::vector<glm::mat4>  BindPose;
+    std::vector<glm::mat4>  Pose;
+    std::vector<glm::ivec4> BoneIndices; // per-vertex (size == mesh vertex count)
+    std::vector<glm::vec4>  BoneWeights; // per-vertex
+    std::vector<Mesh::CpuVertex> BaseVertices; // mesh original vertices
+};
+
+enum class MultiplayerMode
+{
+    Host = 0,
+    Client = 1
+};
+
+struct MultiplayerManagerComponent
+{
+    bool        Active = false;
+    bool        Enabled = true;
+    bool        AutoStart = true;
+    MultiplayerMode Mode = MultiplayerMode::Host;
+    std::string BindAddress = "0.0.0.0";
+    std::string ServerAddress = "127.0.0.1";
+    int         Port = 27015;
+    int         MaxClients = 16;
+    float       SnapshotRate = 20.0f;
+    bool        ReplicateChannels = true;
+    bool        Running = false;
+    bool        AutoReconnect = true;
+    float       ReconnectDelay = 2.0f;
+    bool        Connected = false;
+    int         ConnectedPlayers = 0;
+    float       EstimatedPingMs = 0.0f;
+    float       TimeSinceLastPacket = 0.0f;
+    std::string RuntimeState = "Stopped";
+    int         PlayerPrefabIdx = -1;   // index into Scene::Prefabs (-1 = none)
+    glm::vec3   SpawnPoint = {0, 1, 0}; // where to spawn players
+    bool        RequestStartHost = false;
+    bool        RequestStartClient = false;
+    bool        RequestStop = false;
+
+    // Runtime: indices of entities spawned by this manager (cleaned up on stop)
+    std::vector<int> SpawnedEntities;
+};
+
+struct MultiplayerControllerComponent
+{
+    bool        Active = false;
+    bool        Enabled = true;
+    std::string Nickname = "Player";
+    uint64_t    NetworkId = 0;
+    bool        IsLocalPlayer = false;
+    bool        SyncTransform = true;
+    bool        Replicated = false;
+    bool        OwnedLocally = false;
+    float       LastNetUpdateAge = -1.0f;
+    float       LastNetReceiveTime = -1.0f;
+};
+
+struct AudioSourceComponent
+{
+    bool        Active          = false;
+    bool        Enabled         = true;
+    std::string ClipPath;
+    bool        Loop            = true;
+    bool        PlayOnStart     = true;
+    bool        Spatial         = true;
+    float       Volume          = 1.0f;
+    float       Pitch           = 1.0f;
+    float       MinDistance     = 1.0f;
+    float       MaxDistance     = 25.0f;
+    float       OcclusionFactor = 0.65f;
+    int         OutputChannel   = -1;
+    int         GateChannel     = -1;
+    bool        GateValue       = true;
+    bool        TriggerOneShot  = false;
+    bool        _GatePrev       = false;
+    bool        _Playing        = false;
+    float       _CurrentGain    = 0.0f;
+};
+
+struct AudioBarrierComponent
+{
+    bool      Active    = false;
+    bool      Enabled   = true;
+    glm::vec3 Size      = {1.0f, 1.0f, 1.0f};
+    glm::vec3 Offset    = {0.0f, 0.0f, 0.0f};
+    float     Occlusion = 0.55f;
 };
 
 // ================================================================
@@ -589,12 +832,20 @@ public:
     std::vector<LightComponent>             Lights;
     std::vector<TriggerComponent>           Triggers;
     std::vector<AnimatorComponent>          Animators;
+    std::vector<AnimationControllerComponent> AnimationControllers;
+    std::vector<MultiplayerManagerComponent>  MultiplayerManagers;
+    std::vector<MultiplayerControllerComponent> MultiplayerControllers;
     std::vector<LuaScriptComponent>         LuaScripts;
+    std::vector<AudioSourceComponent>       AudioSources;
+    std::vector<AudioBarrierComponent>      AudioBarriers;
+    std::vector<SkinnedMeshComponent>   SkinnedMeshes;
 
     // --- Scene-level settings ---
     FogSettings         Fog;
     SkySettings         Sky;
     PostProcessSettings PostProcess;
+    RealtimeRenderSettings Realtime;
+    BakedLightingSettings  BakedLighting;
     float               LightmapIntensity = 1.0f;  // baked GI multiplier (0=off, 1=default, >1=stronger)
 
     // --- Hierarchy display order ---
@@ -614,17 +865,28 @@ public:
     std::vector<PrefabAsset>           Prefabs;                // prefab assets
     std::vector<bool>                  EntityIsPrefabInstance; // parallel to Transforms
     std::vector<int>                   EntityPrefabSource;     // parallel: index into Prefabs (-1 = none)
+    std::vector<int>                   EntityPrefabNode;       // parallel: index into PrefabAsset::Nodes (-1 = none)
+    std::vector<std::string>           EntityTags;             // per-entity tag string
     std::vector<std::string>           MeshAssets;             // OBJ file paths registered as assets
     std::vector<int>                   MeshAssetFolders;       // folder index per mesh asset (-1 = root)
     std::vector<std::string>           ScriptAssets;           // Lua script file paths registered as assets
+    std::vector<std::string>           ShaderAssets;           // Shader file paths (.glsl/.frag/.vert)
+    std::vector<std::string>           AudioAssets;            // Audio clip file paths (.wav/.ogg/.mp3)
     std::vector<int>                   ScriptAssetFolders;     // folder index per script asset (-1 = root)
 
     // --- Maze system ---
     std::vector<MazeGeneratorComponent> MazeGenerators;        // parallel per-entity
     std::vector<RoomSet>                RoomSets;              // scene-level room set assets
 
+    // --- Editor camera state (not used in gameplay, saved per-scene) ---
+    glm::vec3 EditorCamPos   = { 0.0f, 1.0f, 6.0f };
+    float     EditorCamYaw   = -90.0f;
+    float     EditorCamPitch =   0.0f;
+
     // --- Entity API ---
     Entity CreateEntity(const std::string& name = "Entity");
+    // Instantiate a prefab into the scene, returns root entity index (-1 on failure)
+    int    SpawnFromPrefab(int prefabIdx, const glm::vec3& position);
     void   OnUpdate(float dt);
     int    GetActiveGameCamera() const;
 

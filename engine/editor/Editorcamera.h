@@ -13,8 +13,14 @@ public:
     glm::mat4 GetProjection(float aspect) const;
     glm::vec3 GetPosition() const { return m_Position; }
     glm::vec3 GetFront()    const { return m_Front; }
+    float     GetYaw()      const { return m_Yaw; }
+    float     GetPitch()    const { return m_Pitch; }
     float     GetScrollSpeedDisplayTimer() const { return m_ScrollSpeedDisplayTimer; }
     float     GetScrollSpeed()             const { return ScrollSpeed; }
+
+    void SetPosition(const glm::vec3& pos) { m_Position = pos; }
+    void SetYaw(float yaw)                 { m_Yaw = yaw;   UpdateVectors(); }
+    void SetPitch(float pitch)             { m_Pitch = pitch; UpdateVectors(); }
 
     float FOV             = 60.0f;
     float Near            = 0.1f;

@@ -1,0 +1,101 @@
+# tsuEngine — Multiplayer Test Scene
+# Players are spawned from the PlayerPrefab when play starts.
+# Both host and client spawn two player slots; the MM assigns which slot
+# is local based on the mode (Host = slot 0, Client = slot 1).
+
+[fog]
+type    = 0
+
+[sky]
+enabled   = true
+zenith    = 0.08 0.20 0.55
+horizon   = 0.55 0.70 0.90
+ground    = 0.20 0.18 0.14
+sun_dir   = 0.40 0.80 0.30
+sun_col   = 1.40 1.25 0.90
+sun_size  = 0.025
+sun_bloom = 0.12
+
+[postprocess]
+enabled         = true
+bloom           = true
+bloom_threshold = 0.80
+bloom_intensity = 0.35
+bloom_radius    = 1.40
+vignette        = true
+vig_radius      = 0.75
+vig_strength    = 0.35
+color_grade     = true
+exposure        = 1.05
+saturation      = 1.05
+contrast        = 1.05
+brightness      = 0.00
+
+# ========================
+# GAME CAMERA
+# ========================
+[entity]
+name     = Game Camera
+type     = game_camera
+fov      = 70
+position = 0 8 12
+yaw      = -90.0
+pitch    = -30.0
+
+# ========================
+# LIGHT
+# ========================
+[entity]
+name            = Sun
+type            = cube
+position        = 5 10 5
+rotation        = 50 -30 0
+scale           = 0.2 0.2 0.2
+color           = #FFE8B0
+light           = true
+light_type      = directional
+light_color     = 1.0 0.95 0.85
+light_intensity = 2.5
+
+# ========================
+# FLOOR
+# ========================
+[entity]
+name     = Floor
+type     = cube
+position = 0 -0.5 0
+scale    = 20 1 20
+color    = #556655
+static   = true
+
+# ========================
+# MULTIPLAYER MANAGER
+# ========================
+[entity]
+name              = Multiplayer Manager
+type              = cube
+position          = 0 -10 0
+scale             = 0.1 0.1 0.1
+color             = #222222
+multiplayer_manager = true
+mm_mode           = 0
+mm_port           = 27015
+mm_auto_start     = true
+mm_max_clients    = 4
+mm_snapshot_rate  = 20
+mm_player_prefab  = PlayerPrefab
+
+# ========================
+# PLAYER PREFAB (inline)
+# ========================
+[prefab]
+prefab_name = PlayerPrefab
+
+[prefab_node]
+node_idx    = 0
+node_name   = Player
+node_parent = -1
+node_mesh   = capsule
+position    = 0 1 0
+rotation    = 0 0 0
+scale       = 1 1 1

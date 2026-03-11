@@ -39,18 +39,30 @@ private:
     void UpdateMouseLook(float dt);
     void UpdateTriggers(float dt);
     void UpdateAnimators(float dt);
+    void   UpdateAnimationControllers(float dt);
+    void   UpdateAudio(float dt);
+    void   UpdateSkinnedMeshes(float dt);
+    bool   LoadSkeletonForEntity(int idx, const std::string& path);
     int  RaycastScene(float mx, float my, int winW, int winH);
     glm::vec3 ComputeViewportSpawnPoint(float mx, float my, int winW, int winH) const;
     void CreateViewportEntity(const std::string& type, int parentEntity, const glm::vec3& worldPos);
     void CreateViewportLight  (LightType type,          int parentEntity, const glm::vec3& worldPos);
     void SaveEditorState();    // saves positions before running
     void RestoreEditorState(); // restaura ao parar
+    void SpawnMultiplayerPlayers();   // spawn local player from prefab on play start
+    void DespawnMultiplayerPlayers(); // remove spawned players on play stop
 
     // ---- Project management ----
     void NewProject(const std::string& name, const std::string& parentFolder);
     void OpenProject(const std::string& path);
     void SaveProject();
     void ExportGame(const std::string& outputFolder, const std::string& gameNameOverride = "");
+
+    // ---- Scene management ----
+    void NewScene(const std::string& name);
+    void OpenScene(const std::string& path);
+    void DeleteScene(const std::string& path);
+    void RefreshSceneFiles();
     void StartSceneBakeAsync();
     void PollSceneBakeAsync();
 
@@ -77,6 +89,8 @@ private:
     Scene        m_RoomPreviewScene;      // temp scene for 3D room editing
     int          m_RoomPreviewSetIdx = -1;
     int          m_RoomPreviewRoomIdx = -1;
+    int          m_RoomPreviewBlockCount = -1;
+    int          m_RoomPreviewInteriorCount = -1;
     std::string  m_RoomPreviewLightmap; // currently loaded preview lightmap path
     std::string  m_SceneLightmapPath;   // main/reference scene lightmap path (Y projection)
     std::string  m_SceneLightmapPathX;  // X projection
@@ -95,6 +109,7 @@ private:
         glm::vec3 position, velocity, rotation, angularVelocity;
     };
     std::vector<EntitySnapshot> m_Snapshot;
+    std::vector<int>            m_SpawnedMpPlayerIds; // entity IDs spawned for MP players during play
 
     // Viewport right-click context menu
     float m_RmbPressX    = 0.0f;
@@ -109,8 +124,9 @@ private:
     int m_MazeHoveredBlock    = -1;  // index into room.Blocks under cursor
 
     // ---- Project state ----
-    std::string  m_ProjectName   = "Untitled";  // current project name
-    std::string  m_ProjectFolder = "";           // absolute path to project root folder ("" = not set)
+    std::string  m_ProjectName        = "Untitled";  // current project name
+    std::string  m_ProjectFolder      = "";           // absolute path to project root folder ("" = not set)
+    std::string  m_CurrentScenePath   = "";           // absolute path of the currently-open .tscene
 
     // ---- Game export mode ----
     bool         m_GameModeOnly = false;  // true when running as exported standalone game (no editor UI)

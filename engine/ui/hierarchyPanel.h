@@ -44,6 +44,7 @@ private:
     std::string MakeUniqueName(const Scene& scene, const std::string& base);
 
     // Creates an entity with the given mesh type, starts inline rename
+    void CreateEmptyEntity (Scene& scene, int& selectedEntity);
     void CreateMeshEntity  (Scene& scene, const std::string& type, int& selectedEntity);
     void CreateCameraEntity(Scene& scene, int& selectedEntity);
     void CreateLightEntity (Scene& scene, LightType type,           int& selectedEntity);

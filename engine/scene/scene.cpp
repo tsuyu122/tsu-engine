@@ -1,5 +1,6 @@
 #include "scene/scene.h"
 #include "scene/entity.h"
+#include "renderer/mesh.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 
@@ -24,14 +25,70 @@ Entity Scene::CreateEntity(const std::string& name)
     Lights.emplace_back();
     Triggers.emplace_back();
     Animators.emplace_back();
+    AnimationControllers.emplace_back();
+    MultiplayerManagers.emplace_back();
+    MultiplayerControllers.emplace_back();
     LuaScripts.emplace_back();
+    AudioSources.emplace_back();
+    AudioBarriers.emplace_back();
+    SkinnedMeshes.emplace_back();
     EntityParents.push_back(-1);
     EntityChildren.emplace_back();       // empty children list
     EntityIsPrefabInstance.push_back(false);
     EntityPrefabSource.push_back(-1);
+    EntityPrefabNode.push_back(-1);
+    EntityTags.emplace_back("");
     MazeGenerators.emplace_back();
     RootOrder.push_back((int)id);        // new entity starts at root
     return Entity(id, this);
+}
+
+int Scene::SpawnFromPrefab(int prefabIdx, const glm::vec3& position)
+{
+    if (prefabIdx < 0 || prefabIdx >= (int)Prefabs.size()) return -1;
+    const PrefabAsset& pref = Prefabs[prefabIdx];
+    if (pref.Nodes.empty()) return -1;
+
+    std::vector<int> nodeId(pref.Nodes.size(), -1);
+    for (int ni = 0; ni < (int)pref.Nodes.size(); ++ni)
+    {
+        const PrefabEntityData& node = pref.Nodes[ni];
+        Entity e = CreateEntity(node.Name);
+        int id = (int)e.GetID();
+        nodeId[ni] = id;
+        Transforms[id] = node.Transform;
+        // Root node gets the spawn position
+        if (ni == 0) {
+            Transforms[id].Position = position;
+        }
+        if (!node.MeshType.empty()) {
+            Mesh* mesh = nullptr;
+            const std::string& mt = node.MeshType;
+            if      (mt == "cube")     mesh = new Mesh(Mesh::CreateCube("#DDDDDD"));
+            else if (mt == "sphere")   mesh = new Mesh(Mesh::CreateSphere("#DDDDDD"));
+            else if (mt == "pyramid")  mesh = new Mesh(Mesh::CreatePyramid("#DDDDDD"));
+            else if (mt == "cylinder") mesh = new Mesh(Mesh::CreateCylinder("#DDDDDD"));
+            else if (mt == "capsule")  mesh = new Mesh(Mesh::CreateCapsule("#DDDDDD"));
+            else if (mt == "plane")    mesh = new Mesh(Mesh::CreatePlane("#DDDDDD"));
+            else if (mt.size() > 4 && mt.substr(0,4) == "obj:") mesh = new Mesh(Mesh::LoadOBJ(mt.substr(4)));
+            MeshRenderers[id].MeshPtr = mesh;
+            MeshRenderers[id].MeshType = mt;
+        }
+        if (!node.MaterialName.empty()) {
+            for (int mi2 = 0; mi2 < (int)Materials.size(); ++mi2)
+                if (Materials[mi2].Name == node.MaterialName) { EntityMaterial[id] = mi2; break; }
+        }
+        if (node.HasLight)  Lights[id] = node.Light;
+        if (node.HasCamera) GameCameras[id] = node.Camera;
+        EntityIsPrefabInstance[id] = true;
+        EntityPrefabSource[id] = prefabIdx;
+    }
+    // Set up parent-child relationships
+    for (int ni = 0; ni < (int)pref.Nodes.size(); ++ni) {
+        int pidx = pref.Nodes[ni].ParentIdx;
+        if (pidx >= 0 && pidx < (int)nodeId.size()) SetEntityParent(nodeId[ni], nodeId[pidx]);
+    }
+    return nodeId[0];
 }
 
 void Scene::OnUpdate(float dt)
@@ -264,10 +321,21 @@ void Scene::DeleteEntity(int idx)
     erase1(Lights);
     if (idx < (int)Triggers.size()) Triggers.erase(Triggers.begin() + idx);
     if (idx < (int)Animators.size()) Animators.erase(Animators.begin() + idx);
+    if (idx < (int)AnimationControllers.size()) AnimationControllers.erase(AnimationControllers.begin() + idx);
+    if (idx < (int)MultiplayerManagers.size()) MultiplayerManagers.erase(MultiplayerManagers.begin() + idx);
+    if (idx < (int)MultiplayerControllers.size()) MultiplayerControllers.erase(MultiplayerControllers.begin() + idx);
+    if (idx < (int)LuaScripts.size()) LuaScripts.erase(LuaScripts.begin() + idx);
+    if (idx < (int)AudioSources.size()) AudioSources.erase(AudioSources.begin() + idx);
+    if (idx < (int)AudioBarriers.size()) AudioBarriers.erase(AudioBarriers.begin() + idx);
+    if (idx < (int)SkinnedMeshes.size()) SkinnedMeshes.erase(SkinnedMeshes.begin() + idx);
     if (idx < (int)EntityIsPrefabInstance.size())
         EntityIsPrefabInstance.erase(EntityIsPrefabInstance.begin() + idx);
     if (idx < (int)EntityPrefabSource.size())
         EntityPrefabSource.erase(EntityPrefabSource.begin() + idx);
+    if (idx < (int)EntityPrefabNode.size())
+        EntityPrefabNode.erase(EntityPrefabNode.begin() + idx);
+    if (idx < (int)EntityTags.size())
+        EntityTags.erase(EntityTags.begin() + idx);
     if (idx < (int)MazeGenerators.size())
         MazeGenerators.erase(MazeGenerators.begin() + idx);
     // RootOrder was already cleaned manually — just fix remaining indices:

@@ -405,6 +405,9 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
             case COMP_TRIGGER:     return (idx < (int)scene.Triggers.size()) && scene.Triggers[idx].Active;
             case COMP_ANIMATOR:    return (idx < (int)scene.Animators.size()) && scene.Animators[idx].Active;
             case COMP_LUA:         return (idx < (int)scene.LuaScripts.size()) && scene.LuaScripts[idx].Active;
+            case COMP_MP_MANAGER:  return (idx < (int)scene.MultiplayerManagers.size()) && scene.MultiplayerManagers[idx].Active;
+            case COMP_MP_CTRL:     return (idx < (int)scene.MultiplayerControllers.size()) && scene.MultiplayerControllers[idx].Active;
+            case COMP_AUDIO:       return (idx < (int)scene.AudioSources.size()) && scene.AudioSources[idx].Active;
             default: return false;
         }
     };
@@ -430,6 +433,9 @@ std::vector<int>& InspectorPanel::GetOrBuildOrder(Scene& scene, int idx)
     addMissing(COMP_TRIGGER);
     addMissing(COMP_ANIMATOR);
     addMissing(COMP_LUA);
+    addMissing(COMP_AUDIO);
+    addMissing(COMP_MP_MANAGER);
+    addMissing(COMP_MP_CTRL);
 
     return stored;
 }
@@ -933,7 +939,8 @@ void InspectorPanel::DrawAddComponentMenu(Scene& scene, int entityIdx,
         bool showTr  = (entityIdx < (int)scene.Triggers.size())  && !scene.Triggers[entityIdx].Active  && matches("Trigger Volume");
         bool showAn  = (entityIdx < (int)scene.Animators.size()) && !scene.Animators[entityIdx].Active && matches("Animator");
         bool showLua = (entityIdx < (int)scene.LuaScripts.size()) && !scene.LuaScripts[entityIdx].Active && matches("Lua");
-        if (showTr || showAn || showLua)
+        bool showAud = (entityIdx < (int)scene.AudioSources.size()) && !scene.AudioSources[entityIdx].Active && matches("Audio");
+        if (showTr || showAn || showLua || showAud)
         {
             if (!searchActive)
             {
@@ -957,6 +964,12 @@ void InspectorPanel::DrawAddComponentMenu(Scene& scene, int entityIdx,
             {
                 scene.LuaScripts[entityIdx].Active = true;
                 order.push_back(COMP_LUA);
+            }
+            if (showAud && ImGui::MenuItem("    Audio Source"))
+            {
+                scene.AudioSources[entityIdx].Active = true;
+                scene.AudioSources[entityIdx].Enabled = true;
+                order.push_back(COMP_AUDIO);
             }
             any = true;
         }
@@ -1022,6 +1035,41 @@ void InspectorPanel::DrawAddComponentMenu(Scene& scene, int entityIdx,
                 scene.MazeGenerators[entityIdx].Active  = true;
                 scene.MazeGenerators[entityIdx].Enabled = true;
                 order.push_back(COMP_MAZEGEN);
+            }
+            any = true;
+        }
+
+        // ---- Network ----
+        bool showMm = (entityIdx < (int)scene.MultiplayerManagers.size()) &&
+                      !scene.MultiplayerManagers[entityIdx].Active &&
+                      matches("Multiplayer Manager");
+        bool showMc = (entityIdx < (int)scene.MultiplayerControllers.size()) &&
+                      !scene.MultiplayerControllers[entityIdx].Active &&
+                      matches("Multiplayer Controller");
+        if (showMm || showMc)
+        {
+            if (!searchActive)
+            {
+                if (any) ImGui::Separator();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.85f, 1.0f, 1.0f));
+                ImGui::TextUnformatted("  Network");
+                ImGui::PopStyleColor();
+            }
+            if (showMm && ImGui::MenuItem("    Multiplayer Manager"))
+            {
+                auto& mm = scene.MultiplayerManagers[entityIdx];
+                mm.Active = true;
+                mm.Enabled = true;
+                order.push_back(COMP_MP_MANAGER);
+            }
+            if (showMc && ImGui::MenuItem("    Multiplayer Controller"))
+            {
+                auto& mc = scene.MultiplayerControllers[entityIdx];
+                mc.Active = true;
+                mc.Enabled = true;
+                mc.IsLocalPlayer = true;
+                if (mc.Nickname.empty()) mc.Nickname = "Player";
+                order.push_back(COMP_MP_CTRL);
             }
             any = true;
         }
@@ -1665,6 +1713,210 @@ bool InspectorPanel::DrawLuaScriptSection(LuaScriptComponent& ls, int orderIdx, 
     return true;
 }
 
+bool InspectorPanel::DrawMultiplayerManagerSection(MultiplayerManagerComponent& mm,
+                                                   int orderIdx,
+                                                   std::vector<int>& order)
+{
+    bool removed = false;
+    bool open = DrawCompHeader("Multiplayer Manager", "mpmgr", orderIdx, order, removed, &mm.Enabled);
+    if (removed) { mm.Active = false; mm.Enabled = true; mm.Running = false; return false; }
+    if (!open || !mm.Enabled) return true;
+
+    static std::unordered_map<uintptr_t, std::array<char, 128>> s_Bind;
+    static std::unordered_map<uintptr_t, std::array<char, 128>> s_Server;
+    const uintptr_t key = (uintptr_t)&mm;
+    auto& bindBuf = s_Bind[key];
+    auto& srvBuf = s_Server[key];
+    if (bindBuf[0] == '\0')  strncpy(bindBuf.data(), mm.BindAddress.c_str(), bindBuf.size() - 1);
+    if (srvBuf[0] == '\0')   strncpy(srvBuf.data(),  mm.ServerAddress.c_str(), srvBuf.size() - 1);
+
+    int mode = (mm.Mode == MultiplayerMode::Client) ? 1 : 0;
+    if (ImGui::Combo("Mode", &mode, "Host\0Client\0"))
+        mm.Mode = (mode == 1) ? MultiplayerMode::Client : MultiplayerMode::Host;
+
+    if (ImGui::BeginTable("##mpmgr_tbl", 2, ImGuiTableFlags_SizingFixedFit))
+    {
+        ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, 130.0f);
+        ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Port");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputInt("##mp_port", &mm.Port);
+        if (mm.Port < 1) mm.Port = 1;
+        if (mm.Port > 65535) mm.Port = 65535;
+
+        if (mm.Mode == MultiplayerMode::Host)
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Bind Address");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputText("##mp_bind", bindBuf.data(), bindBuf.size()))
+                mm.BindAddress = bindBuf.data();
+        }
+        else
+        {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Server Address");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::SetNextItemWidth(-1);
+            if (ImGui::InputText("##mp_srv", srvBuf.data(), srvBuf.size()))
+                mm.ServerAddress = srvBuf.data();
+        }
+
+        TableDragFloat1("Snapshot Rate", &mm.SnapshotRate, 0.5f, 2.0f, 120.0f);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0); ImGui::AlignTextToFramePadding(); ImGui::TextUnformatted("Max Clients");
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-1);
+        ImGui::InputInt("##mp_maxc", &mm.MaxClients);
+        if (mm.MaxClients < 1) mm.MaxClients = 1;
+        if (mm.MaxClients > 128) mm.MaxClients = 128;
+        TableDragFloat1("Reconnect Delay", &mm.ReconnectDelay, 0.05f, 0.2f, 30.0f);
+
+        ImGui::EndTable();
+    }
+
+    // Player Prefab dropdown
+    {
+        Scene* sc = m_ScenePtr;
+        const char* preview = (mm.PlayerPrefabIdx >= 0 && sc && mm.PlayerPrefabIdx < (int)sc->Prefabs.size())
+                              ? sc->Prefabs[mm.PlayerPrefabIdx].Name.c_str() : "(None)";
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("Player Prefab", preview))
+        {
+            if (ImGui::Selectable("(None)", mm.PlayerPrefabIdx < 0))
+                mm.PlayerPrefabIdx = -1;
+            if (sc) {
+                for (int pi = 0; pi < (int)sc->Prefabs.size(); ++pi) {
+                    bool sel = (mm.PlayerPrefabIdx == pi);
+                    if (ImGui::Selectable(sc->Prefabs[pi].Name.c_str(), sel))
+                        mm.PlayerPrefabIdx = pi;
+                    if (sel) ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+
+    // Spawn Point
+    ImGui::DragFloat3("Spawn Point", &mm.SpawnPoint.x, 0.1f);
+
+    ImGui::Checkbox("Auto Start", &mm.AutoStart);
+    ImGui::Checkbox("Auto Reconnect", &mm.AutoReconnect);
+    ImGui::Checkbox("Replicate Channels", &mm.ReplicateChannels);
+
+    ImGui::Separator();
+    if (ImGui::Button("Start Host"))
+    {
+        mm.RequestStartHost = true;
+        mm.RequestStartClient = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Start Client"))
+    {
+        mm.RequestStartClient = true;
+        mm.RequestStartHost = false;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Stop"))
+        mm.RequestStop = true;
+
+    ImGui::TextDisabled("Runtime: %s", mm.RuntimeState.c_str());
+    ImGui::TextDisabled("Connected: %s", mm.Connected ? "yes" : "no");
+    ImGui::TextDisabled("Players: %d", mm.ConnectedPlayers);
+    ImGui::TextDisabled("Ping: %.1f ms", mm.EstimatedPingMs);
+    ImGui::TextDisabled("Last packet: %.2f s", mm.TimeSinceLastPacket);
+    return true;
+}
+
+bool InspectorPanel::DrawMultiplayerControllerSection(MultiplayerControllerComponent& mc,
+                                                      int orderIdx,
+                                                      std::vector<int>& order)
+{
+    bool removed = false;
+    bool open = DrawCompHeader("Multiplayer Controller", "mpctrl", orderIdx, order, removed, &mc.Enabled);
+    if (removed) { mc.Active = false; mc.Enabled = true; return false; }
+    if (!open || !mc.Enabled) return true;
+
+    static std::unordered_map<uintptr_t, std::array<char, 128>> s_Nick;
+    const uintptr_t key = (uintptr_t)&mc;
+    auto& nickBuf = s_Nick[key];
+    if (nickBuf[0] == '\0') strncpy(nickBuf.data(), mc.Nickname.c_str(), nickBuf.size() - 1);
+
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##mp_nick", "Nickname", nickBuf.data(), nickBuf.size()))
+        mc.Nickname = nickBuf.data();
+
+    ImGui::Checkbox("Local Player", &mc.IsLocalPlayer);
+    ImGui::Checkbox("Sync Transform", &mc.SyncTransform);
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Network Id");
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputScalar("##mp_nid", ImGuiDataType_U64, &mc.NetworkId);
+
+    ImGui::TextDisabled("Replicated: %s", mc.Replicated ? "yes" : "no");
+    ImGui::TextDisabled("Owned Locally: %s", mc.OwnedLocally ? "yes" : "no");
+    ImGui::TextDisabled("Last net age: %.2f s", mc.LastNetUpdateAge);
+    return true;
+}
+
+// ----------------------------------------------------------------
+// Audio Source section
+// ----------------------------------------------------------------
+bool InspectorPanel::DrawAudioSourceSection(AudioSourceComponent& as,
+                                            int orderIdx,
+                                            std::vector<int>& order)
+{
+    bool removed = false;
+    bool open = DrawCompHeader("Audio Source", "audiosrc", orderIdx, order, removed, &as.Enabled);
+    if (removed) { as.Active = false; as.Enabled = true; return false; }
+    if (!open || !as.Enabled) return true;
+
+    static std::unordered_map<uintptr_t, std::array<char, 260>> s_ClipBuf;
+    const uintptr_t key = (uintptr_t)&as;
+    auto& clipBuf = s_ClipBuf[key];
+    if (clipBuf[0] == '\0' && !as.ClipPath.empty())
+        strncpy(clipBuf.data(), as.ClipPath.c_str(), clipBuf.size() - 1);
+
+    ImGui::TextUnformatted("Clip Path");
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##as_clip", "audio/clip.wav", clipBuf.data(), clipBuf.size()))
+        as.ClipPath = clipBuf.data();
+
+    ImGui::Checkbox("Loop", &as.Loop);
+    ImGui::SameLine();
+    ImGui::Checkbox("Play On Start", &as.PlayOnStart);
+
+    ImGui::Checkbox("Spatial", &as.Spatial);
+    ImGui::DragFloat("Volume",  &as.Volume,  0.01f, 0.0f, 2.0f);
+    ImGui::DragFloat("Pitch",   &as.Pitch,   0.01f, 0.1f, 4.0f);
+
+    if (as.Spatial)
+    {
+        ImGui::DragFloat("Min Distance", &as.MinDistance,  0.1f, 0.0f, 1000.0f);
+        ImGui::DragFloat("Max Distance", &as.MaxDistance,  0.5f, 0.0f, 1000.0f);
+        ImGui::DragFloat("Occlusion Factor", &as.OcclusionFactor, 0.01f, 0.0f, 1.0f);
+    }
+
+    ImGui::Separator();
+    ImGui::InputInt("Output Channel", &as.OutputChannel);
+    ImGui::InputInt("Gate Channel",   &as.GateChannel);
+    if (as.GateChannel >= 0)
+    {
+        ImGui::Checkbox("Gate Value", &as.GateValue);
+        ImGui::Checkbox("Trigger One-Shot", &as.TriggerOneShot);
+    }
+
+    ImGui::Separator();
+    ImGui::TextDisabled("Gain: %.3f", as._CurrentGain);
+    ImGui::TextDisabled("Playing: %s", as._Playing ? "yes" : "no");
+    return true;
+}
+
 // ----------------------------------------------------------------
 // Environment settings (Fog, Sky, Post-Process) — shown when no entity selected
 // ----------------------------------------------------------------
@@ -1891,6 +2143,7 @@ void InspectorPanel::DrawMaterialEditor(Scene& scene, int matIdx)
     // Nome
     static char nameBuf[128];
     strncpy(nameBuf, mat.Name.c_str(), 127);
+    nameBuf[127] = '\0';
     ImGui::SetNextItemWidth(-1);
     if (ImGui::InputText("##matname", nameBuf, 128, ImGuiInputTextFlags_EnterReturnsTrue))
         mat.Name = nameBuf;
@@ -2561,10 +2814,22 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
     // --- Entity name ---
     strncpy(m_NameBuffer, scene.EntityNames[selectedEntity].c_str(),
             sizeof(m_NameBuffer) - 1);
-    ImGui::SetNextItemWidth(-1);
+    m_NameBuffer[sizeof(m_NameBuffer) - 1] = '\0';
+    if (selectedEntity >= (int)scene.EntityTags.size())
+        scene.EntityTags.resize(selectedEntity + 1);
+    char tagBuf[96];
+    strncpy(tagBuf, scene.EntityTags[selectedEntity].c_str(), sizeof(tagBuf) - 1);
+    tagBuf[sizeof(tagBuf) - 1] = '\0';
+    float tagW = 170.0f;
+    ImGui::SetNextItemWidth(std::max(100.0f, ImGui::GetContentRegionAvail().x - tagW - 8.0f));
     if (ImGui::InputText("##entname", m_NameBuffer, sizeof(m_NameBuffer),
                          ImGuiInputTextFlags_EnterReturnsTrue))
         scene.EntityNames[selectedEntity] = m_NameBuffer;
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(tagW);
+    if (ImGui::InputTextWithHint("##enttag", "Tag", tagBuf, sizeof(tagBuf),
+                                 ImGuiInputTextFlags_EnterReturnsTrue))
+        scene.EntityTags[selectedEntity] = tagBuf;
 
     // World position (read-only)
     glm::vec3 wp = scene.GetEntityWorldPos(selectedEntity);
@@ -2623,6 +2888,18 @@ void InspectorPanel::Render(Scene& scene, int selectedEntity, int selectedGroup,
             case COMP_LUA:
                 if (selectedEntity < (int)scene.LuaScripts.size())
                     kept = DrawLuaScriptSection(scene.LuaScripts[selectedEntity], i, order);
+                break;
+            case COMP_AUDIO:
+                if (selectedEntity < (int)scene.AudioSources.size())
+                    kept = DrawAudioSourceSection(scene.AudioSources[selectedEntity], i, order);
+                break;
+            case COMP_MP_MANAGER:
+                if (selectedEntity < (int)scene.MultiplayerManagers.size())
+                    kept = DrawMultiplayerManagerSection(scene.MultiplayerManagers[selectedEntity], i, order);
+                break;
+            case COMP_MP_CTRL:
+                if (selectedEntity < (int)scene.MultiplayerControllers.size())
+                    kept = DrawMultiplayerControllerSection(scene.MultiplayerControllers[selectedEntity], i, order);
                 break;
         }
         // ...existing code...
