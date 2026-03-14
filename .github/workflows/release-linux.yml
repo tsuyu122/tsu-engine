@@ -102,6 +102,8 @@ jobs:
   publish-release:
     needs: [build-windows, build-linux]
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
