@@ -75,7 +75,7 @@ include_directories(
     external/glm
     external/stb
     .
-    Engine
+    engine
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${tinyobjloader_SOURCE_DIR}
@@ -89,28 +89,28 @@ else()
 endif()
 
 add_executable(TsuEngine ${TSU_WIN32_FLAG}
-    Engine/core/application.cpp
-    Engine/core/window.cpp
-    Engine/editor/editorCamera.cpp
-    Engine/editor/editorGizmo.cpp
-    Engine/input/inputManager.cpp
-    Engine/physics/physicsSystem.cpp
-    Engine/procedural/mazeGenerator.cpp
-    Engine/renderer/lightBaker.cpp
-    Engine/renderer/lightmapManager.cpp
-    Engine/renderer/mesh.cpp
-    Engine/renderer/renderer.cpp
-    Engine/renderer/textureLoader.cpp
-    Engine/scene/entity.cpp
-    Engine/scene/scene.cpp
-    Engine/serialization/sceneSerializer.cpp
-    Engine/serialization/prefabSerializer.cpp
-    Engine/network/multiplayerSystem.cpp
-    Engine/ui/hierarchyPanel.cpp
-    Engine/ui/inspectorPanel.cpp
-    Engine/ui/uiManager.cpp
-    Engine/lua/luaSystem.cpp
-    Sandbox/main.cpp
+    engine/core/application.cpp
+    engine/core/window.cpp
+    engine/editor/editorCamera.cpp
+    engine/editor/editorGizmo.cpp
+    engine/input/inputManager.cpp
+    engine/physics/physicsSystem.cpp
+    engine/procedural/mazeGenerator.cpp
+    engine/renderer/lightBaker.cpp
+    engine/renderer/lightmapManager.cpp
+    engine/renderer/mesh.cpp
+    engine/renderer/renderer.cpp
+    engine/renderer/textureLoader.cpp
+    engine/scene/entity.cpp
+    engine/scene/scene.cpp
+    engine/serialization/sceneSerializer.cpp
+    engine/serialization/prefabSerializer.cpp
+    engine/network/multiplayerSystem.cpp
+    engine/ui/hierarchyPanel.cpp
+    engine/ui/inspectorPanel.cpp
+    engine/ui/uiManager.cpp
+    engine/lua/luaSystem.cpp
+    sandbox/main.cpp
 )
 
 if(WIN32)
@@ -128,24 +128,24 @@ add_custom_command(TARGET TsuEngine POST_BUILD
 
 # ---- GameRuntime — lean standalone player (no editor / no ImGui) ----
 add_executable(GameRuntime ${TSU_WIN32_FLAG}
-    Engine/core/gameApp.cpp
-    Engine/core/window.cpp
-    Engine/editor/editorCamera.cpp
-    Engine/input/inputManager.cpp
-    Engine/physics/physicsSystem.cpp
-    Engine/procedural/mazeGenerator.cpp
-    Engine/renderer/lightBaker.cpp
-    Engine/renderer/lightmapManager.cpp
-    Engine/renderer/mesh.cpp
-    Engine/renderer/renderer.cpp
-    Engine/renderer/textureLoader.cpp
-    Engine/scene/entity.cpp
-    Engine/scene/scene.cpp
-    Engine/serialization/sceneSerializer.cpp
-    Engine/serialization/prefabSerializer.cpp
-    Engine/network/multiplayerSystem.cpp
-    Engine/lua/luaSystem.cpp
-    Sandbox/game_main.cpp
+    engine/core/gameApp.cpp
+    engine/core/window.cpp
+    engine/editor/editorCamera.cpp
+    engine/input/inputManager.cpp
+    engine/physics/physicsSystem.cpp
+    engine/procedural/mazeGenerator.cpp
+    engine/renderer/lightBaker.cpp
+    engine/renderer/lightmapManager.cpp
+    engine/renderer/mesh.cpp
+    engine/renderer/renderer.cpp
+    engine/renderer/textureLoader.cpp
+    engine/scene/entity.cpp
+    engine/scene/scene.cpp
+    engine/serialization/sceneSerializer.cpp
+    engine/serialization/prefabSerializer.cpp
+    engine/network/multiplayerSystem.cpp
+    engine/lua/luaSystem.cpp
+    sandbox/game_main.cpp
 )
 
 target_include_directories(GameRuntime PRIVATE
@@ -154,7 +154,7 @@ target_include_directories(GameRuntime PRIVATE
     external/glm
     external/stb
     .
-    Engine
+    engine
     ${tinyobjloader_SOURCE_DIR}
     ${lua_SOURCE_DIR}
 )

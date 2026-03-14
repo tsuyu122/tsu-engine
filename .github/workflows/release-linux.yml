@@ -1,4 +1,4 @@
-name: Release Linux
+name: Release
 
 on:
   push:
@@ -6,6 +6,49 @@ on:
       - 'v*-alpha'
 
 jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure
+        run: |
+          cmake -B build-win -G "Visual Studio 17 2022" -A x64 `
+            -DGLFW_BUILD_TESTS=OFF `
+            -DGLFW_BUILD_EXAMPLES=OFF `
+            -DGLFW_BUILD_DOCS=OFF
+
+      - name: Build
+        run: cmake --build build-win --config Release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag     = "${{ github.ref_name }}"
+          $version = $tag -replace '^v','' -replace '-alpha$',''
+          $archive = "TsuEngine-alpha-${version}-windows-x64.zip"
+
+          New-Item -ItemType Directory -Force pkg\TsuEngine-windows | Out-Null
+          Copy-Item build-win\Release\TsuEngine.exe        pkg\TsuEngine-windows\ -ErrorAction SilentlyContinue
+          Copy-Item build-win\Release\_engine\GameRuntime.exe pkg\TsuEngine-windows\_engine\ -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force pkg\TsuEngine-windows\_engine | Out-Null
+          Copy-Item build-win\Release\_engine\GameRuntime.exe pkg\TsuEngine-windows\_engine\ -ErrorAction SilentlyContinue
+          Copy-Item -Recurse assets   pkg\TsuEngine-windows\
+          Copy-Item -Recurse shaders  pkg\TsuEngine-windows\
+
+          Compress-Archive -Path pkg\TsuEngine-windows\* -DestinationPath $archive
+          echo "ARCHIVE=$archive"   | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "VERSION=$version"   | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-zip
+          path: ${{ env.ARCHIVE }}
+
   build-linux:
     runs-on: ubuntu-22.04
     steps:
@@ -42,11 +85,11 @@ jobs:
           VERSION="${VERSION%-alpha}"
           ARCHIVE="TsuEngine-alpha-${VERSION}-linux-x64.tar.gz"
 
-          mkdir -p pkg/TsuEngine-linux
-          cp build-linux/TsuEngine          pkg/TsuEngine-linux/ 2>/dev/null || true
-          cp build-linux/_engine/GameRuntime pkg/TsuEngine-linux/ 2>/dev/null || true
-          cp -r assets                       pkg/TsuEngine-linux/
-          cp -r shaders                      pkg/TsuEngine-linux/
+          mkdir -p pkg/TsuEngine-linux/_engine
+          cp build-linux/TsuEngine               pkg/TsuEngine-linux/          2>/dev/null || true
+          cp build-linux/_engine/GameRuntime      pkg/TsuEngine-linux/_engine/  2>/dev/null || true
+          cp -r assets                            pkg/TsuEngine-linux/
+          cp -r shaders                           pkg/TsuEngine-linux/
 
           cd pkg
           tar -czf "../${ARCHIVE}" TsuEngine-linux/
@@ -54,15 +97,37 @@ jobs:
           echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tar
+          path: ${{ env.ARCHIVE }}
+
+  publish-release:
+    needs: [build-windows, build-linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Get version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          VERSION="${VERSION%-alpha}"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Alpha ${{ env.VERSION }} — Linux Release"
+          name: "Alpha ${{ env.VERSION }} — Windows + Linux"
           prerelease: true
           body: |
-            ## Alpha ${{ env.VERSION }} — Linux Release
+            ## Alpha ${{ env.VERSION }} — Windows + Linux
 
-            This release adds official Linux support. The only change from v${{ env.VERSION_PREV }} is the addition of a native Linux build — no new features or fixes were introduced.
+            This release adds official Linux support. The only change from the previous release is the addition of a native Linux build — no new features or fixes were introduced.
 
             ### What's New
 
@@ -72,31 +137,33 @@ jobs:
             • Tested on Ubuntu 22.04 LTS
             • All existing systems — multiplayer, Lua scripting, PBR renderer, lightmapper — work on Linux
 
-            ### Running on Linux
+            ### Downloads
 
-            **Editor:**
+            | Platform | File |
+            |----------|------|
+            | Windows x64 | `TsuEngine-alpha-${{ env.VERSION }}-windows-x64.zip` |
+            | Linux x64   | `TsuEngine-alpha-${{ env.VERSION }}-linux-x64.tar.gz` |
+
+            ### Running
+
+            **Windows** — extract the zip and run `TsuEngine.exe`
+
+            **Linux:**
             ```bash
-            chmod +x TsuEngine
+            tar -xzf TsuEngine-alpha-${{ env.VERSION }}-linux-x64.tar.gz
+            cd TsuEngine-linux
+            chmod +x TsuEngine GameRuntime
             ./TsuEngine
             ```
 
-            **Game Runtime:**
-            ```bash
-            chmod +x GameRuntime
-            ./GameRuntime
-            ```
-
-            For multiplayer testing:
-            ```bash
-            ./GameRuntime --mp-mode=host --mp-nick=P1 --windowed
-            ./GameRuntime --mp-mode=client --mp-server=127.0.0.1 --mp-nick=P2 --windowed
-            ```
-
-            > Requires a display server (X11 or XWayland). Mesa OpenGL 4.6 or a GPU with OpenGL 4.6 support is needed.
+            > Linux requires OpenGL 4.6 (Mesa or proprietary driver) and a display (X11 or XWayland).
 
             --------
 
             > Alpha software. Expect breaking changes. Not production-ready.
-          files: ${{ env.ARCHIVE }}
+          files: |
+            TsuEngine-alpha-${{ env.VERSION }}-windows-x64.zip
+            TsuEngine-alpha-${{ env.VERSION }}-linux-x64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
