@@ -10,6 +10,8 @@
 #include <cmath>
 #include <vector>
 #include <functional>
+#include <cstdio>
+#include <cstdlib>
 
 
 namespace tsu {
@@ -123,6 +125,15 @@ Window::Window(int width, int height, const char* title)
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
     m_Window = glfwCreateWindow(width, height, title, nullptr, nullptr);
+    if (!m_Window)
+    {
+        fprintf(stderr,
+            "FATAL: Failed to create OpenGL 4.6 context.\n"
+            "TsuEngine requires OpenGL 4.6 or higher.\n"
+            "Your GPU or driver does not support this version.\n");
+        glfwTerminate();
+        exit(1);
+    }
     glfwMakeContextCurrent(m_Window);
 
     SetEngineIcon(m_Window);
