@@ -8,25 +8,23 @@
 
 namespace tsu {
 
+// Bake parameters (outside LightBaker to avoid GCC 11 default-member-init limitation)
+struct LightBakeParams {
+    int   resolution    = 512;   // output texture size (square)
+    int   aoSamples     = 64;    // hemisphere samples for AO
+    int   indirectSamples = 64;  // hemisphere samples for indirect GI
+    int   bounceCount   = 2;     // simplified GI bounce count
+    int   denoiseRadius = 1;     // post-filter radius in texels
+    float aoRadius      = 4.0f;  // max AO occlusion distance (blocks)
+    float ambientLevel  = 0.08f; // minimum ambient floor (0..1)
+    float directScale   = 1.20f; // direct light contribution scale
+};
+
 // CPU-side lightmap baker for room templates.
-// Produces a top-down RGB ambient-occlusion + direct-light texture.
-//
-// World-XZ → UV mapping stored in RoomTemplate::LightmapST:
-//   u = worldX * ST.x + ST.z
-//   v = worldZ * ST.y + ST.w
 class LightBaker
 {
 public:
-    struct BakeParams {
-        int   resolution    = 512;   // output texture size (square)
-        int   aoSamples     = 64;    // hemisphere samples for AO
-        int   indirectSamples = 64;  // hemisphere samples for indirect GI
-        int   bounceCount   = 2;     // simplified GI bounce count
-        int   denoiseRadius = 1;     // post-filter radius in texels
-        float aoRadius      = 4.0f;  // max AO occlusion distance (blocks)
-        float ambientLevel  = 0.08f; // minimum ambient floor (0..1)
-        float directScale   = 1.20f; // direct light contribution scale
-    };
+    using BakeParams = LightBakeParams;
 
     // Flattened per-light data (precomputed from scene; avoids baking depending on Scene)
     struct LightInfo {

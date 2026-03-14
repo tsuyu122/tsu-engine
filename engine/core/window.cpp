@@ -76,8 +76,8 @@ static void SetEngineIcon(GLFWwindow* win)
             bool lit = false;
 
             // Outer ring
-            float dr = std::sqrtf((sx-cx)*(sx-cx) + (sy-cy)*(sy-cy));
-            if (std::fabsf(dr - bigR) < sw) lit = true;
+            float dr = sqrtf((sx-cx)*(sx-cx) + (sy-cy)*(sy-cy));
+            if (fabsf(dr - bigR) < sw) lit = true;
 
             // Eyes
             if (!lit)
@@ -89,10 +89,10 @@ static void SetEngineIcon(GLFWwindow* win)
             // Smile arc
             if (!lit)
             {
-                float ds = std::sqrtf((sx-cx)*(sx-cx) + (sy-cy)*(sy-cy));
-                if (std::fabsf(ds - smR) < smSw)
+                float ds = sqrtf((sx-cx)*(sx-cx) + (sy-cy)*(sy-cy));
+                if (fabsf(ds - smR) < smSw)
                 {
-                    float angle = std::atan2f(sy - cy, sx - cx);
+                    float angle = atan2f(sy - cy, sx - cx);
                     if (angle >= smA0 && angle <= smA1) lit = true;
                 }
             }
