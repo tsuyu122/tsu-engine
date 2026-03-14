@@ -82,7 +82,13 @@ include_directories(
     ${lua_SOURCE_DIR}
 )
 
-add_executable(TsuEngine WIN32
+if(WIN32)
+    set(TSU_WIN32_FLAG WIN32)
+else()
+    set(TSU_WIN32_FLAG "")
+endif()
+
+add_executable(TsuEngine ${TSU_WIN32_FLAG}
     Engine/core/application.cpp
     Engine/core/window.cpp
     Engine/editor/editorCamera.cpp
@@ -107,7 +113,11 @@ add_executable(TsuEngine WIN32
     Sandbox/main.cpp
 )
 
-target_link_libraries(TsuEngine glfw glad opengl32 imgui lua54 ws2_32)
+if(WIN32)
+    target_link_libraries(TsuEngine glfw glad opengl32 imgui lua54 ws2_32)
+else()
+    target_link_libraries(TsuEngine glfw glad GL imgui lua54 pthread dl)
+endif()
 target_compile_definitions(TsuEngine PRIVATE TSU_EDITOR=1)
 
 add_custom_command(TARGET TsuEngine POST_BUILD
@@ -117,7 +127,7 @@ add_custom_command(TARGET TsuEngine POST_BUILD
     COMMENT "Copying assets...")
 
 # ---- GameRuntime — lean standalone player (no editor / no ImGui) ----
-add_executable(GameRuntime WIN32
+add_executable(GameRuntime ${TSU_WIN32_FLAG}
     Engine/core/gameApp.cpp
     Engine/core/window.cpp
     Engine/editor/editorCamera.cpp
@@ -150,7 +160,11 @@ target_include_directories(GameRuntime PRIVATE
 )
 
 # No imgui — runtime is lean
-target_link_libraries(GameRuntime glfw glad opengl32 lua54 ws2_32)
+if(WIN32)
+    target_link_libraries(GameRuntime glfw glad opengl32 lua54 ws2_32)
+else()
+    target_link_libraries(GameRuntime glfw glad GL lua54 pthread dl)
+endif()
 
 # Place GameRuntime in a hidden _engine/ subdirectory so it does not appear
 # alongside TsuEngine.exe in the Release folder.

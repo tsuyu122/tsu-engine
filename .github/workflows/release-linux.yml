@@ -1,0 +1,102 @@
+name: Release Linux
+
+on:
+  push:
+    tags:
+      - 'v*-alpha'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake ninja-build \
+            libgl1-mesa-dev \
+            libx11-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libxext-dev \
+            libwayland-dev libxkbcommon-dev
+
+      - name: Configure
+        run: |
+          cmake -B build-linux -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGLFW_BUILD_TESTS=OFF \
+            -DGLFW_BUILD_EXAMPLES=OFF \
+            -DGLFW_BUILD_DOCS=OFF
+
+      - name: Build
+        run: cmake --build build-linux --config Release
+
+      - name: Package
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          VERSION="${VERSION%-alpha}"
+          ARCHIVE="TsuEngine-alpha-${VERSION}-linux-x64.tar.gz"
+
+          mkdir -p pkg/TsuEngine-linux
+          cp build-linux/TsuEngine          pkg/TsuEngine-linux/ 2>/dev/null || true
+          cp build-linux/_engine/GameRuntime pkg/TsuEngine-linux/ 2>/dev/null || true
+          cp -r assets                       pkg/TsuEngine-linux/
+          cp -r shaders                      pkg/TsuEngine-linux/
+
+          cd pkg
+          tar -czf "../${ARCHIVE}" TsuEngine-linux/
+          cd ..
+          echo "ARCHIVE=${ARCHIVE}" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Alpha ${{ env.VERSION }} — Linux Release"
+          prerelease: true
+          body: |
+            ## Alpha ${{ env.VERSION }} — Linux Release
+
+            This release adds official Linux support. The only change from v${{ env.VERSION_PREV }} is the addition of a native Linux build — no new features or fixes were introduced.
+
+            ### What's New
+
+            #### Linux Support
+
+            • Native Linux x64 binary for both the editor (`TsuEngine`) and the game runtime (`GameRuntime`)
+            • Tested on Ubuntu 22.04 LTS
+            • All existing systems — multiplayer, Lua scripting, PBR renderer, lightmapper — work on Linux
+
+            ### Running on Linux
+
+            **Editor:**
+            ```bash
+            chmod +x TsuEngine
+            ./TsuEngine
+            ```
+
+            **Game Runtime:**
+            ```bash
+            chmod +x GameRuntime
+            ./GameRuntime
+            ```
+
+            For multiplayer testing:
+            ```bash
+            ./GameRuntime --mp-mode=host --mp-nick=P1 --windowed
+            ./GameRuntime --mp-mode=client --mp-server=127.0.0.1 --mp-nick=P2 --windowed
+            ```
+
+            > Requires a display server (X11 or XWayland). Mesa OpenGL 4.6 or a GPU with OpenGL 4.6 support is needed.
+
+            --------
+
+            > Alpha software. Expect breaking changes. Not production-ready.
+          files: ${{ env.ARCHIVE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

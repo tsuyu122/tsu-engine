@@ -23,6 +23,16 @@
 #ifdef max
 #undef max
 #endif
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+using SOCKET = int;
+static constexpr int INVALID_SOCKET = -1;
+static inline int closesocket(int s) { return close(s); }
 #endif
 
 namespace tsu {
@@ -145,10 +155,15 @@ static bool StartSocket(RuntimeState& st, const MultiplayerManagerComponent& mm)
         if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
         st.init = true;
     }
+#endif
     st.sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (st.sock == INVALID_SOCKET) return false;
+#ifdef _WIN32
     u_long nonBlock = 1;
     ioctlsocket(st.sock, FIONBIO, &nonBlock);
+#else
+    fcntl(st.sock, F_SETFL, O_NONBLOCK);
+#endif
     st.host = (mm.Mode == MultiplayerMode::Host);
     if (st.host)
     {
@@ -177,22 +192,15 @@ static bool StartSocket(RuntimeState& st, const MultiplayerManagerComponent& mm)
     st.pingSentAt.clear();
     st.lastPacketAt = st.now;
     return true;
-#else
-    (void)st;
-    (void)mm;
-    return false;
-#endif
 }
 
 static void StopSocket(RuntimeState& st)
 {
-#ifdef _WIN32
     if (st.sock != INVALID_SOCKET)
     {
         closesocket(st.sock);
         st.sock = INVALID_SOCKET;
     }
-#endif
     st.running = false;
     st.clients.clear();
     st.connected = false;
@@ -569,7 +577,11 @@ void MultiplayerSystem::Update(Scene& scene, float dt)
     for (;;)
     {
         sockaddr_in from{};
+#ifdef _WIN32
         int fromLen = sizeof(from);
+#else
+        socklen_t fromLen = sizeof(from);
+#endif
         int n = recvfrom(st.sock, recvBuf, sizeof(recvBuf), 0, (sockaddr*)&from, &fromLen);
         if (n <= 0) break;
         std::vector<uint8_t> pkt((uint8_t*)recvBuf, (uint8_t*)recvBuf + n);
