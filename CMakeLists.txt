@@ -45,6 +45,7 @@ endif()
 file(GLOB LUA_SOURCES "${lua_SOURCE_DIR}/*.c")
 list(REMOVE_ITEM LUA_SOURCES "${lua_SOURCE_DIR}/lua.c")
 list(REMOVE_ITEM LUA_SOURCES "${lua_SOURCE_DIR}/luac.c")
+list(REMOVE_ITEM LUA_SOURCES "${lua_SOURCE_DIR}/onelua.c")
 add_library(lua54 STATIC ${LUA_SOURCES})
 target_include_directories(lua54 PUBLIC ${lua_SOURCE_DIR})
 # Suppress Lua warnings on MSVC
