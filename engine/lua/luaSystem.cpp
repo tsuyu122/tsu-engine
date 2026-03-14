@@ -1,7 +1,7 @@
 #include "lua/luaSystem.h"
 #include "scene/scene.h"
 #include "scene/entity.h"
-#include "input/inputmanager.h"
+#include "input/inputManager.h"
 #include "network/multiplayerSystem.h"
 #include <GLFW/glfw3.h>
 #define GLM_ENABLE_EXPERIMENTAL
