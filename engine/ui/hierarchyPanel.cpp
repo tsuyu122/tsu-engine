@@ -2,7 +2,7 @@
 #include "scene/entity.h"
 #include "renderer/mesh.h"
 #include "serialization/prefabSerializer.h"
-#include "input/inputmanager.h"
+#include "input/inputManager.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <chrono>
