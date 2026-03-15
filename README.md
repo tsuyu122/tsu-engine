@@ -1,11 +1,11 @@
-﻿<div align="center">
+<div align="center">
   <img src="docs/images/logo.svg" width="100" alt="TSU Engine Logo"/>
   <h1>TSU Engine</h1>
 
   [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
   [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue.svg)](https://en.cppreference.com/w/cpp/17)
   [![OpenGL 4.6](https://img.shields.io/badge/OpenGL-4.6-red.svg)](https://www.opengl.org/)
-  [![Status: Alpha](https://img.shields.io/badge/Status-Alpha%201.3.0-orange.svg)]()
+  [![Status: Alpha](https://img.shields.io/badge/Status-Alpha%201.3.1-orange.svg)]()
   [![Platform: Windows](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)]()
 </div>
 
@@ -267,7 +267,7 @@ Components are toggled by their `Active` flag, not removed from the array. All s
 - [ ] Plugin / native module system
 - [ ] Asset bundling — packed binary archives for distribution
 - [ ] Improved lightmap baking pipeline
-- [x] Network replication — basic authoritative multiplayer (host/client, UDP, prefab player spawning) ✓ v1.3.0
+- [x] Network replication — basic authoritative multiplayer (host/client, UDP, prefab player spawning) ✓ v1.3.1
 - [ ] Cross-platform export (Windows, Linux, macOS)
 
 ---
