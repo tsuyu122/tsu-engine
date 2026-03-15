@@ -809,15 +809,18 @@ void Application::ExportGame(const std::string& outputFolder, const std::string&
             fs::copy_file(srcExe, exeDest, fs::copy_options::overwrite_existing);
         }
 
-        // 3. Save current scene as the default one the exe will load
-        fs::create_directories(outputFolder + "/assets/scenes");
-        SceneSerializer::Save(m_Scene, outputFolder + "/assets/scenes/default.tscene");
-
-        // 4. Copy all current asset files alongside the exe
+        // 3. Copy all current asset files alongside the exe
         if (fs::exists("assets")) {
             fs::copy("assets", outputFolder + "/assets",
                      fs::copy_options::recursive | fs::copy_options::overwrite_existing);
         }
+
+        // 4. Save current scene as the default one the exe will load.
+        //    Done AFTER the bulk copy so the authoritative in-memory scene
+        //    is not overwritten by a stale default.tscene from the source
+        //    assets/ directory.
+        fs::create_directories(outputFolder + "/assets/scenes");
+        SceneSerializer::Save(m_Scene, outputFolder + "/assets/scenes/default.tscene");
 
         // 5. Write game.mode marker so the exe launches without editor UI
         {
